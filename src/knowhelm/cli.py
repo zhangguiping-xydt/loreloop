@@ -32,6 +32,47 @@ def _agent(name: str) -> AgentRunner:
     return CODEX_RUNNER if name == "codex" else AgentRunner()
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    import shutil
+
+    workdir = _workdir()
+    _store(workdir).close()
+    print(f"initialized .knowhelm/ (knowledge store, evidence chain) in {workdir}")
+
+    gitignore = workdir / ".gitignore"
+    if (workdir / ".git").exists():
+        lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
+        if ".knowhelm/" not in lines:
+            with gitignore.open("a", encoding="utf-8") as fh:
+                if lines and lines[-1].strip():
+                    fh.write("\n")
+                fh.write(".knowhelm/\n")
+            print("added .knowhelm/ to .gitignore (evidence may embed page content)")
+
+    hosts = [name for name in ("claude", "codex") if shutil.which(name)]
+    if not hosts:
+        print("no coding agent (claude/codex) found on PATH; skill installation skipped")
+        return 0
+    print(f"detected coding agent(s): {', '.join(hosts)}")
+
+    if "claude" in hosts:
+        if args.skill is None:
+            answer = input("install the knowhelm companion skill for Claude Code? [Y/n] ")
+            wanted = answer.strip().lower() in ("", "y", "yes")
+        else:
+            wanted = args.skill
+        if wanted:
+            from .companion import install_claude_skill
+
+            path = install_claude_skill(workdir)
+            print(f"installed companion skill: {path.relative_to(workdir)}")
+        else:
+            print("skipped skill installation (re-run `knowhelm init --skill` to install)")
+    if "codex" in hosts:
+        print("codex companion skill is not available yet; the CLI works with codex today")
+    return 0
+
+
 def cmd_ingest(args: argparse.Namespace) -> int:
     workdir = _workdir()
     if args.source == "code":
@@ -286,6 +327,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="knowhelm")
     parser.add_argument("--agent", choices=["claude", "codex"], default="claude")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_init = sub.add_parser("init", help="set up knowhelm in this project")
+    skill_group = p_init.add_mutually_exclusive_group()
+    skill_group.add_argument("--skill", dest="skill", action="store_true", default=None,
+                             help="install the companion skill without asking")
+    skill_group.add_argument("--no-skill", dest="skill", action="store_false",
+                             help="skip companion skill installation")
+    p_init.set_defaults(func=cmd_init)
 
     p_ingest = sub.add_parser("ingest", help="reverse-engineer knowledge from a source")
     p_ingest.add_argument("--from", dest="source", choices=["code", "web"], required=True)

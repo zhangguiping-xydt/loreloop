@@ -38,8 +38,8 @@ storage is SQLite, no accounts, no telemetry.
 knowhelm is **one CLI**. That's the whole user surface — there is no web
 dashboard, no server, no separate apps to learn.
 
-Planned: `knowhelm init` will detect your coding agent (Claude Code / Codex)
-and offer to install a companion skill into it. The skill only makes the
+`knowhelm init` detects your coding agent and offers to install a companion
+skill into it (Claude Code today; Codex planned). The skill only makes the
 agent a better citizen — understanding injected context packs, drafting
 suggested acceptance assertions for *you* to approve, reminding you to run
 verification. It never verifies, never renders verdicts, never writes
@@ -64,6 +64,8 @@ knowledge. The referee stays outside the player's process:
 pip install 'knowhelm[web]' && playwright install chromium
 
 cd your-project
+knowhelm init                            # set up .knowhelm/; offers to install the
+                                         # companion skill into Claude Code
 knowhelm ingest --from code .            # implementation view: reverse the codebase
 knowhelm ingest --from web http://localhost:3000   # behavior view: explore the running app
 knowhelm knowledge list                  # inspect entries; approve/reject to curate

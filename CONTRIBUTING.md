@@ -51,7 +51,7 @@ Users see a single CLI. Internally the layering is deliberate, and the
 trust boundary never moves with the shells:
 
 ```
-┌─ companion skill (planned; installed by `knowhelm init`) ──────┐
+┌─ companion skill (installed by `knowhelm init`) ───────────────┐
 │  teaches the host agent to read context packs, draft suggested │
 │  assertions for human approval, remind about verification      │
 ├─ CLI (human-driven) ───────────────────────────────────────────┤

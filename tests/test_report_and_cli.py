@@ -209,6 +209,43 @@ def test_cli_verify_rejects_empty_assertion_before_browser(workdir, capsys):
     assert "invalid expectation" in capsys.readouterr().err
 
 
+def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys):
+    import shutil as _shutil
+    import subprocess
+
+    subprocess.run(["git", "init"], cwd=workdir, check=True, capture_output=True)
+    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
+
+    assert main(["init", "--skill"]) == 0
+    out = capsys.readouterr().out
+    assert "initialized .knowhelm/" in out
+    assert (workdir / ".knowhelm/knowledge.db").exists()
+    assert ".knowhelm/" in (workdir / ".gitignore").read_text()
+
+    skill = workdir / ".claude/skills/knowhelm/SKILL.md"
+    assert skill.exists()
+    text = skill.read_text()
+    assert "Never run `knowhelm harvest`" in text
+    assert "name: knowhelm" in text
+
+    # idempotent: second run must not duplicate the gitignore line
+    assert main(["init", "--skill"]) == 0
+    assert (workdir / ".gitignore").read_text().count(".knowhelm/") == 1
+
+
+def test_cli_init_respects_no_skill_and_missing_agents(workdir, monkeypatch, capsys):
+    import shutil as _shutil
+
+    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
+    assert main(["init", "--no-skill"]) == 0
+    assert "skipped skill installation" in capsys.readouterr().out
+    assert not (workdir / ".claude").exists()
+
+    monkeypatch.setattr(_shutil, "which", lambda name: None)
+    assert main(["init"]) == 0
+    assert "skill installation skipped" in capsys.readouterr().out
+
+
 def test_cli_ingest_web_requires_playwright(workdir):
     try:
         import playwright  # noqa: F401
