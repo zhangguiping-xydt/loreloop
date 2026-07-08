@@ -83,9 +83,7 @@ def harvest_run(
     now = datetime.now(timezone.utc)
     minted, unauditable = _mint_verified_checks(evaluation.passed, run.run_id, now, artifacts)
     review = _review_candidates(store, minted)
-    # store.add dedupes exact repeats; keep the stored entries so the chain
-    # records ids that actually exist in the knowledge base.
-    minted = _dedupe([store.add(e) for e in minted])
+    minted = _dedupe([_store_minted(store, e, run.run_id, now) for e in minted])
 
     reversed_entries: list[Entry] = []
     stale: list[Entry] = []
@@ -141,6 +139,23 @@ def _review_candidates(store: KnowledgeStore, minted: list[Entry]) -> list[Entry
         and e.is_strong_evidence()
         and (e.source.locator, e.content) not in minted_content
     ]
+
+
+def _store_minted(store: KnowledgeStore, entry: Entry, run_id: str, now: datetime) -> Entry:
+    """Store a born-verified assertion. If the identical claim already exists
+    for the same page (e.g. a draft from web ingestion), the verification
+    that just happened must land on it: this run really did check the claim
+    against the live page, chain-backed — recording that on the existing
+    entry is bookkeeping of a real event, not trust laundering. Works through
+    the normal verification state machine; a prior CONTRADICTED flips to
+    VERIFIED because the newest browser evidence says the claim holds."""
+    existing = store.find_duplicate(entry)
+    if existing is None:
+        return store.add(entry)
+    updated = store.set_verification(existing.id, Verification.VERIFIED, run_id, now)
+    if entry.source.snapshot_ref and updated.source.snapshot_ref != entry.source.snapshot_ref:
+        updated = store.set_snapshot_ref(existing.id, entry.source.snapshot_ref, now)
+    return updated
 
 
 def _store_reanchored(

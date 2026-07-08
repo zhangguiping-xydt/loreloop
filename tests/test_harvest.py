@@ -256,6 +256,33 @@ def test_harvest_dedupes_repeated_checks(env):
     assert len(result.minted) == 1
 
 
+def test_harvest_mint_verifies_existing_draft_duplicate(env):
+    repo, store, chain, artifacts = env
+    obs = Observation(url="http://app.local/upload", title="Upload", text="Max 50MB.")
+    draft = Entry(
+        title="Upload limit", content="upload rejects files over 50MB",
+        kind=Kind.BEHAVIOR,
+        source=Source(
+            channel=Channel.WEB, locator="http://app.local/upload", snapshot_ref="stale-snap",
+        ),
+    )
+    store.add(draft)
+    assert not draft.is_strong_evidence()
+
+    trace = write_trace(repo, "run-x", head_of(repo))
+    record_browser_check(chain, "run-x", artifacts=artifacts)
+
+    result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    # the verification lands on the existing entry instead of a twin
+    assert [e.id for e in result.minted] == [draft.id]
+    stored = store.get(draft.id)
+    assert stored.trust.verification is Verification.VERIFIED
+    assert stored.trust.verified_by == "run-x"
+    assert stored.source.snapshot_ref == obs.snapshot_hash
+    assert len(store.list(channel=Channel.WEB)) == 1
+
+
 def test_harvest_lists_prior_strong_entries_on_minted_pages_for_review(env):
     repo, store, chain, artifacts = env
     from datetime import datetime, timezone
