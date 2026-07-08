@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from ..agents import AgentRunner
 from ..evidence.chain import EvidenceChain, EvidenceRecord
@@ -78,6 +79,61 @@ def verify_expectation(
         reason=verdict["reason"],
         snapshot=obs.snapshot_hash,
         record=record,
+    )
+
+
+@dataclass(frozen=True)
+class EntryVerifyResult:
+    passed: bool
+    reason: str
+    drifted: bool
+    record: EvidenceRecord
+
+
+def verify_entry(
+    browser: Browser,
+    runner: AgentRunner,
+    chain: EvidenceChain,
+    store,
+    entry,
+    run_id: str,
+) -> EntryVerifyResult:
+    """Verify a web-channel entry's claim against its live source page and
+    write the outcome back to the knowledge store (verified/contradicted)."""
+    from ..knowledge.model import Channel, Verification
+
+    if entry.source.channel is not Channel.WEB:
+        raise ValueError(f"entry {entry.id} is not web-channel (got {entry.source.channel})")
+
+    obs = browser.observe(entry.source.locator)
+    drifted = bool(entry.source.snapshot_ref) and obs.snapshot_hash != entry.source.snapshot_ref
+    raw = runner.run(
+        _VERIFY_PROMPT.format(
+            expectation=entry.content,
+            url=obs.url,
+            title=obs.title,
+            forms=json.dumps(obs.forms),
+            text=obs.text[:8000],
+        )
+    )
+    verdict = _parse_verdict(raw)
+    new_status = Verification.VERIFIED if verdict["passed"] else Verification.CONTRADICTED
+    store.set_verification(entry.id, new_status, run_id, datetime.now(timezone.utc))
+    record = chain.append(
+        "entry_verified" if verdict["passed"] else "entry_contradicted",
+        {
+            "run_id": run_id,
+            "entry_id": entry.id,
+            "claim": entry.content,
+            "detail": verdict["reason"],
+            "url": obs.url,
+            "page_snapshot": obs.snapshot_hash,
+            "anchor_drifted": drifted,
+            "verified_via": "browser",
+        },
+    )
+    return EntryVerifyResult(
+        passed=verdict["passed"], reason=verdict["reason"], drifted=drifted, record=record
     )
 
 

@@ -131,7 +131,42 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
         elif args.action == "reject":
             entry = store.set_curation(args.entry_id, Curation.REJECTED, datetime.now(timezone.utc))
             print(f"rejected: {entry.title}")
+        elif args.action == "verify":
+            return _verify_entries(args, workdir, store)
     return 0
+
+
+def _verify_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
+    from .knowledge.model import Channel
+    from .webexplore.browser import PlaywrightBrowser
+    from .webexplore.verify import verify_entry
+
+    web_entries = store.list(channel=Channel.WEB)
+    if args.entry_id:
+        web_entries = [e for e in web_entries if e.id.startswith(args.entry_id)]
+    if not web_entries:
+        print("no matching web-channel entries to verify", file=sys.stderr)
+        return 2
+
+    chain = EvidenceChain.for_workdir(workdir)
+    run_id = f"verify-{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
+    agent = _agent(args.agent)
+    browser = PlaywrightBrowser(headed=args.headed)
+    contradicted = 0
+    try:
+        for entry in web_entries:
+            result = verify_entry(browser, agent, chain, store, entry, run_id)
+            status = "VERIFIED" if result.passed else "CONTRADICTED"
+            drift = "  [page drifted since ingest]" if result.drifted else ""
+            print(f"{status}: {entry.title}{drift}")
+            print(f"  {result.reason}")
+            if not result.passed:
+                contradicted += 1
+    finally:
+        browser.close()
+    print(f"\n{len(web_entries) - contradicted} verified, {contradicted} contradicted "
+          f"(evidence run {run_id})")
+    return 0 if contradicted == 0 else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -171,9 +206,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("run_id", nargs="?")
     p_report.set_defaults(func=cmd_report)
 
-    p_knowledge = sub.add_parser("knowledge", help="inspect and curate knowledge entries")
-    p_knowledge.add_argument("action", choices=["list", "approve", "reject"])
+    p_knowledge = sub.add_parser("knowledge", help="inspect, curate and verify knowledge entries")
+    p_knowledge.add_argument("action", choices=["list", "approve", "reject", "verify"])
     p_knowledge.add_argument("entry_id", nargs="?")
+    p_knowledge.add_argument("--headed", action="store_true")
     p_knowledge.set_defaults(func=cmd_knowledge)
 
     return parser
