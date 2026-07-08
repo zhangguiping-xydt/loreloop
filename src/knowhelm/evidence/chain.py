@@ -4,10 +4,13 @@ Append-only JSONL where each record commits to its predecessor via a hash
 chain, and each chain hash is HMAC-signed with a local secret. Verification
 recomputes the whole chain; any edit, deletion, or reordering breaks it.
 
-The secret lives in ``.knowhelm/evidence.key`` (created on first use). This
-protects against silent tampering by tools or accidents, not against an
-attacker who owns the machine and the key — the honest-workstation threat
-model is enough for acceptance evidence.
+The secret lives OUTSIDE the project tree, in ``~/.knowhelm/keys/`` (one key
+per project directory, created on first use; override the location with
+``KNOWHELM_KEY_DIR``). Coding agents get write access to the project
+directory as a matter of course — the referee's stamp must not sit inside
+the player's sandbox. This protects against silent tampering by tools or
+accidents, not against an attacker who owns the machine and the key — the
+honest-workstation threat model is enough for acceptance evidence.
 """
 
 from __future__ import annotations
@@ -52,7 +55,7 @@ class EvidenceChain:
     @classmethod
     def for_workdir(cls, workdir: Path) -> "EvidenceChain":
         base = workdir / ".knowhelm"
-        return cls(base / "evidence.jsonl", base / "evidence.key")
+        return cls(base / "evidence.jsonl", key_path_for(workdir))
 
     def append(self, event: str, payload: dict[str, Any]) -> EvidenceRecord:
         records = self._read()
@@ -113,10 +116,20 @@ def _chain_hash(prev_hash: str, index: int, ts: str, event: str, payload: dict[s
     return hashlib.sha256(material.encode()).hexdigest()
 
 
+def key_path_for(workdir: Path) -> Path:
+    """Per-project key file under the key dir, named by a hash of the
+    project's absolute path so unrelated projects never share a key."""
+    env = os.environ.get("KNOWHELM_KEY_DIR")
+    key_dir = Path(env) if env else Path.home() / ".knowhelm/keys"
+    digest = hashlib.sha256(str(workdir.resolve()).encode()).hexdigest()[:16]
+    return key_dir / f"{digest}.key"
+
+
 def _load_or_create_key(key_path: Path) -> bytes:
     if key_path.exists():
         return key_path.read_bytes()
     key_path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(key_path.parent, 0o700)
     key = secrets.token_bytes(32)
     key_path.write_bytes(key)
     os.chmod(key_path, 0o600)

@@ -45,6 +45,38 @@ will be declined:
    auto-approves, auto-supersedes, or lets a model decide what a curator
    should.
 
+## Architecture: one engine, shells around it
+
+Users see a single CLI. Internally the layering is deliberate, and the
+trust boundary never moves with the shells:
+
+```
+┌─ companion skill (planned; installed by `knowhelm init`) ──────┐
+│  teaches the host agent to read context packs, draft suggested │
+│  assertions for human approval, remind about verification      │
+├─ CLI (human-driven) ───────────────────────────────────────────┤
+│  verify / report / harvest / curation — adjudication lives here│
+├─ engine (knowhelm core library) ───────────────────────────────┤
+│  knowledge store + evidence chain + artifacts + drift + minting│
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Invariants across all shells (these are the product, not implementation
+detail):
+
+1. Formal acceptance assertions are written and entered by humans; an LLM
+   may draft, never enter.
+2. Verdicts come from the on-chain report, never from an agent's account
+   of its own work.
+3. Minting (harvest) only runs through the human-driven CLI.
+4. Agents read knowledge; approve/reject/supersede are human acts.
+
+**Decided against an MCP server.** Context packs push knowledge at
+delegation time; hosts that need an ad-hoc lookup can shell out to
+`knowhelm knowledge list`. An MCP layer would wrap an existing interface in
+a resident process for hosts we don't target. Revisit only if a host that
+cannot execute shell commands needs to integrate.
+
 ## Pull requests
 
 - Keep PRs single-purpose; tests for every behavior change.

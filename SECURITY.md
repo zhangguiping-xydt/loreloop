@@ -29,11 +29,16 @@ store beyond file permissions.
 
 ## Key material
 
-The evidence chain HMAC key lives in `.knowhelm/` with owner-only
-permissions. It proves chain continuity on an honest machine; it is not a
-defense against a local root attacker. Do not commit `.knowhelm/` to a
-public repository — evidence artifacts can embed page content from your
-running application.
+The evidence chain HMAC key lives **outside the project tree**, in
+`~/.knowhelm/keys/` (one key per project, owner-only permissions; override
+with `KNOWHELM_KEY_DIR`). Coding agents routinely get write access to the
+project directory, so the referee's stamp deliberately does not sit inside
+the player's sandbox: an agent that rewrites `.knowhelm/evidence.jsonl`
+cannot re-sign it. This raises the bar from "any process with workdir
+access" to "a process that reaches into the operator's home directory" —
+it is still not a defense against a local root attacker. Do not commit
+`.knowhelm/` to a public repository — evidence artifacts can embed page
+content from your running application.
 
 ## Reporting a vulnerability
 

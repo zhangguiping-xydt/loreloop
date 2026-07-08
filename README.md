@@ -33,6 +33,24 @@ the two ends the agents don't cover:
 Early alpha. Interfaces will change. Local-first: everything runs on your machine,
 storage is SQLite, no accounts, no telemetry.
 
+## Product shape
+
+knowhelm is **one CLI**. That's the whole user surface — there is no web
+dashboard, no server, no separate apps to learn.
+
+Planned: `knowhelm init` will detect your coding agent (Claude Code / Codex)
+and offer to install a companion skill into it. The skill only makes the
+agent a better citizen — understanding injected context packs, drafting
+suggested acceptance assertions for *you* to approve, reminding you to run
+verification. It never verifies, never renders verdicts, never writes
+knowledge. The referee stays outside the player's process:
+
+- acceptance assertions are written and entered by a human
+- verdicts come from `knowhelm report` reading the evidence chain, never
+  from an agent's summary of itself
+- harvest (minting knowledge) only runs through the human-driven CLI
+- agents get read access to knowledge; approve/reject/supersede are human acts
+
 ## Requirements
 
 - Python 3.11+

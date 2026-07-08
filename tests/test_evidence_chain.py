@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from knowhelm.evidence.chain import ChainVerificationError, EvidenceChain
+from knowhelm.evidence.chain import ChainVerificationError, EvidenceChain, key_path_for
 
 
 @pytest.fixture()
@@ -65,9 +65,28 @@ def test_detects_forged_record_without_key(chain, tmp_path):
 
 def test_key_created_once_with_restrictive_mode(tmp_path):
     EvidenceChain.for_workdir(tmp_path)
-    key_path = tmp_path / ".knowhelm/evidence.key"
+    key_path = key_path_for(tmp_path)
     assert key_path.exists()
     assert (key_path.stat().st_mode & 0o777) == 0o600
+    assert (key_path.parent.stat().st_mode & 0o777) == 0o700
     first = key_path.read_bytes()
     EvidenceChain.for_workdir(tmp_path)
     assert key_path.read_bytes() == first
+
+
+def test_key_lives_outside_the_project_tree(tmp_path):
+    EvidenceChain.for_workdir(tmp_path)
+    key_path = key_path_for(tmp_path)
+    assert not key_path.is_relative_to(tmp_path)
+    assert not (tmp_path / ".knowhelm/evidence.key").exists()
+
+
+def test_key_is_per_project(tmp_path):
+    a = tmp_path / "proj-a"
+    b = tmp_path / "proj-b"
+    a.mkdir()
+    b.mkdir()
+    EvidenceChain.for_workdir(a)
+    EvidenceChain.for_workdir(b)
+    assert key_path_for(a) != key_path_for(b)
+    assert key_path_for(a).read_bytes() != key_path_for(b).read_bytes()
