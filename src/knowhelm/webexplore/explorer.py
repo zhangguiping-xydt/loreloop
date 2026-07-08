@@ -22,6 +22,7 @@ class ExplorationResult:
     pages: list[Observation]
     trace_path: Path
     skipped: list[str] = field(default_factory=list)
+    login_walls: list[str] = field(default_factory=list)
 
 
 class Explorer:
@@ -45,6 +46,7 @@ class Explorer:
         seen: set[str] = set()
         pages: list[Observation] = []
         skipped: list[str] = []
+        login_walls: list[str] = []
 
         self._trace(trace_path, "exploration_started", url=start_url, max_pages=self._max_pages)
         while queue and len(pages) < self._max_pages:
@@ -65,7 +67,7 @@ class Explorer:
                 continue
 
             if obs.looks_like_login and obs.url != start_url:
-                obs = self._handle_login_wall(trace_path, obs, skipped)
+                obs = self._handle_login_wall(trace_path, obs, skipped, login_walls)
                 if obs is None:
                     continue
 
@@ -84,11 +86,14 @@ class Explorer:
                     queue.append(link)
 
         self._trace(trace_path, "exploration_finished", pages=len(pages), skipped=len(skipped))
-        return ExplorationResult(pages=pages, trace_path=trace_path, skipped=skipped)
+        return ExplorationResult(
+            pages=pages, trace_path=trace_path, skipped=skipped, login_walls=login_walls
+        )
 
     def _handle_login_wall(
-        self, trace_path: Path, obs: Observation, skipped: list[str]
+        self, trace_path: Path, obs: Observation, skipped: list[str], login_walls: list[str]
     ) -> Observation | None:
+        login_walls.append(obs.url)
         if self._on_login_wall == "handover" and hasattr(self._browser, "wait_for_user"):
             self._trace(trace_path, "human_handover", url=obs.url, reason="login form detected")
             self._browser.wait_for_user(

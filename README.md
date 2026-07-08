@@ -55,9 +55,15 @@ knowhelm report                          # acceptance report backed by the evide
 
 Notes:
 - `--from web` explores same-origin pages only. When it hits a login form it
-  hands the browser to you (`--headed`) instead of automating credentials.
-- `verify` records what the browser actually observed — verdict, reasoning,
-  and page snapshot hash — on the tamper-evident chain.
+  hands the browser to you with `--headed`; without `--headed` login-walled
+  pages are skipped (never automated credentials, never a blind wait).
+- `verify` prefers deterministic assertions — `contains:`, `absent:`,
+  `title-contains:` prefixes are checked directly against the page, no model
+  involved. Free-form expectations fall back to an LLM judge that treats page
+  content strictly as untrusted data.
+- Every check saves the full observation as a content-addressed artifact in
+  `.knowhelm/evidence/artifacts/` and records its hash on the tamper-evident
+  chain, so verdicts can be re-audited after the live page changes.
 
 ## License
 

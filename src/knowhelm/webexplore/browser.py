@@ -84,7 +84,7 @@ class PlaywrightBrowser:
         )
         return Observation(
             url=self._page.url, title=title, text=text,
-            links=[l for l in links if l.startswith("http")], forms=forms,
+            links=[u for u in links if u.startswith("http")], forms=forms,
         )
 
     def wait_for_user(self, message: str) -> None:

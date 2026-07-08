@@ -1,4 +1,3 @@
-import json
 
 import pytest
 
@@ -82,7 +81,7 @@ def test_verify_entry_fail_writes_back_contradicted(env):
     assert chain.verify()[0].event == "entry_contradicted"
 
 
-def test_verify_entry_detects_anchor_drift(env):
+def test_verify_entry_drift_pass_reanchors_snapshot(env):
     store, chain = env
     entry = make_web_entry("stale-hash-from-old-ingest")
     store.add(entry)
@@ -91,7 +90,42 @@ def test_verify_entry_detects_anchor_drift(env):
     result = verify_entry(FakeBrowser(), runner, chain, store, entry, "run-9")
 
     assert result.drifted
-    assert chain.verify()[0].payload["anchor_drifted"] is True
+    stored = store.get(entry.id)
+    assert stored.source.snapshot_ref == PAGE.snapshot_hash
+    assert stored.trust.verification is Verification.VERIFIED
+    rec = chain.verify()[0]
+    assert rec.payload["anchor_drifted"] is True
+    assert rec.payload["reanchored"] is True
+
+
+def test_verify_entry_drift_fail_keeps_old_anchor(env):
+    store, chain = env
+    entry = make_web_entry("stale-hash-from-old-ingest")
+    store.add(entry)
+    runner = FakeRunner('{"passed": false, "reason": "Page now shows 100MB."}')
+
+    result = verify_entry(FakeBrowser(), runner, chain, store, entry, "run-9")
+
+    assert result.drifted and not result.passed
+    stored = store.get(entry.id)
+    assert stored.source.snapshot_ref == "stale-hash-from-old-ingest"
+    assert stored.trust.verification is Verification.CONTRADICTED
+    assert chain.verify()[0].payload["reanchored"] is False
+
+
+def test_verify_entry_saves_artifact(env, tmp_path):
+    from knowhelm.evidence.artifacts import ArtifactStore
+
+    store, chain = env
+    entry = make_web_entry(PAGE.snapshot_hash)
+    store.add(entry)
+    artifacts = ArtifactStore.for_workdir(tmp_path)
+    runner = FakeRunner('{"passed": true, "reason": "Page says Max 50MB."}')
+
+    verify_entry(FakeBrowser(), runner, chain, store, entry, "run-9", artifacts=artifacts)
+
+    sha = chain.verify()[0].payload["artifact"]
+    assert artifacts.load(sha)["snapshot_hash"] == PAGE.snapshot_hash
 
 
 def test_verify_entry_rejects_non_web_channel(env):

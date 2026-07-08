@@ -42,11 +42,18 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         from .webexplore.web_reverse import reverse_web
 
         browser = PlaywrightBrowser(headed=args.headed)
+        on_login_wall = "handover" if args.headed else "skip"
         try:
-            result = Explorer(browser, workdir, max_pages=args.max_pages).explore(args.target)
+            explorer = Explorer(
+                browser, workdir, max_pages=args.max_pages, on_login_wall=on_login_wall
+            )
+            result = explorer.explore(args.target)
             print(f"explored {len(result.pages)} pages "
                   f"({len(result.skipped)} skipped), trace at {result.trace_path}",
                   file=sys.stderr)
+            if result.login_walls and not args.headed:
+                print(f"skipped {len(result.login_walls)} login-walled page(s); "
+                      f"re-run with --headed to sign in yourself", file=sys.stderr)
             entries = reverse_web(_agent(args.agent), result.pages)
         finally:
             browser.close()
@@ -58,15 +65,18 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
+    from .evidence.artifacts import ArtifactStore
     from .webexplore.browser import PlaywrightBrowser
     from .webexplore.verify import verify_expectation
 
     workdir = _workdir()
     chain = EvidenceChain.for_workdir(workdir)
+    artifacts = ArtifactStore.for_workdir(workdir)
     browser = PlaywrightBrowser(headed=args.headed)
     try:
         result = verify_expectation(
-            browser, _agent(args.agent), chain, args.run_id, args.url, args.expectation
+            browser, _agent(args.agent), chain, args.run_id, args.url, args.expectation,
+            artifacts=artifacts,
         )
     finally:
         browser.close()
@@ -137,6 +147,7 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
 
 
 def _verify_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
+    from .evidence.artifacts import ArtifactStore
     from .knowledge.model import Channel
     from .webexplore.browser import PlaywrightBrowser
     from .webexplore.verify import verify_entry
@@ -149,13 +160,16 @@ def _verify_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
         return 2
 
     chain = EvidenceChain.for_workdir(workdir)
+    artifacts = ArtifactStore.for_workdir(workdir)
     run_id = f"verify-{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
     agent = _agent(args.agent)
     browser = PlaywrightBrowser(headed=args.headed)
     contradicted = 0
     try:
         for entry in web_entries:
-            result = verify_entry(browser, agent, chain, store, entry, run_id)
+            result = verify_entry(
+                browser, agent, chain, store, entry, run_id, artifacts=artifacts
+            )
             status = "VERIFIED" if result.passed else "CONTRADICTED"
             drift = "  [page drifted since ingest]" if result.drifted else ""
             print(f"{status}: {entry.title}{drift}")

@@ -139,6 +139,15 @@ class KnowledgeStore:
             )
         return self._require(entry_id)
 
+    def set_snapshot_ref(self, entry_id: str, snapshot_ref: str, now: datetime) -> Entry:
+        self._require(entry_id)
+        with self._conn:
+            self._conn.execute(
+                "UPDATE entries SET snapshot_ref = ?, updated_at = ? WHERE id = ?",
+                (snapshot_ref, _iso(now), entry_id),
+            )
+        return self._require(entry_id)
+
     def add_link(self, link: Link) -> None:
         for eid in (link.from_id, link.to_id):
             self._require(eid)

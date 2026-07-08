@@ -26,7 +26,7 @@ class RunSummary:
 
 
 def load_run(trace_path: Path) -> RunSummary:
-    events = [json.loads(l) for l in trace_path.read_text(encoding="utf-8").splitlines()]
+    events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
     started = next(e for e in events if e["event"] == "delegation_started")
     finished = any(e["event"] == "delegation_finished" for e in events)
     return RunSummary(

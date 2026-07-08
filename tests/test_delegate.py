@@ -6,7 +6,7 @@ import pytest
 from knowhelm.agents import AgentError
 from knowhelm.delegate.context_pack import render, select
 from knowhelm.delegate.runner import DelegateRunner
-from knowhelm.knowledge.model import Channel, Curation, Entry, Kind, Source, Trust, Verification
+from knowhelm.knowledge.model import Channel, Curation, Entry, Kind, Source, Trust
 
 NOW = datetime(2026, 7, 8, tzinfo=timezone.utc)
 
@@ -69,7 +69,7 @@ def test_delegate_injects_pack_and_traces(tmp_path):
     prompt = agent.prompts[0]
     assert "Established facts" in prompt
     assert prompt.index("Established facts") < prompt.index("# Task")
-    events = [json.loads(l) for l in result.trace_path.read_text().splitlines()]
+    events = [json.loads(line) for line in result.trace_path.read_text().splitlines()]
     assert [e["event"] for e in events] == ["delegation_started", "delegation_finished"]
     assert set(events[0]["context_entries"]) == {UPLOAD_FACT.id, UPLOAD_HINT.id}
     assert result.run_id.startswith("run-")
@@ -87,5 +87,5 @@ def test_delegate_failure_is_traced_and_reraised(tmp_path):
     with pytest.raises(AgentError):
         runner.run("fix the upload endpoint", [UPLOAD_FACT])
     trace_files = list((tmp_path / ".knowhelm/runs").glob("*.jsonl"))
-    events = [json.loads(l) for l in trace_files[0].read_text().splitlines()]
+    events = [json.loads(line) for line in trace_files[0].read_text().splitlines()]
     assert events[-1]["event"] == "delegation_failed"

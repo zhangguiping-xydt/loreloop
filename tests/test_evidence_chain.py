@@ -25,9 +25,9 @@ def test_empty_chain_verifies(chain):
 
 def _rewrite(tmp_path, mutate):
     path = tmp_path / ".knowhelm/evidence.jsonl"
-    lines = [json.loads(l) for l in path.read_text().splitlines()]
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
     mutate(lines)
-    path.write_text("\n".join(json.dumps(l, sort_keys=True) for l in lines) + "\n")
+    path.write_text("\n".join(json.dumps(rec, sort_keys=True) for rec in lines) + "\n")
 
 
 def test_detects_payload_edit(chain, tmp_path):
