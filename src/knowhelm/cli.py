@@ -67,7 +67,13 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 def cmd_verify(args: argparse.Namespace) -> int:
     from .evidence.artifacts import ArtifactStore
     from .webexplore.browser import PlaywrightBrowser
-    from .webexplore.verify import verify_expectation
+    from .webexplore.verify import MalformedExpectation, parse_assertion, verify_expectation
+
+    try:
+        parse_assertion(args.expectation)
+    except MalformedExpectation as exc:
+        print(f"invalid expectation: {exc}", file=sys.stderr)
+        return 2
 
     workdir = _workdir()
     chain = EvidenceChain.for_workdir(workdir)

@@ -122,6 +122,12 @@ def test_report_flags_missing_and_tampered_artifacts(workdir):
     assert "file is missing" in report
 
 
+def test_cli_verify_rejects_empty_assertion_before_browser(workdir, capsys):
+    # Exits 2 with a clean message, before any playwright import or navigation
+    assert main(["verify", "run-1", "http://app.local", "contains:"]) == 2
+    assert "invalid expectation" in capsys.readouterr().err
+
+
 def test_cli_ingest_web_requires_playwright(workdir):
     try:
         import playwright  # noqa: F401

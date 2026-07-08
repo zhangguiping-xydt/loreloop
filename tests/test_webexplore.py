@@ -181,15 +181,19 @@ def test_deterministic_check_prefixes():
 
 
 def test_deterministic_check_rejects_empty_needle():
+    from knowhelm.webexplore.verify import MalformedExpectation
+
     for expectation in ("contains:", "contains:   ", "absent:", "title-contains:"):
-        with pytest.raises(ValueError, match="empty assertion"):
+        with pytest.raises(MalformedExpectation, match="empty assertion"):
             deterministic_check(UPLOAD, expectation)
 
 
 def test_empty_needle_never_reaches_the_chain(tmp_path):
+    from knowhelm.webexplore.verify import MalformedExpectation
+
     browser = FakeBrowser({"http://app.local/upload": UPLOAD})
     chain = EvidenceChain.for_workdir(tmp_path)
-    with pytest.raises(ValueError, match="empty assertion"):
+    with pytest.raises(MalformedExpectation, match="empty assertion"):
         verify_expectation(
             browser, FakeRunner([]), chain, "run-1", "http://app.local/upload", "contains:"
         )
