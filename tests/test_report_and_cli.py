@@ -122,6 +122,87 @@ def test_report_flags_missing_and_tampered_artifacts(workdir):
     assert "file is missing" in report
 
 
+def test_cli_supersede_links_and_hides_old_entry(workdir, capsys):
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    old = Entry(
+        title="Old upload contract", content="POST /upload returns 200.",
+        kind=Kind.INTERFACE, source=Source(channel=Channel.CODE, locator="api.py@abc"),
+    )
+    new = Entry(
+        title="New upload contract", content="POST /upload returns 201.",
+        kind=Kind.INTERFACE, source=Source(channel=Channel.CODE, locator="api.py@def"),
+    )
+    with KnowledgeStore(db) as store:
+        store.add(old)
+        store.add(new)
+
+    assert main(["knowledge", "supersede", new.id[:8], old.id[:8]]) == 0
+    assert "superseded: Old upload contract" in capsys.readouterr().out
+
+    assert main(["knowledge", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "[superseded]" in out
+
+    with KnowledgeStore(db) as store:
+        assert {e.id for e in store.list_active()} == {new.id}
+
+
+def test_cli_supersede_rejects_ambiguous_or_missing_prefix(workdir, capsys):
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    (workdir / ".knowhelm").mkdir()
+    KnowledgeStore(workdir / ".knowhelm/knowledge.db").close()
+    assert main(["knowledge", "supersede", "deadbeef", "cafebabe"]) == 2
+    assert "no entry matches" in capsys.readouterr().err
+    assert main(["knowledge", "supersede", "deadbeef"]) == 2
+
+
+def test_cli_list_stale_flags_drifted_code_anchors(workdir, capsys):
+    import subprocess
+
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=workdir, check=True, capture_output=True)
+
+    git("init")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (workdir / "api.py").write_text("def upload(): return 201\n")
+    git("add", "api.py")
+    git("commit", "-m", "base")
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=workdir, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    drifting = Entry(
+        title="Upload contract", content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(drifting)
+
+    assert main(["knowledge", "list", "--stale"]) == 0
+    assert "no stale entries" in capsys.readouterr().out
+
+    (workdir / "api.py").write_text("def upload(): return 202\n")
+    git("add", "api.py")
+    git("commit", "-m", "change")
+
+    assert main(["knowledge", "list", "--stale"]) == 0
+    out = capsys.readouterr().out
+    assert drifting.id[:8] in out
+    assert "[stale: source changed since capture]" in out
+
+
 def test_cli_verify_rejects_empty_assertion_before_browser(workdir, capsys):
     # Exits 2 with a clean message, before any playwright import or navigation
     assert main(["verify", "run-1", "http://app.local", "contains:"]) == 2

@@ -46,6 +46,7 @@ class HarvestResult:
     reversed_entries: list[Entry]
     stale: list[Entry] = field(default_factory=list)
     unauditable_checks: list[str] = field(default_factory=list)
+    review: list[Entry] = field(default_factory=list)
     head_commit: str | None = None
 
 
@@ -81,6 +82,7 @@ def harvest_run(
 
     now = datetime.now(timezone.utc)
     minted, unauditable = _mint_verified_checks(evaluation.passed, run.run_id, now, artifacts)
+    review = _review_candidates(store, minted)
     # store.add dedupes exact repeats; keep the stored entries so the chain
     # records ids that actually exist in the knowledge base.
     minted = _dedupe([store.add(e) for e in minted])
@@ -109,6 +111,7 @@ def harvest_run(
             "reversed": [e.id for e in reversed_entries],
             "stale": [e.id for e in stale],
             "unauditable_checks": unauditable,
+            "review": [e.id for e in review],
             "base_commit": run.base_commit,
             "head_commit": head,
         },
@@ -118,8 +121,26 @@ def harvest_run(
         reversed_entries=reversed_entries,
         stale=stale,
         unauditable_checks=unauditable,
+        review=review,
         head_commit=head,
     )
+
+
+def _review_candidates(store: KnowledgeStore, minted: list[Entry]) -> list[Entry]:
+    """Pre-existing strong entries at the locators being minted. A new
+    born-verified assertion about the same page may confirm, refine or
+    contradict them — a judgment for the curator, never automated here."""
+    locators = {e.source.locator for e in minted}
+    if not locators:
+        return []
+    minted_content = {(e.source.locator, e.content) for e in minted}
+    return [
+        e
+        for e in store.list(channel=Channel.WEB)
+        if e.source.locator in locators
+        and e.is_strong_evidence()
+        and (e.source.locator, e.content) not in minted_content
+    ]
 
 
 def _store_reanchored(

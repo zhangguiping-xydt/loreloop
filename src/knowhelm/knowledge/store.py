@@ -184,10 +184,29 @@ class KnowledgeStore:
         for eid in (link.from_id, link.to_id):
             self._require(eid)
         with self._conn:
+            # A link is set membership; re-adding the same link is a no-op.
             self._conn.execute(
-                "INSERT INTO links VALUES (?,?,?,?)",
+                "INSERT OR IGNORE INTO links VALUES (?,?,?,?)",
                 (link.from_id, link.to_id, link.link_type.value, _iso(link.created_at)),
             )
+
+    def superseded_ids(self) -> set[str]:
+        rows = self._conn.execute(
+            "SELECT DISTINCT to_id FROM links WHERE link_type = ?",
+            (LinkType.SUPERSEDES.value,),
+        ).fetchall()
+        return {r["to_id"] for r in rows}
+
+    def list_active(self) -> list[Entry]:
+        """Entries eligible for injection: not rejected, not superseded.
+        Superseded entries stay in the store as history — supersession is a
+        link, not a status flag — but they no longer inform new work."""
+        superseded = self.superseded_ids()
+        return [
+            e
+            for e in self.list()
+            if e.trust.curation is not Curation.REJECTED and e.id not in superseded
+        ]
 
     def links_for(self, entry_id: str) -> list[Link]:
         rows = self._conn.execute(

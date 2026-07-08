@@ -160,3 +160,30 @@ def test_links(store):
         store.add_link(Link(from_id=new.id, to_id="missing", link_type=LinkType.CONTRADICTS))
     with pytest.raises(ValueError):
         Link(from_id=new.id, to_id=new.id, link_type=LinkType.CONTRADICTS)
+
+
+def test_list_active_excludes_rejected_and_superseded(store):
+    rejected = make_entry(title="Rejected fact", content="Wrong claim.")
+    old = make_entry(title="Old contract", content="POST /upload returns 200.")
+    new = make_entry(title="New contract", content="POST /upload returns 201.")
+    for e in (rejected, old, new):
+        store.add(e)
+    store.set_curation(rejected.id, Curation.REJECTED, NOW)
+    store.add_link(Link(from_id=new.id, to_id=old.id, link_type=LinkType.SUPERSEDES))
+
+    active_ids = {e.id for e in store.list_active()}
+    assert active_ids == {new.id}
+    assert store.superseded_ids() == {old.id}
+    # the superseded entry remains in the store as history
+    assert store.get(old.id) is not None
+
+
+def test_add_link_is_idempotent(store):
+    old = make_entry(title="Old", content="a.")
+    new = make_entry(title="New", content="b.")
+    store.add(old)
+    store.add(new)
+    link = Link(from_id=new.id, to_id=old.id, link_type=LinkType.SUPERSEDES)
+    store.add_link(link)
+    store.add_link(link)
+    assert len(store.links_for(old.id)) == 1

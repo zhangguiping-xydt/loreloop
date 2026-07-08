@@ -96,7 +96,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     workdir = _workdir()
     with _store(workdir) as store:
-        entries = [e for e in store.list() if e.trust.curation is not Curation.REJECTED]
+        entries = store.list_active()
     runner = DelegateRunner(_agent(args.agent), workdir)
     result = runner.run(args.task, entries)
     chain = EvidenceChain.for_workdir(workdir)
@@ -169,8 +169,13 @@ def cmd_harvest(args: argparse.Namespace) -> int:
             print(f"    {check}", file=sys.stderr)
     if result.stale:
         print(f"  {len(result.stale)} existing entries anchored before this run "
-              f"touch changed files — review with `knowhelm knowledge list`:")
+              f"touch changed files — review with `knowhelm knowledge list --stale`:")
         for entry in result.stale:
+            print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})")
+    if result.review:
+        print(f"  {len(result.review)} existing strong entries cover pages verified in "
+              f"this run — check they still hold, supersede if not:")
+        for entry in result.review:
             print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})")
     return 0
 
@@ -179,18 +184,65 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
     workdir = _workdir()
     with _store(workdir) as store:
         if args.action == "list":
-            for e in store.list():
-                strong = "strong" if e.is_strong_evidence() else "ref"
-                print(f"{e.id[:8]}  [{e.kind.value:<12}] [{strong:<6}] {e.title}")
+            return _list_entries(args, workdir, store)
         elif args.action == "approve":
             entry = store.set_curation(args.entry_id, Curation.APPROVED, datetime.now(timezone.utc))
             print(f"approved: {entry.title}")
         elif args.action == "reject":
             entry = store.set_curation(args.entry_id, Curation.REJECTED, datetime.now(timezone.utc))
             print(f"rejected: {entry.title}")
+        elif args.action == "supersede":
+            return _supersede(args, store)
         elif args.action == "verify":
             return _verify_entries(args, workdir, store)
     return 0
+
+
+def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
+    from .knowledge.code_reverse import drifted_code_entry_ids
+
+    entries = store.list()
+    superseded = store.superseded_ids()
+    drifted = drifted_code_entry_ids(workdir, entries) if (workdir / ".git").exists() else set()
+    if args.stale:
+        entries = [e for e in entries if e.id in drifted and e.id not in superseded]
+        if not entries:
+            print("no stale entries: every code anchor matches the current tree")
+            return 0
+    for e in entries:
+        strong = "strong" if e.is_strong_evidence() else "ref"
+        flags = ""
+        if e.id in superseded:
+            flags += "  [superseded]"
+        if e.id in drifted:
+            flags += "  [stale: source changed since capture]"
+        print(f"{e.id[:8]}  [{e.kind.value:<12}] [{strong:<6}] {e.title}{flags}")
+    return 0
+
+
+def _supersede(args: argparse.Namespace, store: KnowledgeStore) -> int:
+    from .knowledge.model import Link, LinkType
+
+    if not args.entry_id or not args.old_id:
+        print("usage: knowhelm knowledge supersede <new_id> <old_id>", file=sys.stderr)
+        return 2
+    new = _resolve_entry(store, args.entry_id)
+    old = _resolve_entry(store, args.old_id)
+    if new is None or old is None:
+        return 2
+    store.add_link(Link(from_id=new.id, to_id=old.id, link_type=LinkType.SUPERSEDES))
+    print(f"superseded: {old.title}  ({old.id[:8]})")
+    print(f"        by: {new.title}  ({new.id[:8]})")
+    return 0
+
+
+def _resolve_entry(store: KnowledgeStore, prefix: str):
+    matches = [e for e in store.list() if e.id.startswith(prefix)]
+    if len(matches) == 1:
+        return matches[0]
+    reason = "no entry matches" if not matches else f"{len(matches)} entries match"
+    print(f"{reason} id prefix {prefix!r}", file=sys.stderr)
+    return None
 
 
 def _verify_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
@@ -274,8 +326,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_harvest.set_defaults(func=cmd_harvest)
 
     p_knowledge = sub.add_parser("knowledge", help="inspect, curate and verify knowledge entries")
-    p_knowledge.add_argument("action", choices=["list", "approve", "reject", "verify"])
+    p_knowledge.add_argument(
+        "action", choices=["list", "approve", "reject", "supersede", "verify"]
+    )
     p_knowledge.add_argument("entry_id", nargs="?")
+    p_knowledge.add_argument("old_id", nargs="?",
+                             help="for supersede: the entry being replaced")
+    p_knowledge.add_argument("--stale", action="store_true",
+                             help="for list: only entries whose code anchor drifted")
     p_knowledge.add_argument("--headed", action="store_true")
     p_knowledge.set_defaults(func=cmd_knowledge)
 

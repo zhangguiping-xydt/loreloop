@@ -8,7 +8,9 @@ grade their own homework. knowhelm sits above the coding agent as a local-first 
 
 1. **Ingest** — reverse-engineer knowledge from what already exists: your codebase
    (implementation view) and your running web app (behavior view). Every knowledge entry
-   carries a confidence status (`confirmed` / `inferred` / `contradicted`), not just text.
+   carries structured provenance and two explicit trust axes — human curation
+   (`draft`/`approved`/`rejected`) and machine verification
+   (`unverified`/`verified`/`contradicted`) — not just text.
 2. **Run** — delegate a task to `claude -p` or `codex exec`, with a context pack of
    relevant, trust-ranked knowledge injected up front. knowhelm never writes code itself;
    it governs what the coding agent knows and records what it does.
@@ -71,6 +73,12 @@ Notes:
   the run's base commit is re-reversed as draft entries that earn trust the
   normal way. Pre-existing entries touching changed files are listed for
   human review — knowhelm never auto-supersedes.
+- Curation stays human: `knowledge list --stale` shows entries whose anchored
+  source changed since capture; `knowledge supersede <new-id> <old-id>` links
+  a replacement — the old entry stays in the store as history but is no
+  longer injected into runs. At injection time, strong entries with drifted
+  anchors are automatically offered as reference-only for that run, without
+  touching their stored trust.
 
 ## License
 

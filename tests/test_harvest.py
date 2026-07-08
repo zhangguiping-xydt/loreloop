@@ -256,6 +256,60 @@ def test_harvest_dedupes_repeated_checks(env):
     assert len(result.minted) == 1
 
 
+def test_harvest_lists_prior_strong_entries_on_minted_pages_for_review(env):
+    repo, store, chain, artifacts = env
+    from datetime import datetime, timezone
+
+    from knowhelm.knowledge.model import Trust
+
+    prior = Entry(
+        title="Old upload page fact", content="Upload page allows 100MB files.",
+        kind=Kind.BEHAVIOR,
+        source=Source(channel=Channel.WEB, locator="http://app.local/upload", snapshot_ref="old"),
+        trust=Trust(
+            verification=Verification.VERIFIED,
+            verified_at=datetime.now(timezone.utc), verified_by="run-0",
+        ),
+    )
+    elsewhere = Entry(
+        title="Login page fact", content="Login redirects to dashboard.",
+        kind=Kind.BEHAVIOR,
+        source=Source(channel=Channel.WEB, locator="http://app.local/login", snapshot_ref="old"),
+        trust=Trust(
+            verification=Verification.VERIFIED,
+            verified_at=datetime.now(timezone.utc), verified_by="run-0",
+        ),
+    )
+    store.add(prior)
+    store.add(elsewhere)
+    trace = write_trace(repo, "run-x", head_of(repo))
+    record_browser_check(chain, "run-x", artifacts=artifacts)
+
+    result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    assert [e.id for e in result.review] == [prior.id]
+    # untouched: reviewing is the curator's job
+    assert store.get(prior.id).trust.verification is Verification.VERIFIED
+    rec = next(r for r in chain.verify() if r.event == "knowledge_harvested")
+    assert rec.payload["review"] == [prior.id]
+
+
+def test_harvest_review_skips_the_assertion_it_just_reminted(env):
+    repo, store, chain, artifacts = env
+    base = head_of(repo)
+
+    trace1 = write_trace(repo, "run-1", base)
+    record_browser_check(chain, "run-1", artifacts=artifacts)
+    harvest_run(load_run(trace1), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    trace2 = write_trace(repo, "run-2", base)
+    record_browser_check(chain, "run-2", artifacts=artifacts)
+    second = harvest_run(load_run(trace2), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    # the only strong entry on that page is the same assertion re-minted
+    assert second.review == []
+
+
 def test_harvest_mint_reuses_existing_entry_across_runs(env):
     repo, store, chain, artifacts = env
     base = head_of(repo)
