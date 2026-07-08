@@ -85,22 +85,47 @@ def repo_head(repo: Path) -> str:
     ).stdout.strip()
 
 
+def changed_paths(
+    repo: Path, base: str, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS
+) -> list[str]:
+    """All source paths changed between ``base`` and HEAD — including files
+    that no longer exist (deleted, or renamed away). Use for staleness
+    detection; use changed_files for reversal. ``--no-renames`` keeps both
+    sides of a rename: detection would collapse it to the new path only,
+    hiding exactly the old entries that need review."""
+    lines = subprocess.run(
+        ["git", "diff", "--name-only", "--no-renames", f"{base}..HEAD"],
+        cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    return [line for line in lines if line.endswith(extensions)]
+
+
 def changed_files(
     repo: Path, base: str, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS
 ) -> list[Path]:
-    """Source files changed between ``base`` and HEAD, filtered like scan_repo.
-    Deleted files are excluded — there is nothing left to reverse."""
+    """Changed source files that still exist, filtered like scan_repo —
+    the reversal targets."""
+    return [
+        repo / p
+        for p in changed_paths(repo, base, extensions)
+        if (repo / p).exists() and (repo / p).stat().st_size <= _MAX_FILE_BYTES
+    ]
+
+
+def dirty_source_files(
+    repo: Path, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS
+) -> list[str]:
+    """Source files with uncommitted changes (staged, unstaged or untracked)."""
     lines = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}..HEAD"],
+        ["git", "status", "--porcelain"],
         cwd=repo, capture_output=True, text=True, check=True,
     ).stdout.splitlines()
-    return [
-        repo / line
-        for line in lines
-        if line.endswith(extensions)
-        and (repo / line).exists()
-        and (repo / line).stat().st_size <= _MAX_FILE_BYTES
-    ]
+    dirty = []
+    for line in lines:
+        path = line[3:].split(" -> ")[-1].strip().strip('"')
+        if path.endswith(extensions):
+            dirty.append(path)
+    return dirty
 
 
 def extract_assertions(

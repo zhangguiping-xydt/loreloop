@@ -162,6 +162,11 @@ def cmd_harvest(args: argparse.Namespace) -> int:
     print(f"harvested run {args.run_id}:")
     print(f"  {len(result.minted)} verified acceptance assertions minted")
     print(f"  {len(result.reversed_entries)} draft entries reversed from changed code")
+    if result.unauditable_checks:
+        print(f"  {len(result.unauditable_checks)} browser check(s) had no evidence "
+              f"artifact and were NOT minted:", file=sys.stderr)
+        for check in result.unauditable_checks:
+            print(f"    {check}", file=sys.stderr)
     if result.stale:
         print(f"  {len(result.stale)} existing entries anchored before this run "
               f"touch changed files — review with `knowhelm knowledge list`:")
