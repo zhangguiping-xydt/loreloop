@@ -87,12 +87,15 @@ def deterministic_check(obs: Observation, expectation: str) -> tuple[bool, str] 
 
 
 def _judge(
-    runner: AgentRunner, obs: Observation, expectation: str
+    runner: AgentRunner, obs: Observation, expectation: str, allow_deterministic: bool = True
 ) -> tuple[bool, str, str]:
-    """Returns (passed, reason, mode)."""
-    det = deterministic_check(obs, expectation)
-    if det is not None:
-        return det[0], det[1], "deterministic"
+    """Returns (passed, reason, mode). ``allow_deterministic`` is off for
+    entry claims: they are natural-language sentences, and one that happens to
+    start with a prefix like ``contains:`` must not be parsed as the DSL."""
+    if allow_deterministic:
+        det = deterministic_check(obs, expectation)
+        if det is not None:
+            return det[0], det[1], "deterministic"
     raw = runner.run(
         _VERIFY_PROMPT.format(
             expectation=expectation,
@@ -157,7 +160,7 @@ def verify_entry(
     obs = browser.observe(entry.source.locator)
     artifact_sha = artifacts.save_observation(obs)[0] if artifacts else None
     drifted = bool(entry.source.snapshot_ref) and obs.snapshot_hash != entry.source.snapshot_ref
-    passed, reason, mode = _judge(runner, obs, entry.content)
+    passed, reason, mode = _judge(runner, obs, entry.content, allow_deterministic=False)
     now = datetime.now(timezone.utc)
     new_status = Verification.VERIFIED if passed else Verification.CONTRADICTED
     store.set_verification(entry.id, new_status, run_id, now)
