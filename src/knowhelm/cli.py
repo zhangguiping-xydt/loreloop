@@ -35,9 +35,13 @@ def _agent(name: str) -> AgentRunner:
 def cmd_init(args: argparse.Namespace) -> int:
     import shutil
 
+    from .evidence.chain import key_path_for
+
     workdir = _workdir()
     _store(workdir).close()
+    EvidenceChain.for_workdir(workdir)
     print(f"initialized .knowhelm/ (knowledge store, evidence chain) in {workdir}")
+    print(f"evidence signing key: {key_path_for(workdir)} (outside the project tree)")
 
     gitignore = workdir / ".gitignore"
     if (workdir / ".git").exists():
@@ -390,8 +394,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .evidence.chain import LegacyKeyError
+
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except LegacyKeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

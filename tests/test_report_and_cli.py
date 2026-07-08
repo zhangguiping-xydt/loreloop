@@ -209,6 +209,29 @@ def test_cli_verify_rejects_empty_assertion_before_browser(workdir, capsys):
     assert "invalid expectation" in capsys.readouterr().err
 
 
+def test_cli_init_creates_evidence_key(workdir, monkeypatch, capsys):
+    import shutil as _shutil
+
+    from knowhelm.evidence.chain import key_path_for
+
+    monkeypatch.setattr(_shutil, "which", lambda name: None)
+    assert main(["init"]) == 0
+    assert key_path_for(workdir).exists()
+    assert "evidence signing key" in capsys.readouterr().out
+
+
+def test_cli_surfaces_legacy_key_error_cleanly(workdir, capsys):
+    legacy = workdir / ".knowhelm/evidence.key"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(b"k" * 32)
+    write_trace(workdir)
+
+    assert main(["report"]) == 2
+    err = capsys.readouterr().err
+    assert "legacy evidence key" in err
+    assert "Traceback" not in err
+
+
 def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys):
     import shutil as _shutil
     import subprocess

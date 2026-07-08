@@ -2,7 +2,12 @@ import json
 
 import pytest
 
-from knowhelm.evidence.chain import ChainVerificationError, EvidenceChain, key_path_for
+from knowhelm.evidence.chain import (
+    ChainVerificationError,
+    EvidenceChain,
+    LegacyKeyError,
+    key_path_for,
+)
 
 
 @pytest.fixture()
@@ -79,6 +84,30 @@ def test_key_lives_outside_the_project_tree(tmp_path):
     key_path = key_path_for(tmp_path)
     assert not key_path.is_relative_to(tmp_path)
     assert not (tmp_path / ".knowhelm/evidence.key").exists()
+
+
+def test_legacy_in_tree_key_refuses_instead_of_accusing_tampering(tmp_path):
+    legacy = tmp_path / ".knowhelm/evidence.key"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(b"k" * 32)
+    with pytest.raises(LegacyKeyError, match="legacy evidence key"):
+        EvidenceChain.for_workdir(tmp_path)
+
+
+def test_operator_moved_legacy_key_keeps_old_chain_verifiable(tmp_path):
+    # sign a chain the pre-relocation way: key inside the project tree
+    legacy = tmp_path / ".knowhelm/evidence.key"
+    legacy.parent.mkdir(parents=True)
+    old = EvidenceChain(tmp_path / ".knowhelm/evidence.jsonl", legacy)
+    old.append("check_passed", {"check": "history"})
+
+    # operator chooses continuity: mv <legacy> <expected>
+    expected = key_path_for(tmp_path)
+    expected.parent.mkdir(parents=True, exist_ok=True)
+    legacy.rename(expected)
+
+    chain = EvidenceChain.for_workdir(tmp_path)
+    assert [r.event for r in chain.verify()] == ["check_passed"]
 
 
 def test_key_is_per_project(tmp_path):

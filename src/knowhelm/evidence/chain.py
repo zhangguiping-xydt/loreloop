@@ -35,6 +35,27 @@ class ChainVerificationError(Exception):
         self.reason = reason
 
 
+class LegacyKeyError(Exception):
+    """A pre-relocation key was found inside the project tree. Refuse to
+    proceed rather than mint a new key: the old chain would then fail with
+    "signature invalid", which falsely accuses tampering when the truth is
+    a key change. The operator decides — never migrate silently, because a
+    key that lived in the agent-writable tree cannot be laundered into the
+    trusted location as if it had always been there."""
+
+    def __init__(self, legacy: Path, expected: Path) -> None:
+        super().__init__(
+            f"found a legacy evidence key inside the project tree: {legacy}\n"
+            f"Evidence keys now live outside the project (agent-writable trees "
+            f"cannot hold the referee's stamp). Choose:\n"
+            f"  keep the old chain verifiable:  mv {legacy} {expected}\n"
+            f"    (note: that key lived inside the project tree, so the old "
+            f"chain only ever had in-tree integrity)\n"
+            f"  or start fresh:  delete {legacy} and archive the old "
+            f".knowhelm/evidence.jsonl"
+        )
+
+
 @dataclass(frozen=True)
 class EvidenceRecord:
     index: int
@@ -55,7 +76,11 @@ class EvidenceChain:
     @classmethod
     def for_workdir(cls, workdir: Path) -> "EvidenceChain":
         base = workdir / ".knowhelm"
-        return cls(base / "evidence.jsonl", key_path_for(workdir))
+        expected = key_path_for(workdir)
+        legacy = base / "evidence.key"
+        if legacy.exists() and not expected.exists():
+            raise LegacyKeyError(legacy, expected)
+        return cls(base / "evidence.jsonl", expected)
 
     def append(self, event: str, payload: dict[str, Any]) -> EvidenceRecord:
         records = self._read()
