@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Local state & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.knowhelm/
+runtime/
+
+# Test / tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Editors
+.idea/
+.vscode/
+.claude/settings.local.json
