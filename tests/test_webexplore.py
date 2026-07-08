@@ -180,6 +180,29 @@ def test_deterministic_check_prefixes():
     assert deterministic_check(UPLOAD, "free-form expectation") is None
 
 
+def test_deterministic_check_rejects_empty_needle():
+    for expectation in ("contains:", "contains:   ", "absent:", "title-contains:"):
+        with pytest.raises(ValueError, match="empty assertion"):
+            deterministic_check(UPLOAD, expectation)
+
+
+def test_empty_needle_never_reaches_the_chain(tmp_path):
+    browser = FakeBrowser({"http://app.local/upload": UPLOAD})
+    chain = EvidenceChain.for_workdir(tmp_path)
+    with pytest.raises(ValueError, match="empty assertion"):
+        verify_expectation(
+            browser, FakeRunner([]), chain, "run-1", "http://app.local/upload", "contains:"
+        )
+    assert chain.verify() == []
+
+
+def test_artifact_files_are_owner_only(tmp_path):
+    artifacts = ArtifactStore.for_workdir(tmp_path)
+    _, path = artifacts.save_observation(UPLOAD)
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+
+
 def test_verify_deterministic_ignores_injected_instructions(tmp_path):
     poisoned = Observation(
         url="http://app.local/upload",

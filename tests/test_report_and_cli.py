@@ -94,6 +94,34 @@ def test_cli_knowledge_curation_flow(workdir, capsys):
     assert "[strong]" in capsys.readouterr().out
 
 
+def test_report_flags_missing_and_tampered_artifacts(workdir):
+    from knowhelm.evidence.artifacts import ArtifactStore
+    from knowhelm.webexplore.browser import Observation
+
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    sha, path = artifacts.save_observation(
+        Observation(url="http://a", title="T", text="ok")
+    )
+    chain.append(
+        "check_passed", {"run_id": run.run_id, "check": "page ok", "artifact": sha}
+    )
+
+    assert "Verdict: ACCEPTED" in render_report(run, chain, artifacts)
+
+    path.write_text('{"tampered": true}', encoding="utf-8")
+    report = render_report(run, chain, artifacts)
+    assert "Verdict: NOT ACCEPTED" in report
+    assert "Evidence integrity failures" in report
+
+    path.unlink()
+    report = render_report(run, chain, artifacts)
+    assert "Verdict: NOT ACCEPTED" in report
+    assert "file is missing" in report
+
+
 def test_cli_ingest_web_requires_playwright(workdir):
     try:
         import playwright  # noqa: F401

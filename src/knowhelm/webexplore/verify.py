@@ -70,20 +70,29 @@ class EntryVerifyResult:
 
 def deterministic_check(obs: Observation, expectation: str) -> tuple[bool, str] | None:
     """Evaluate prefixed assertions without a model. Returns None when the
-    expectation is free-form and needs the LLM judge."""
+    expectation is free-form and needs the LLM judge. An empty needle is a
+    malformed expectation and raises before anything reaches the chain —
+    ``"" in text`` is vacuously true and must never produce a PASS."""
     if expectation.startswith("contains:"):
-        needle = expectation.removeprefix("contains:").strip()
+        needle = _needle(expectation, "contains:")
         passed = needle.lower() in obs.text.lower()
         return passed, f"page text {'contains' if passed else 'does not contain'} {needle!r}"
     if expectation.startswith("absent:"):
-        needle = expectation.removeprefix("absent:").strip()
+        needle = _needle(expectation, "absent:")
         passed = needle.lower() not in obs.text.lower()
         return passed, f"page text {'does not contain' if passed else 'contains'} {needle!r}"
     if expectation.startswith("title-contains:"):
-        needle = expectation.removeprefix("title-contains:").strip()
+        needle = _needle(expectation, "title-contains:")
         passed = needle.lower() in obs.title.lower()
         return passed, f"page title {'contains' if passed else 'does not contain'} {needle!r}"
     return None
+
+
+def _needle(expectation: str, prefix: str) -> str:
+    needle = expectation.removeprefix(prefix).strip()
+    if not needle:
+        raise ValueError(f"empty assertion: {prefix!r} needs text to match against")
+    return needle
 
 
 def _judge(

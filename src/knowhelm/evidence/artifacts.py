@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from ..webexplore.browser import Observation
@@ -18,7 +19,10 @@ from ..webexplore.browser import Observation
 class ArtifactStore:
     def __init__(self, root: Path) -> None:
         self._root = root
+        # Observations may capture post-login page content: owner-only, like
+        # the evidence signing key.
         self._root.mkdir(parents=True, exist_ok=True)
+        os.chmod(self._root, 0o700)
 
     @classmethod
     def for_workdir(cls, workdir: Path) -> "ArtifactStore":
@@ -39,6 +43,7 @@ class ArtifactStore:
         path = self._root / f"{sha}.json"
         if not path.exists():
             path.write_text(data, encoding="utf-8")
+            os.chmod(path, 0o600)
         return sha, path
 
     def load(self, sha: str) -> dict:

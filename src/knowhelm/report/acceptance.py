@@ -3,6 +3,9 @@
 The report stores nothing of its own. It reads the delegation trace and the
 verified evidence chain, and renders a matrix of checks with their chain
 hashes so every claim in the report can be traced back to a signed record.
+When an ArtifactStore is supplied, every artifact referenced on the chain is
+re-hashed: a missing or tampered observation downgrades the verdict — a
+report must not claim acceptance while its evidence material is gone.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..evidence.artifacts import ArtifactStore
 from ..evidence.chain import EvidenceChain, EvidenceRecord
 
 CHECK_EVENTS = {"check_passed", "check_failed"}
@@ -37,12 +41,19 @@ def load_run(trace_path: Path) -> RunSummary:
     )
 
 
-def render_report(run: RunSummary, chain: EvidenceChain) -> str:
+def render_report(
+    run: RunSummary, chain: EvidenceChain, artifacts: ArtifactStore | None = None
+) -> str:
     records = chain.verify()
     checks = [r for r in records if r.event in CHECK_EVENTS and r.payload.get("run_id") == run.run_id]
     passed = [r for r in checks if r.event == "check_passed"]
     failed = [r for r in checks if r.event == "check_failed"]
-    verdict = "ACCEPTED" if run.finished and checks and not failed else "NOT ACCEPTED"
+    broken_artifacts = _audit_artifacts(checks, artifacts)
+    verdict = (
+        "ACCEPTED"
+        if run.finished and checks and not failed and not broken_artifacts
+        else "NOT ACCEPTED"
+    )
 
     lines = [
         f"# Acceptance report — {run.run_id}",
@@ -62,13 +73,24 @@ def render_report(run: RunSummary, chain: EvidenceChain) -> str:
         lines += [
             f"## Checks ({len(passed)} passed / {len(failed)} failed)",
             "",
-            "| Check | Result | Evidence (chain hash) |",
-            "|---|---|---|",
+            "| Check | Result | Judge | Chain hash | Artifact |",
+            "|---|---|---|---|---|",
         ]
         for rec in checks:
             result = "PASS" if rec.event == "check_passed" else "FAIL"
-            lines.append(f"| {rec.payload.get('check', '?')} | {result} | `{rec.chain_hash[:16]}` |")
+            judge = rec.payload.get("judge", "-")
+            sha = rec.payload.get("artifact")
+            artifact = f"`{sha[:16]}`" if sha else "-"
+            lines.append(
+                f"| {rec.payload.get('check', '?')} | {result} | {judge} "
+                f"| `{rec.chain_hash[:16]}` | {artifact} |"
+            )
         lines.append("")
+        if broken_artifacts:
+            lines += ["### Evidence integrity failures", ""]
+            for sha, problem in broken_artifacts:
+                lines.append(f"- artifact `{sha[:16]}`: {problem}")
+            lines.append("")
         if failed:
             lines += ["### Failure details", ""]
             for rec in failed:
@@ -76,6 +98,25 @@ def render_report(run: RunSummary, chain: EvidenceChain) -> str:
                 lines.append(f"- **{rec.payload.get('check', '?')}**: {detail}")
             lines.append("")
     return "\n".join(lines)
+
+
+def _audit_artifacts(
+    checks: list[EvidenceRecord], artifacts: ArtifactStore | None
+) -> list[tuple[str, str]]:
+    if artifacts is None:
+        return []
+    broken = []
+    for rec in checks:
+        sha = rec.payload.get("artifact")
+        if not sha:
+            continue
+        try:
+            artifacts.load(sha)
+        except FileNotFoundError:
+            broken.append((sha, "referenced on the chain but the file is missing"))
+        except ValueError as exc:
+            broken.append((sha, str(exc)))
+    return broken
 
 
 def record_check(

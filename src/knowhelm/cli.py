@@ -123,7 +123,12 @@ def cmd_report(args: argparse.Namespace) -> int:
             print("no runs found", file=sys.stderr)
             return 2
         trace = traces[-1]
-    report = render_report(load_run(trace), EvidenceChain.for_workdir(workdir))
+    from .evidence.artifacts import ArtifactStore
+
+    report = render_report(
+        load_run(trace), EvidenceChain.for_workdir(workdir),
+        artifacts=ArtifactStore.for_workdir(workdir),
+    )
     print(report)
     return 0
 
