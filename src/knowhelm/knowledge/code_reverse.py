@@ -94,7 +94,7 @@ def extract_assertions(
         rel = f.relative_to(repo)
         blocks.append(f"=== FILE: {rel} ===\n{f.read_text(encoding='utf-8', errors='replace')}")
     raw = runner.run(_EXTRACT_PROMPT.format(files_block="\n\n".join(blocks)))
-    items = _parse_json_array(raw, required_keys={"claim", "title", "file"})
+    items = parse_json_array(raw, required_keys={"claim", "title", "file"})
     assertions = []
     for item in items:
         if item["file"] not in valid_paths:
@@ -105,17 +105,15 @@ def extract_assertions(
     return assertions
 
 
-def classify_assertions(
-    runner: AgentRunner, assertions: list[RawAssertion]
-) -> list[Kind]:
+def classify_claims(runner: AgentRunner, claims: list[str]) -> list[Kind]:
     payload = json.dumps(
-        [{"id": i, "claim": a.claim} for i, a in enumerate(assertions)], ensure_ascii=False
+        [{"id": i, "claim": c} for i, c in enumerate(claims)], ensure_ascii=False
     )
     raw = runner.run(_CLASSIFY_PROMPT.format(assertions_json=payload))
-    items = _parse_json_array(raw, required_keys={"id", "kind"})
-    if len(items) != len(assertions):
+    items = parse_json_array(raw, required_keys={"id", "kind"})
+    if len(items) != len(claims):
         raise ExtractionError(
-            f"classification returned {len(items)} items for {len(assertions)} assertions"
+            f"classification returned {len(items)} items for {len(claims)} assertions"
         )
     kinds: dict[int, Kind] = {}
     for item in items:
@@ -123,9 +121,15 @@ def classify_assertions(
             kinds[int(item["id"])] = Kind(item["kind"])
         except (ValueError, KeyError) as exc:
             raise ExtractionError(f"invalid classification item: {item!r}") from exc
-    if set(kinds) != set(range(len(assertions))):
+    if set(kinds) != set(range(len(claims))):
         raise ExtractionError("classification ids do not match assertion ids")
-    return [kinds[i] for i in range(len(assertions))]
+    return [kinds[i] for i in range(len(claims))]
+
+
+def classify_assertions(
+    runner: AgentRunner, assertions: list[RawAssertion]
+) -> list[Kind]:
+    return classify_claims(runner, [a.claim for a in assertions])
 
 
 def reverse_code(
@@ -157,7 +161,7 @@ def reverse_code(
     return entries
 
 
-def _parse_json_array(raw: str, required_keys: set[str]) -> list[dict]:
+def parse_json_array(raw: str, required_keys: set[str]) -> list[dict]:
     text = raw.strip()
     start, end = text.find("["), text.rfind("]")
     if start == -1 or end == -1 or end < start:

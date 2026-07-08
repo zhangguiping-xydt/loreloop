@@ -41,14 +41,23 @@ storage is SQLite, no accounts, no telemetry.
 ## Quick start
 
 ```bash
-pip install knowhelm
+pip install 'knowhelm[web]' && playwright install chromium
 
 cd your-project
-knowhelm ingest --from code .            # build knowledge from the codebase
-knowhelm ingest --from web http://localhost:3000   # explore the running app
-knowhelm run "add rate limiting to the upload endpoint"
-knowhelm report                          # acceptance report with evidence trail
+knowhelm ingest --from code .            # implementation view: reverse the codebase
+knowhelm ingest --from web http://localhost:3000   # behavior view: explore the running app
+knowhelm knowledge list                  # inspect entries; approve/reject to curate
+knowhelm run "add rate limiting to the upload endpoint"   # delegate with injected knowledge
+knowhelm verify <run-id> http://localhost:3000/upload \
+    "uploading a file larger than the limit shows an error"  # browser-verified check
+knowhelm report                          # acceptance report backed by the evidence chain
 ```
+
+Notes:
+- `--from web` explores same-origin pages only. When it hits a login form it
+  hands the browser to you (`--headed`) instead of automating credentials.
+- `verify` records what the browser actually observed — verdict, reasoning,
+  and page snapshot hash — on the tamper-evident chain.
 
 ## License
 

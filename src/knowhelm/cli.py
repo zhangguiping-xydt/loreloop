@@ -34,15 +34,47 @@ def _agent(name: str) -> AgentRunner:
 
 def cmd_ingest(args: argparse.Namespace) -> int:
     workdir = _workdir()
-    if args.source != "code":
-        print(f"channel {args.source!r} is not implemented yet", file=sys.stderr)
-        return 2
-    entries = reverse_code(_agent(args.agent), Path(args.target).resolve())
+    if args.source == "code":
+        entries = reverse_code(_agent(args.agent), Path(args.target).resolve())
+    else:
+        from .webexplore.browser import PlaywrightBrowser
+        from .webexplore.explorer import Explorer
+        from .webexplore.web_reverse import reverse_web
+
+        browser = PlaywrightBrowser(headed=args.headed)
+        try:
+            result = Explorer(browser, workdir, max_pages=args.max_pages).explore(args.target)
+            print(f"explored {len(result.pages)} pages "
+                  f"({len(result.skipped)} skipped), trace at {result.trace_path}",
+                  file=sys.stderr)
+            entries = reverse_web(_agent(args.agent), result.pages)
+        finally:
+            browser.close()
     with _store(workdir) as store:
         for entry in entries:
             store.add(entry)
     print(f"ingested {len(entries)} knowledge entries from {args.target}")
     return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    from .webexplore.browser import PlaywrightBrowser
+    from .webexplore.verify import verify_expectation
+
+    workdir = _workdir()
+    chain = EvidenceChain.for_workdir(workdir)
+    browser = PlaywrightBrowser(headed=args.headed)
+    try:
+        result = verify_expectation(
+            browser, _agent(args.agent), chain, args.run_id, args.url, args.expectation
+        )
+    finally:
+        browser.close()
+    status = "PASS" if result.passed else "FAIL"
+    print(f"{status}: {result.reason}")
+    print(f"evidence: chain hash {result.record.chain_hash[:16]}, "
+          f"page snapshot {result.snapshot[:16]}")
+    return 0 if result.passed else 1
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -110,7 +142,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest = sub.add_parser("ingest", help="reverse-engineer knowledge from a source")
     p_ingest.add_argument("--from", dest="source", choices=["code", "web"], required=True)
     p_ingest.add_argument("target")
+    p_ingest.add_argument("--max-pages", type=int, default=20)
+    p_ingest.add_argument("--headed", action="store_true",
+                          help="show the browser window (needed for login handover)")
     p_ingest.set_defaults(func=cmd_ingest)
+
+    p_verify = sub.add_parser("verify", help="verify an expectation against a live page")
+    p_verify.add_argument("run_id")
+    p_verify.add_argument("url")
+    p_verify.add_argument("expectation")
+    p_verify.add_argument("--headed", action="store_true")
+    p_verify.set_defaults(func=cmd_verify)
 
     p_run = sub.add_parser("run", help="delegate a task with injected knowledge")
     p_run.add_argument("task")

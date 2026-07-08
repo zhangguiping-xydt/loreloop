@@ -94,6 +94,11 @@ def test_cli_knowledge_curation_flow(workdir, capsys):
     assert "[strong]" in capsys.readouterr().out
 
 
-def test_cli_ingest_web_not_implemented(workdir, capsys):
-    assert main(["ingest", "--from", "web", "http://localhost:3000"]) == 2
-    assert "not implemented" in capsys.readouterr().err
+def test_cli_ingest_web_requires_playwright(workdir):
+    try:
+        import playwright  # noqa: F401
+        pytest.skip("playwright installed; error path not reachable")
+    except ImportError:
+        pass
+    with pytest.raises(RuntimeError, match="playwright is not installed"):
+        main(["ingest", "--from", "web", "http://localhost:3000"])
