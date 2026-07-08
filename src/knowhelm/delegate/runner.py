@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..agents import AgentRunner
+from ..knowledge.code_reverse import drifted_code_entry_ids
 from ..knowledge.model import Entry
 from .context_pack import ContextPack, render, select
 
@@ -41,7 +42,9 @@ class DelegateRunner:
     def run(self, task: str, entries: list[Entry]) -> DelegationResult:
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
         trace_path = self._runs_dir / f"{run_id}.jsonl"
-        pack = select(task, entries)
+        base_commit = _head_or_none(self._workdir)
+        drifted = drifted_code_entry_ids(self._workdir, entries) if base_commit else set()
+        pack = select(task, entries, drifted_ids=drifted)
         prefix = render(pack)
         prompt = f"{prefix}\n# Task\n\n{task}\n" if prefix else task
 
@@ -50,7 +53,8 @@ class DelegateRunner:
             "delegation_started",
             task=task,
             context_entries=pack.entry_ids,
-            base_commit=_head_or_none(self._workdir),
+            drifted_entries=sorted(pack.drifted_ids & set(pack.entry_ids)),
+            base_commit=base_commit,
         )
         try:
             output = self._agent.run(prompt)

@@ -5,6 +5,11 @@ splits entries into two contract levels:
 
 - strong evidence (approved or machine-verified): facts the agent must respect
 - reference only (draft/unverified): hints the agent must re-verify before use
+
+Anchor drift demotes at injection time: a strong entry whose anchored source
+changed since capture is offered as reference only, marked as drifted. The
+stored trust state is untouched — demotion is a per-injection judgment, not
+a curation act.
 """
 
 from __future__ import annotations
@@ -35,18 +40,27 @@ def score(task: str, entry: Entry) -> float:
 class ContextPack:
     strong: list[Entry]
     reference: list[Entry]
+    drifted_ids: frozenset[str] = frozenset()
 
     @property
     def entry_ids(self) -> list[str]:
         return [e.id for e in self.strong + self.reference]
 
 
-def select(task: str, entries: list[Entry], limit: int = 20) -> ContextPack:
+def select(
+    task: str,
+    entries: list[Entry],
+    limit: int = 20,
+    drifted_ids: set[str] | frozenset[str] = frozenset(),
+) -> ContextPack:
     scored = [(score(task, e), e) for e in entries]
     relevant = [e for s, e in sorted(scored, key=lambda p: -p[0]) if s > 0][:limit]
     return ContextPack(
-        strong=[e for e in relevant if e.is_strong_evidence()],
-        reference=[e for e in relevant if not e.is_strong_evidence()],
+        strong=[e for e in relevant if e.is_strong_evidence() and e.id not in drifted_ids],
+        reference=[
+            e for e in relevant if not e.is_strong_evidence() or e.id in drifted_ids
+        ],
+        drifted_ids=frozenset(drifted_ids),
     )
 
 
@@ -70,10 +84,11 @@ def render(pack: ContextPack) -> str:
             "## source before relying on them",
             "",
         ]
-        lines += [_render_entry(e) for e in pack.reference]
+        lines += [_render_entry(e, drifted=e.id in pack.drifted_ids) for e in pack.reference]
         lines.append("")
     return "\n".join(lines)
 
 
-def _render_entry(e: Entry) -> str:
-    return f"- [{e.kind.value}] {e.title}: {e.content} (source: {e.source.locator})"
+def _render_entry(e: Entry, drifted: bool = False) -> str:
+    note = " [source changed since this was captured]" if drifted else ""
+    return f"- [{e.kind.value}] {e.title}: {e.content} (source: {e.source.locator}){note}"

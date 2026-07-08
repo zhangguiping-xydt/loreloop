@@ -254,3 +254,53 @@ def test_harvest_dedupes_repeated_checks(env):
     result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
 
     assert len(result.minted) == 1
+
+
+def test_harvest_mint_reuses_existing_entry_across_runs(env):
+    repo, store, chain, artifacts = env
+    base = head_of(repo)
+
+    trace1 = write_trace(repo, "run-1", base)
+    record_browser_check(chain, "run-1", artifacts=artifacts)
+    first = harvest_run(load_run(trace1), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    trace2 = write_trace(repo, "run-2", base)
+    record_browser_check(chain, "run-2", artifacts=artifacts)
+    second = harvest_run(load_run(trace2), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    assert [e.id for e in second.minted] == [e.id for e in first.minted]
+    assert len(store.list()) == 1
+
+
+def test_harvest_reanchors_unchanged_claim_instead_of_duplicating(env):
+    repo, store, chain, artifacts = env
+    base = head_of(repo)
+    existing = Entry(
+        title="Upload contract", content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
+    )
+    store.add(existing)
+    trace = write_trace(repo, "run-x", base)
+    record_browser_check(chain, "run-x", artifacts=artifacts)
+
+    (repo / "api.py").write_text("def upload(): return 201\n# comment only\n")
+    git(repo, "add", "api.py")
+    git(repo, "commit", "-m", "cosmetic change")
+    head = head_of(repo)
+
+    extract = json.dumps([{
+        "claim": "POST /upload returns 201.", "title": "Upload contract", "file": "api.py",
+    }])
+    classify = json.dumps([{"id": 0, "kind": "interface"}])
+    result = harvest_run(
+        load_run(trace), chain, store, FakeRunner([extract, classify]), repo,
+        artifacts=artifacts,
+    )
+
+    assert [e.id for e in result.reversed_entries] == [existing.id]
+    stored = store.get(existing.id)
+    assert stored.source.snapshot_ref == head
+    assert stored.source.locator == f"api.py@{head}"
+    assert result.stale == []
+    assert len(store.list(channel=Channel.CODE)) == 1

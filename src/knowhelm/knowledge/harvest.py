@@ -81,6 +81,9 @@ def harvest_run(
 
     now = datetime.now(timezone.utc)
     minted, unauditable = _mint_verified_checks(evaluation.passed, run.run_id, now, artifacts)
+    # store.add dedupes exact repeats; keep the stored entries so the chain
+    # records ids that actually exist in the knowledge base.
+    minted = _dedupe([store.add(e) for e in minted])
 
     reversed_entries: list[Entry] = []
     stale: list[Entry] = []
@@ -90,13 +93,13 @@ def harvest_run(
         if head != run.base_commit:
             touched = changed_paths(repo, run.base_commit)
             if touched:
-                reversed_entries = reverse_code(
-                    runner, repo, files=changed_files(repo, run.base_commit)
+                raw = reverse_code(runner, repo, files=changed_files(repo, run.base_commit))
+                reversed_entries = _dedupe(
+                    [_store_reanchored(store, e, head, now) for e in raw]
                 )
+                # Staleness after re-anchoring: an entry whose claim was just
+                # re-extracted verbatim at head is confirmed, not stale.
                 stale = _stale_entries(store, touched, head)
-
-    for entry in [*minted, *reversed_entries]:
-        store.add(entry)
 
     chain.append(
         HARVEST_EVENT,
@@ -117,6 +120,33 @@ def harvest_run(
         unauditable_checks=unauditable,
         head_commit=head,
     )
+
+
+def _store_reanchored(
+    store: KnowledgeStore, entry: Entry, head: str, now: datetime
+) -> Entry:
+    """Store a re-reversed entry. If the identical claim already exists for
+    the same file, re-anchor the existing entry to head instead of inserting:
+    the claim was just re-derived verbatim from the current source, so leaving
+    the old anchor would flag it stale/drifted forever despite being fresh.
+    Trust state is untouched — the comparison is deterministic string
+    equality, not an LLM judgment."""
+    existing = store.find_duplicate(entry)
+    if existing is None:
+        return store.add(entry)
+    if existing.source.snapshot_ref == head:
+        return existing
+    return store.set_snapshot_ref(existing.id, head, now, locator=entry.source.locator)
+
+
+def _dedupe(entries: list[Entry]) -> list[Entry]:
+    seen: set[str] = set()
+    unique = []
+    for entry in entries:
+        if entry.id not in seen:
+            seen.add(entry.id)
+            unique.append(entry)
+    return unique
 
 
 def _mint_verified_checks(

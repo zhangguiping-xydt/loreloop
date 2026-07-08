@@ -1,4 +1,5 @@
 import json
+import subprocess
 from datetime import datetime, timezone
 
 import pytest
@@ -89,3 +90,67 @@ def test_delegate_failure_is_traced_and_reraised(tmp_path):
     trace_files = list((tmp_path / ".knowhelm/runs").glob("*.jsonl"))
     events = [json.loads(line) for line in trace_files[0].read_text().splitlines()]
     assert events[-1]["event"] == "delegation_failed"
+
+
+def test_select_demotes_drifted_strong_entries():
+    pack = select(
+        "change the upload endpoint",
+        [UPLOAD_FACT, UPLOAD_HINT],
+        drifted_ids={UPLOAD_FACT.id},
+    )
+    assert pack.strong == []
+    assert UPLOAD_FACT in pack.reference
+    text = render(pack)
+    fact_line = next(line for line in text.splitlines() if UPLOAD_FACT.title in line)
+    assert "[source changed since this was captured]" in fact_line
+    hint_line = next(line for line in text.splitlines() if UPLOAD_HINT.title in line)
+    assert "[source changed" not in hint_line
+
+
+def git(repo, *args):
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+
+def head_of(repo):
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def test_delegate_demotes_entries_whose_anchor_drifted(tmp_path):
+    git(tmp_path, "init")
+    git(tmp_path, "config", "user.email", "t@t")
+    git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "api.py").write_text("def upload(): return 201\n")
+    git(tmp_path, "add", "api.py")
+    git(tmp_path, "commit", "-m", "base")
+    base = head_of(tmp_path)
+
+    drifting = Entry(
+        title="Upload endpoint contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
+        trust=Trust(curation=Curation.APPROVED),
+    )
+    fresh = Entry(
+        title="Upload size limit",
+        content="Upload max size is 50MB.",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.CODE, locator=f"other.py@{base}", snapshot_ref=base),
+        trust=Trust(curation=Curation.APPROVED),
+    )
+
+    (tmp_path / "api.py").write_text("def upload(): return 202\n")
+    git(tmp_path, "add", "api.py")
+    git(tmp_path, "commit", "-m", "change upload")
+
+    agent = FakeAgent()
+    result = DelegateRunner(agent, tmp_path).run("fix the upload endpoint", [drifting, fresh])
+
+    assert drifting in result.pack.reference
+    assert fresh in result.pack.strong
+    assert "[source changed since this was captured]" in agent.prompts[0]
+    events = [json.loads(line) for line in result.trace_path.read_text().splitlines()]
+    assert events[0]["drifted_entries"] == [drifting.id]
+    assert events[0]["base_commit"] == head_of(tmp_path)

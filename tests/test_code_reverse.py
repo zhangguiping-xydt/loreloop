@@ -8,11 +8,12 @@ from knowhelm.knowledge.code_reverse import (
     ExtractionError,
     RawAssertion,
     classify_assertions,
+    drifted_code_entry_ids,
     extract_assertions,
     reverse_code,
     scan_repo,
 )
-from knowhelm.knowledge.model import Channel, Curation, Kind, Verification
+from knowhelm.knowledge.model import Channel, Curation, Entry, Kind, Source, Verification
 
 
 class FakeRunner:
@@ -90,6 +91,41 @@ def test_classify_rejects_unknown_kind():
     out = json.dumps([{"id": 0, "kind": "vibes"}])
     with pytest.raises(ExtractionError, match="invalid classification"):
         classify_assertions(FakeRunner([out]), assertions)
+
+
+def code_entry(file, anchor):
+    return Entry(
+        title=f"fact about {file}",
+        content=f"{file} does something.",
+        kind=Kind.BEHAVIOR,
+        source=Source(channel=Channel.CODE, locator=f"{file}@{anchor}", snapshot_ref=anchor),
+    )
+
+
+def test_drift_detection_flags_changed_files_only(repo):
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+    (repo / "app.py").write_text("def upload():\n    return 202\n")
+    subprocess.run(["git", "add", "app.py"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "change"],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+    changed = code_entry("app.py", base)
+    untouched = code_entry("notes.txt", base)
+    web = Entry(
+        title="login page", content="Login redirects.", kind=Kind.BEHAVIOR,
+        source=Source(channel=Channel.WEB, locator="http://x/login", snapshot_ref="h1"),
+    )
+
+    assert drifted_code_entry_ids(repo, [changed, untouched, web]) == {changed.id}
+
+
+def test_drift_detection_treats_unknown_anchor_as_drifted(repo):
+    ghost = code_entry("app.py", "0000000000000000000000000000000000000000")
+    assert drifted_code_entry_ids(repo, [ghost]) == {ghost.id}
 
 
 def test_json_extraction_tolerates_surrounding_prose():

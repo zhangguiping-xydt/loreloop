@@ -112,6 +112,35 @@ def changed_files(
     ]
 
 
+def drifted_code_entry_ids(repo: Path, entries: list[Entry]) -> set[str]:
+    """IDs of code-channel entries whose anchored file changed since capture.
+
+    Freshness is judged at read time against the anchor, never stored. An
+    anchor commit that git no longer knows (rebased away, shallow clone)
+    counts as drifted: freshness that cannot be proven must not be assumed.
+    """
+    by_anchor: dict[str, list[Entry]] = {}
+    for entry in entries:
+        if entry.source.channel is Channel.CODE and entry.source.snapshot_ref:
+            by_anchor.setdefault(entry.source.snapshot_ref, []).append(entry)
+
+    drifted: set[str] = set()
+    for anchor, anchored in by_anchor.items():
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--no-renames", f"{anchor}..HEAD"],
+            cwd=repo, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            drifted.update(e.id for e in anchored)
+            continue
+        changed = set(result.stdout.splitlines())
+        for entry in anchored:
+            file_part = entry.source.locator.rsplit("@", 1)[0]
+            if file_part in changed:
+                drifted.add(entry.id)
+    return drifted
+
+
 def dirty_source_files(
     repo: Path, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS
 ) -> list[str]:

@@ -93,6 +93,60 @@ def test_trust_invariants():
         Trust(verified_at=NOW, verified_by="run-1")
 
 
+def test_add_dedupes_same_claim_same_file_across_commits(store):
+    first = make_entry()
+    stored = store.add(first)
+    assert stored is first
+
+    again = make_entry(
+        source=Source(
+            channel=Channel.CODE, locator="src/api/upload.py@def456", snapshot_ref="def456"
+        )
+    )
+    deduped = store.add(again)
+    assert deduped.id == first.id
+    assert store.get(again.id) is None
+    assert len(store.list()) == 1
+
+
+def test_add_keeps_same_claim_from_different_files(store):
+    a = make_entry()
+    b = make_entry(
+        source=Source(
+            channel=Channel.CODE, locator="src/api/v2/upload.py@abc123", snapshot_ref="abc123"
+        )
+    )
+    store.add(a)
+    store.add(b)
+    assert len(store.list()) == 2
+
+
+def test_add_dedupes_web_entries_by_full_locator(store):
+    a = make_entry(
+        source=Source(channel=Channel.WEB, locator="http://x/upload", snapshot_ref="h1")
+    )
+    same_page = make_entry(
+        source=Source(channel=Channel.WEB, locator="http://x/upload", snapshot_ref="h2")
+    )
+    other_page = make_entry(
+        source=Source(channel=Channel.WEB, locator="http://x/v2/upload", snapshot_ref="h1")
+    )
+    store.add(a)
+    assert store.add(same_page).id == a.id
+    store.add(other_page)
+    assert len(store.list()) == 2
+
+
+def test_reanchor_updates_locator_with_snapshot(store):
+    e = make_entry()
+    store.add(e)
+    updated = store.set_snapshot_ref(
+        e.id, "def456", NOW, locator="src/api/upload.py@def456"
+    )
+    assert updated.source.snapshot_ref == "def456"
+    assert updated.source.locator == "src/api/upload.py@def456"
+
+
 def test_links(store):
     old = make_entry()
     new = make_entry(title="Upload API v2", content="POST /v2/upload.")

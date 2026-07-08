@@ -67,7 +67,27 @@ class KnowledgeStore:
     def __exit__(self, *exc) -> None:
         self.close()
 
-    def add(self, entry: Entry) -> None:
+    def find_duplicate(self, entry: Entry) -> Entry | None:
+        """Exact duplicate: same content, channel and source location (for
+        code entries the file path — the anchor commit may differ). Semantic
+        near-duplicates are a curation call and deliberately not detected."""
+        rows = self._conn.execute(
+            "SELECT * FROM entries WHERE content = ? AND channel = ?",
+            (entry.content, entry.source.channel.value),
+        ).fetchall()
+        key = _locator_key(entry.source.channel, entry.source.locator)
+        for row in rows:
+            if _locator_key(Channel(row["channel"]), row["locator"]) == key:
+                return _to_entry(row)
+        return None
+
+    def add(self, entry: Entry) -> Entry:
+        """Insert the entry, or return the existing exact duplicate unchanged.
+        Re-reversing unchanged truths (e.g. every harvest of a hot file) must
+        not multiply them."""
+        existing = self.find_duplicate(entry)
+        if existing is not None:
+            return existing
         with self._conn:
             self._conn.execute(
                 "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -87,6 +107,7 @@ class KnowledgeStore:
                     _iso(entry.updated_at),
                 ),
             )
+        return entry
 
     def get(self, entry_id: str) -> Entry | None:
         row = self._conn.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone()
@@ -139,13 +160,24 @@ class KnowledgeStore:
             )
         return self._require(entry_id)
 
-    def set_snapshot_ref(self, entry_id: str, snapshot_ref: str, now: datetime) -> Entry:
+    def set_snapshot_ref(
+        self, entry_id: str, snapshot_ref: str, now: datetime, locator: str | None = None
+    ) -> Entry:
+        """Re-anchor an entry. Code locators embed the anchor commit, so a
+        code re-anchor must update both fields to stay consistent."""
         self._require(entry_id)
         with self._conn:
-            self._conn.execute(
-                "UPDATE entries SET snapshot_ref = ?, updated_at = ? WHERE id = ?",
-                (snapshot_ref, _iso(now), entry_id),
-            )
+            if locator is None:
+                self._conn.execute(
+                    "UPDATE entries SET snapshot_ref = ?, updated_at = ? WHERE id = ?",
+                    (snapshot_ref, _iso(now), entry_id),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE entries SET snapshot_ref = ?, locator = ?, updated_at = ?"
+                    " WHERE id = ?",
+                    (snapshot_ref, locator, _iso(now), entry_id),
+                )
         return self._require(entry_id)
 
     def add_link(self, link: Link) -> None:
@@ -181,6 +213,14 @@ class KnowledgeStore:
 
 def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
+
+
+def _locator_key(channel: Channel, locator: str) -> str:
+    """Code locators are file@commit; the same fact re-reversed at a newer
+    commit is still the same fact, so only the file part identifies it."""
+    if channel is Channel.CODE:
+        return locator.rsplit("@", 1)[0]
+    return locator
 
 
 def _to_entry(row: sqlite3.Row) -> Entry:
