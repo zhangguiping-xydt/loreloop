@@ -27,6 +27,25 @@ class RunSummary:
     task: str
     context_entries: list[str]
     finished: bool
+    base_commit: str | None = None
+
+
+@dataclass(frozen=True)
+class RunEvaluation:
+    checks: list[EvidenceRecord]
+    passed: list[EvidenceRecord]
+    failed: list[EvidenceRecord]
+    broken_artifacts: list[tuple[str, str]]
+    finished: bool
+
+    @property
+    def accepted(self) -> bool:
+        return (
+            self.finished
+            and bool(self.checks)
+            and not self.failed
+            and not self.broken_artifacts
+        )
 
 
 def load_run(trace_path: Path) -> RunSummary:
@@ -38,6 +57,23 @@ def load_run(trace_path: Path) -> RunSummary:
         task=started["task"],
         context_entries=started.get("context_entries", []),
         finished=finished,
+        base_commit=started.get("base_commit"),
+    )
+
+
+def evaluate_run(
+    run: RunSummary, chain: EvidenceChain, artifacts: ArtifactStore | None = None
+) -> RunEvaluation:
+    records = chain.verify()
+    checks = [r for r in records if r.event in CHECK_EVENTS and r.payload.get("run_id") == run.run_id]
+    passed = [r for r in checks if r.event == "check_passed"]
+    failed = [r for r in checks if r.event == "check_failed"]
+    return RunEvaluation(
+        checks=checks,
+        passed=passed,
+        failed=failed,
+        broken_artifacts=_audit_artifacts(checks, artifacts),
+        finished=run.finished,
     )
 
 
@@ -45,15 +81,12 @@ def render_report(
     run: RunSummary, chain: EvidenceChain, artifacts: ArtifactStore | None = None
 ) -> str:
     records = chain.verify()
-    checks = [r for r in records if r.event in CHECK_EVENTS and r.payload.get("run_id") == run.run_id]
-    passed = [r for r in checks if r.event == "check_passed"]
-    failed = [r for r in checks if r.event == "check_failed"]
-    broken_artifacts = _audit_artifacts(checks, artifacts)
-    verdict = (
-        "ACCEPTED"
-        if run.finished and checks and not failed and not broken_artifacts
-        else "NOT ACCEPTED"
-    )
+    evaluation = evaluate_run(run, chain, artifacts)
+    checks = evaluation.checks
+    passed = evaluation.passed
+    failed = evaluation.failed
+    broken_artifacts = evaluation.broken_artifacts
+    verdict = "ACCEPTED" if evaluation.accepted else "NOT ACCEPTED"
 
     lines = [
         f"# Acceptance report — {run.run_id}",

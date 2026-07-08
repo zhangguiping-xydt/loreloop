@@ -133,6 +133,37 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_harvest(args: argparse.Namespace) -> int:
+    from .evidence.artifacts import ArtifactStore
+    from .knowledge.harvest import HarvestError, harvest_run
+
+    workdir = _workdir()
+    trace = workdir / f".knowhelm/runs/{args.run_id}.jsonl"
+    if not trace.exists():
+        print(f"no trace found for {args.run_id}", file=sys.stderr)
+        return 2
+    run = load_run(trace)
+    chain = EvidenceChain.for_workdir(workdir)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    with _store(workdir) as store:
+        try:
+            result = harvest_run(
+                run, chain, store, _agent(args.agent), workdir, artifacts=artifacts
+            )
+        except HarvestError as exc:
+            print(f"harvest refused: {exc}", file=sys.stderr)
+            return 1
+    print(f"harvested run {args.run_id}:")
+    print(f"  {len(result.minted)} verified acceptance assertions minted")
+    print(f"  {len(result.reversed_entries)} draft entries reversed from changed code")
+    if result.stale:
+        print(f"  {len(result.stale)} existing entries anchored before this run "
+              f"touch changed files — review with `knowhelm knowledge list`:")
+        for entry in result.stale:
+            print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})")
+    return 0
+
+
 def cmd_knowledge(args: argparse.Namespace) -> int:
     workdir = _workdir()
     with _store(workdir) as store:
@@ -224,6 +255,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_report = sub.add_parser("report", help="render the acceptance report for a run")
     p_report.add_argument("run_id", nargs="?")
     p_report.set_defaults(func=cmd_report)
+
+    p_harvest = sub.add_parser(
+        "harvest", help="flow knowledge back from an accepted run"
+    )
+    p_harvest.add_argument("run_id")
+    p_harvest.set_defaults(func=cmd_harvest)
 
     p_knowledge = sub.add_parser("knowledge", help="inspect, curate and verify knowledge entries")
     p_knowledge.add_argument("action", choices=["list", "approve", "reject", "verify"])

@@ -85,6 +85,24 @@ def repo_head(repo: Path) -> str:
     ).stdout.strip()
 
 
+def changed_files(
+    repo: Path, base: str, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS
+) -> list[Path]:
+    """Source files changed between ``base`` and HEAD, filtered like scan_repo.
+    Deleted files are excluded — there is nothing left to reverse."""
+    lines = subprocess.run(
+        ["git", "diff", "--name-only", f"{base}..HEAD"],
+        cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    return [
+        repo / line
+        for line in lines
+        if line.endswith(extensions)
+        and (repo / line).exists()
+        and (repo / line).stat().st_size <= _MAX_FILE_BYTES
+    ]
+
+
 def extract_assertions(
     runner: AgentRunner, repo: Path, files: list[Path]
 ) -> list[RawAssertion]:

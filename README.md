@@ -51,6 +51,7 @@ knowhelm run "add rate limiting to the upload endpoint"   # delegate with inject
 knowhelm verify <run-id> http://localhost:3000/upload \
     "uploading a file larger than the limit shows an error"  # browser-verified check
 knowhelm report                          # acceptance report backed by the evidence chain
+knowhelm harvest <run-id>                # flow knowledge back from the accepted run
 ```
 
 Notes:
@@ -64,6 +65,12 @@ Notes:
 - Every check saves the full observation as a content-addressed artifact in
   `.knowhelm/evidence/artifacts/` and records its hash on the tamper-evident
   chain, so verdicts can be re-audited after the live page changes.
+- `harvest` closes the flywheel, with different trust for different origins:
+  browser-verified acceptance checks become knowledge entries that are born
+  verified (human-written, machine-checked, chain-backed); code changed since
+  the run's base commit is re-reversed as draft entries that earn trust the
+  normal way. Pre-existing entries touching changed files are listed for
+  human review — knowhelm never auto-supersedes.
 
 ## License
 
