@@ -142,6 +142,57 @@ def test_cli_report_without_runs_errors(workdir, capsys):
     assert "no runs found" in capsys.readouterr().err
 
 
+def test_cli_report_missing_run_id_exits_cleanly(workdir, capsys):
+    assert main(["report", "run-missing"]) == 2
+    err = capsys.readouterr().err
+    assert "no trace found for run-missing" in err
+    assert "Traceback" not in err
+
+
+def test_cli_report_broken_chain_exits_cleanly(workdir, capsys):
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    endorse_run(chain, run.run_id)
+    record_check(chain, run.run_id, "upload returns 201", passed=True)
+
+    path = workdir / ".knowhelm/evidence.jsonl"
+    lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    lines[0]["payload"]["task"] = "forged task"
+    path.write_text("\n".join(json.dumps(line, sort_keys=True) for line in lines) + "\n")
+
+    assert main(["report", run.run_id]) == 2
+    err = capsys.readouterr().err
+    assert "evidence chain broken" in err
+    assert "Traceback" not in err
+
+
+def test_cli_report_bad_trace_json_exits_cleanly(workdir, capsys):
+    runs = workdir / ".knowhelm/runs"
+    runs.mkdir(parents=True)
+    (runs / "run-bad.jsonl").write_text("{not json\n", encoding="utf-8")
+
+    assert main(["report", "run-bad"]) == 2
+    err = capsys.readouterr().err
+    assert "invalid run trace" in err
+    assert "line 1 is not JSON" in err
+    assert "Traceback" not in err
+
+
+def test_cli_harvest_trace_without_started_exits_cleanly(workdir, capsys):
+    runs = workdir / ".knowhelm/runs"
+    runs.mkdir(parents=True)
+    (runs / "run-no-start.jsonl").write_text(
+        json.dumps({"event": "delegation_finished"}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert main(["harvest", "run-no-start"]) == 2
+    err = capsys.readouterr().err
+    assert "missing delegation_started" in err
+    assert "Traceback" not in err
+
+
 def test_cli_knowledge_curation_flow(workdir, capsys):
     from knowhelm.knowledge.model import Channel, Entry, Kind, Source
     from knowhelm.knowledge.store import KnowledgeStore
@@ -295,6 +346,111 @@ def test_cli_run_keeps_chain_endorsed_strong_entries(workdir, monkeypatch, capsy
 
     assert "without evidence-chain endorsement" not in capsys.readouterr().err
     assert "Established facts" in agent.prompts[0]
+
+
+def test_cli_run_keeps_chain_approved_entry_after_db_curation_flip(workdir, monkeypatch, capsys):
+    import knowhelm.cli as cli
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    class FakeAgent:
+        def __init__(self):
+            self.prompts = []
+
+        def run(self, prompt):
+            self.prompts.append(prompt)
+            return "done"
+
+    entry = Entry(
+        title="Upload endpoint contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@abc"),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+    assert main(["knowledge", "approve", entry.id[:8]]) == 0
+    capsys.readouterr()
+
+    with KnowledgeStore(db) as store:
+        store._conn.execute("UPDATE entries SET curation = 'draft' WHERE id = ?", (entry.id,))
+        store._conn.commit()
+        assert not store.get(entry.id).is_strong_evidence()
+
+    agent = FakeAgent()
+    monkeypatch.setattr(cli, "_agent", lambda name: agent)
+    assert main(["run", "fix the upload endpoint"]) == 0
+    assert "Established facts" in agent.prompts[0]
+    assert "POST /upload returns 201." in agent.prompts[0]
+
+    assert main(["knowledge", "list"]) == 0
+    line = next(li for li in capsys.readouterr().out.splitlines() if entry.id[:8] in li)
+    assert "[strong]" in line
+    assert "[chain-backed" in line
+
+
+def test_cli_run_does_not_claim_drifted_chain_backed_entry_as_established(
+    workdir, monkeypatch, capsys
+):
+    import subprocess
+
+    import knowhelm.cli as cli
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    class FakeAgent:
+        def __init__(self):
+            self.prompts = []
+
+        def run(self, prompt):
+            self.prompts.append(prompt)
+            return "done"
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=workdir, check=True, capture_output=True)
+
+    git("init")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (workdir / "api.py").write_text("def upload(): return 201\n")
+    git("add", "api.py")
+    git("commit", "-m", "base")
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=workdir, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    entry = Entry(
+        title="Upload endpoint contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+    assert main(["knowledge", "approve", entry.id[:8]]) == 0
+    capsys.readouterr()
+
+    with KnowledgeStore(db) as store:
+        store._conn.execute("UPDATE entries SET curation = 'draft' WHERE id = ?", (entry.id,))
+        store._conn.commit()
+
+    (workdir / "api.py").write_text("def upload(): return 202\n")
+    git("add", "api.py")
+    git("commit", "-m", "change upload")
+
+    agent = FakeAgent()
+    monkeypatch.setattr(cli, "_agent", lambda name: agent)
+    assert main(["run", "fix the upload endpoint"]) == 0
+    err = capsys.readouterr().err
+
+    assert "injected as established fact" not in err
+    assert "Established facts" not in agent.prompts[0]
+    assert "Unverified references" in agent.prompts[0]
+    assert "source_changed_since_capture" in agent.prompts[0]
 
 
 def test_cli_run_demotes_entry_whose_content_changed_after_endorsement(workdir, monkeypatch, capsys):

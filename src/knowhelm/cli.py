@@ -10,10 +10,11 @@ from pathlib import Path
 
 from .agents import CODEX_RUNNER, AgentRunner
 from .delegate.runner import DelegateRunner
-from .evidence.chain import EvidenceChain
+from .evidence.chain import ChainVerificationError, EvidenceChain
 from .knowledge.code_reverse import reverse_code
 from .knowledge.endorsement import (
     SUPERSEDE_EVENT,
+    chain_endorsed_strong_ids,
     chain_rejected_ids,
     chain_superseded_ids,
     curate,
@@ -21,7 +22,7 @@ from .knowledge.endorsement import (
 )
 from .knowledge.model import Curation
 from .knowledge.store import KnowledgeStore
-from .report.acceptance import load_run, record_check, render_report
+from .report.acceptance import RunTraceError, load_run, record_check, render_report
 
 DB_PATH = ".knowhelm/knowledge.db"
 
@@ -177,6 +178,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # the chain endorses them FOR THE CURRENT CONTENT. Anything strong-in-DB
     # but unendorsed (no event, or content changed since endorsement) is
     # injected as reference and flagged for the operator.
+    endorsed = chain_endorsed_strong_ids(entries, records)
     unendorsed = unendorsed_strong_ids(entries, records)
     if unendorsed:
         print(f"[knowhelm] WARNING: {len(unendorsed)} entr{'y' if len(unendorsed) == 1 else 'ies'} "
@@ -188,7 +190,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             if e.id in unendorsed:
                 print(f"    {e.id[:8]}  {e.title}", file=sys.stderr)
     runner = DelegateRunner(_agent(args.agent), workdir)
-    result = runner.run(args.task, entries, unendorsed_ids=unendorsed)
+    result = runner.run(args.task, entries, unendorsed_ids=unendorsed, endorsed_ids=endorsed)
+    chain_only = [e for e in result.pack.strong if e.id in endorsed and not e.is_strong_evidence()]
+    if chain_only:
+        print(f"[knowhelm] note: {len(chain_only)} entr"
+              f"{'y is' if len(chain_only) == 1 else 'ies are'} chain-endorsed "
+              f"although the store cache says reference — injected as established fact.",
+              file=sys.stderr)
     # This chain record is the acceptance authority for the run: report and
     # harvest key off it, not off the agent-writable trace file.
     chain.append(
@@ -228,6 +236,9 @@ def cmd_report(args: argparse.Namespace) -> int:
     if args.run_id:
         trace = _run_trace(workdir, args.run_id)
         if trace is None:
+            return 2
+        if not trace.exists():
+            print(f"no trace found for {args.run_id}", file=sys.stderr)
             return 2
     else:
         traces = sorted(runs_dir.glob("run-*.jsonl")) if runs_dir.exists() else []
@@ -342,6 +353,7 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
     records = EvidenceChain.for_workdir(workdir).verify()
     superseded = chain_superseded_ids(records)
     rejected = chain_rejected_ids(records)
+    endorsed = chain_endorsed_strong_ids(entries, records)
     unendorsed = unendorsed_strong_ids(entries, records)
     drifted = drifted_code_entry_ids(workdir, entries) if (workdir / ".git").exists() else set()
     if args.stale:
@@ -351,10 +363,13 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
             return 0
     for e in entries:
         demoted = e.id in unendorsed or e.id in rejected
-        strong = "strong" if e.is_strong_evidence() and not demoted else "ref"
+        chain_backed = e.id in endorsed
+        strong = "strong" if (e.is_strong_evidence() or chain_backed) and not demoted else "ref"
         flags = ""
         if e.id in unendorsed:
             flags += "  [unendorsed: strong bit has no chain endorsement]"
+        if chain_backed and not e.is_strong_evidence() and not demoted:
+            flags += "  [chain-backed: store cache says reference]"
         if e.id in rejected:
             flags += "  [rejected]"
         if e.id in superseded:
@@ -504,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except LegacyKeyError as exc:
+    except (ChainVerificationError, LegacyKeyError, RunTraceError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

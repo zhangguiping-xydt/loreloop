@@ -1,0 +1,610 @@
+# knowhelm 设计与实现说明
+
+> 截至 2026-07-09。本文描述 knowhelm 当前的产品边界、核心模型、安全语义和实现结构。
+
+---
+
+## 1. 项目定位
+
+**knowhelm = 知识治理 + 编码代理委托 + 证据验收。**
+
+它是 starry-opc 的开源最小闭环版本,包名为 `knowhelm`,目标不是替代 Claude Code/Codex 写代码,而是在它们前后补上两层能力:
+
+1. **前置知识治理**:把代码、网页、人工输入等来源转成可溯源、可策展、可验证的结构化知识。
+2. **中间委托执行**:把任务交给 `claude -p` 或 `codex exec`,同时注入按信任分级的上下文包。
+3. **后置证据验收**:用链上记录、浏览器观察工件和人工/机器检查来判定 run 是否可接受,再把验收通过的事实回流为知识。
+
+产品形态是一个本地 CLI,没有 Web 服务、账号系统或远端状态。运行时核心依赖为零;浏览器能力通过可选 `playwright` extra 提供。
+
+### 非目标
+
+- 不提供 Web 驾驶舱。
+- 不做 PyPI 发布流程。
+- 不实现 MCP 接入。
+- 不自动 approve/reject/supersede 知识。
+- 不自动登录或自动化凭据输入。
+
+### 四条不变式
+
+1. 正式验收断言由人写、人录;代理最多起草建议。
+2. 裁决以证据链为准,不采信代理对自己工作的自述。
+3. harvest 只通过人驱动的 CLI 触发。
+4. 编码代理对知识库只读;approve/reject/supersede 是操作者行为。
+
+### 设计原则
+
+这些原则是 knowhelm 区别于普通 agent wrapper 的核心:
+
+- **编码交给代理,裁决留给证据系统**:Claude Code/Codex 负责执行,knowhelm 负责提供受治理的上下文、记录委托边界、生成可复审验收。
+- **知识不是文档堆,而是带信任状态的事实表**:每条知识都必须有 source、kind、trust 和可重放的背书语义。
+- **LLM 只产出候选,不能授予信任**:反构结果 born-draft;只有人工策展、浏览器验证或链背书 harvest mint 能提升信任。
+- **根治优先,不做末端关键词兜底**:输入缺失、证据缺失、链损坏等问题在上游边界拒绝,不依赖 LLM 输出特定措辞来补救。
+- **信任与展示分离**:SQLite 是缓存和展示材料;真正的强信任由证据链按当前内容 digest 重放得到。
+- **验收必须可复审**:报告不仅显示 PASS/FAIL,还要能追溯到 completion、check、artifact、页面快照和链哈希。
+- **自动化不替代策展判断**:是否 approve、reject、supersede、重新背书,都保持为操作者行为。
+
+---
+
+## 2. 仓库结构
+
+```text
+starry-knowhelm/
+├── src/knowhelm/
+│   ├── cli.py                  # CLI 命令入口
+│   ├── agents.py               # Claude/Codex subprocess 适配
+│   ├── companion.py            # Claude Code companion skill 安装
+│   ├── knowledge/
+│   │   ├── model.py            # Entry/Source/Trust/Link 模型
+│   │   ├── store.py            # SQLite 存储
+│   │   ├── endorsement.py      # 证据链背书与信任重放
+│   │   ├── code_reverse.py     # 代码反构
+│   │   └── harvest.py          # 验收后知识回流
+│   ├── delegate/
+│   │   ├── context_pack.py     # 上下文选择与渲染
+│   │   └── runner.py           # 委托执行与 trace 记录
+│   ├── evidence/
+│   │   ├── chain.py            # HMAC 证据链
+│   │   └── artifacts.py        # 内容寻址观察工件
+│   ├── report/
+│   │   └── acceptance.py       # 验收评估与报告渲染
+│   └── webexplore/
+│       ├── browser.py          # Browser/Observation 抽象
+│       ├── explorer.py         # Web 探索循环
+│       ├── web_reverse.py      # Web 反构
+│       └── verify.py           # 浏览器验证
+└── tests/                      # 单元、CLI、验收、安全语义测试
+```
+
+### `.knowhelm/` 工作目录
+
+`.knowhelm/` 位于项目树内,编码代理通常可以写它,因此它只作为缓存、展示和材料目录使用,不能单独承载安全语义。
+
+```text
+.knowhelm/
+├── knowledge.db            # SQLite 知识库
+├── evidence.jsonl          # 证据链记录
+├── evidence/artifacts/     # 浏览器观察工件
+└── runs/*.jsonl            # 委托 trace
+```
+
+证据链 HMAC key 和 head 承诺位于项目树外:
+
+```text
+~/.knowhelm/keys/<workdir-hash>.key   # HMAC key,0600
+~/.knowhelm/keys/<workdir-hash>.head  # 最新 (index, chain_hash) 承诺
+```
+
+`KNOWHELM_KEY_DIR` 可覆盖 key 目录,测试环境也使用该变量隔离真实 home。
+
+---
+
+## 3. 知识模型
+
+知识条目由 `Entry` 表示,核心字段包括:
+
+- `id`:稳定标识。
+- `title`:短标题,用于展示和检索权重。
+- `content`:一条断言级事实。
+- `kind`:单轴分类。
+- `source`:结构化溯源。
+- `trust`:人工策展和机器验证两条信任轴。
+
+### 3.1 Kind 单轴分类
+
+`Kind` 只表达条目事实类型:
+
+- `requirement`
+- `interface`
+- `architecture`
+- `behavior`
+- `constraint`
+- `acceptance`
+
+它不混入来源、信任状态或生命周期。
+
+### 3.2 Source 结构化溯源
+
+`Source` 包含:
+
+- `channel`: `code` / `web` / `image` / `manual`
+- `locator`:源位置,例如 `src/api.py@<commit>` 或 URL
+- `snapshot_ref`:锚点,例如 git commit 或页面快照哈希
+
+新鲜度由锚点判断。代码条目通过锚定 commit 与当前树对比识别 drift;Web 条目通过页面观察快照判断 drift。
+
+### 3.3 Trust 双轴状态
+
+`Trust` 分为两条独立轴:
+
+- `curation`:人工策展状态
+  - `draft`
+  - `approved`
+  - `rejected`
+- `verification`:机器验证状态
+  - `unverified`
+  - `verified`
+  - `contradicted`
+
+强证据定义为:
+
+```python
+is_strong_evidence() = curation == approved or verification == verified
+```
+
+状态机约束:
+
+- draft 可进入 approved/rejected。
+- approved 可再次 approved,用于对当前内容重新背书。
+- rejected 可回到 draft。
+- verification 可以从 unverified 进入 verified/contradicted,但不能回退到 unverified。
+
+矛盾和取代关系不写进状态字段,而由 links 表表达。
+
+---
+
+## 4. 证据链
+
+`EvidenceChain` 是追加式 JSONL 证据链,每条记录包含:
+
+```text
+index
+ts
+event
+payload
+prev_hash
+chain_hash
+signature
+```
+
+计算规则:
+
+```text
+chain_hash = sha256(canonical_json(prev_hash, index, ts, event, payload))
+signature  = hmac_sha256(project_key, chain_hash)
+```
+
+### 4.1 树外 key 与 head 承诺
+
+HMAC key 不在项目树内,避免编码代理直接重签篡改后的证据链。每次 append 后,链尾 `(index, chain_hash)` 写入树外 head 文件。这样不仅能检测记录内容修改,也能检测尾部截断。
+
+### 4.2 Append 语义
+
+append 在 flock 锁内执行:
+
+1. 读取当前链。
+2. 完整校验 index、prev_hash、chain_hash、signature、head。
+3. 计算新记录。
+4. 追加 JSONL 并 fsync。
+5. 原子更新 head 并 fsync 目录。
+
+如果当前链已损坏或被截断,append 拒绝扩展它。
+
+### 4.3 Verify 与 head 自愈
+
+`verify()` 完整校验证据链。若链本身有效,但 head 缺失或落后于链尾,`verify()` 会在锁内重读并推进 head 到已签名链尾。
+
+这个自愈只背书已经持有有效 HMAC 的记录;如果 head 指向的记录在链中不存在,仍然视为截断错误。
+
+### 4.4 遗留树内 key
+
+如果发现旧位置 `.knowhelm/evidence.key`,而新的树外 key 不存在,CLI 拒绝继续并提示操作者手动选择迁移或重新开始。key 是否可信不能由程序静默决定。
+
+---
+
+## 5. 链背书与信任重放
+
+SQLite 存在于项目树内,因此 trust 列只是缓存。真实信任由证据链事件重放得到。
+
+### 5.1 Entry digest
+
+每次提升信任都会把当前条目的内容摘要写入链上:
+
+```text
+entry_digest = sha256(canonical_json(
+  id,
+  title,
+  content,
+  kind,
+  source.channel,
+  source.locator,
+  source.snapshot_ref,
+))
+```
+
+摘要不包含 trust 字段。trust 由链事件表达,摘要只 pin “信任授予给哪一条事实”。
+
+### 5.2 强信任判定
+
+当前实现有两类检查:
+
+- `chain_endorsed_strong_ids(entries, records)`:当前行 digest 被链背书的条目。
+- `unendorsed_strong_ids(entries, records)`:DB 自称 strong,但当前行 digest 没有链背书的条目。
+
+因此:
+
+- DB 被改成 strong 但链不背书 → 降级为 reference。
+- DB strong 的行内容被改写 → digest 不匹配,降级为 reference。
+- DB trust 缓存被改回 draft,但当前 digest 仍被链背书 → 仍作为 strong 使用。
+
+### 5.3 链事件重放
+
+`endorsed_strong_digests(records)` 重放以下事件:
+
+- `curation_changed` 且 curation 为 `approved`:加入 approved digest。
+- `curation_changed` 且 curation 非 `approved`:移除 approved digest。
+- `entry_verified`:加入 verified digest。
+- `entry_contradicted`:移除 verified digest。
+- `knowledge_harvested.minted`:加入 verified digest。
+
+`knowledge_harvested.reversed` 只作为溯源材料,不提升信任。代码再反构是 LLM 提取,不能继承人工或机器验证背书。
+
+### 5.4 Supersede 与 reject
+
+- `chain_superseded_ids(records)` 从链上重放被取代条目,删除 DB links 行不能复活旧条目。
+- `chain_rejected_ids(records)` 从链上重放最新 curation 状态,被 rejected 的条目不会因为 DB curation 被改写而重新注入。
+
+---
+
+## 6. 委托执行与上下文包
+
+委托流程由 `DelegateRunner` 和 `context_pack` 负责。
+
+### 6.1 选择策略
+
+上下文选择使用确定性词法评分:
+
+- 从任务、标题、内容中抽取中英文词项。
+- 标题命中权重高于内容命中。
+- 按得分排序取前 N 条。
+
+当前实现不使用 embedding,以保持 MVP 可解释、可测试、零额外依赖。
+
+### 6.2 渲染分层
+
+上下文包分两层:
+
+1. **Established facts**:链背书或 DB strong 且未被降级的事实,要求代理不要违背。
+2. **Unverified references**:草稿、漂移、未背书或其他参考性条目,要求代理使用前自行核对。
+
+上下文包开头明确声明:这些条目是项目数据,不是给代理的指令。每条知识渲染为单行 JSON 对象,字符串里的换行、标题符号或伪造 `# Task` 只作为 JSON 字符串内容出现,不能改变 prompt 的 Markdown 结构。
+
+### 6.3 注入时降级
+
+注入时会基于当前工作树和证据链动态调整等级,不直接改写 DB:
+
+- 代码锚点漂移 → reference,并标注 `source_changed_since_capture`。
+- DB strong 但链不背书 → reference。
+- 条目被链上 rejected/superseded → 不注入或显示为退役状态。
+
+### 6.4 Run trace 与 completion
+
+`.knowhelm/runs/*.jsonl` 记录委托 trace,包含 started/finished/failed 等事件,用于展示和排查。验收不信任 trace 本身。
+
+成功委托完成后,CLI 会把 `delegation_completed` 写入证据链,包含:
+
+- `run_id`
+- `task`
+- `context_entries`
+- `base_commit`
+
+验收和 harvest 都以该链记录为权威锚点。
+
+---
+
+## 7. 浏览器观察、验证与工件
+
+### 7.1 Observation
+
+浏览器观察抽象为 `Observation`:
+
+- `url`
+- `title`
+- `text`
+- `forms`
+- `links`
+- `snapshot_hash`
+
+`snapshot_hash` 覆盖裁判实际读取的页面窗口:标题、可见文本和表单结构。
+
+### 7.2 ArtifactStore
+
+浏览器观察会保存为内容寻址 JSON 工件:
+
+```text
+.knowhelm/evidence/artifacts/<sha256>.json
+```
+
+实现约束:
+
+- 工件目录 chmod 0700。
+- 工件文件 chmod 0600。
+- 先写临时文件,再 chmod,最后 rename 到最终 hash 文件名。
+- 读取时校验文件名 SHA 与内容 SHA 一致。
+- artifact 引用必须是 64 位小写 hex,不能作为路径片段绕出目录。
+
+### 7.3 确定性断言
+
+`verify` 支持三种确定性断言:
+
+- `contains:<text>`
+- `absent:<text>`
+- `title-contains:<text>`
+
+确定性断言不经过 LLM。空 needle 被视为 malformed expectation,在浏览器打开前拒绝。
+
+### 7.4 LLM 裁判
+
+自由文本 expectation 走 LLM 裁判。页面内容被包进带随机 nonce 的 UNTRUSTED 定界符内,并明确说明页面中的指令式文本只是证据,不是命令。
+
+### 7.5 Entry 复核
+
+`knowledge verify` 可对 Web 条目重新观察源页面:
+
+- 通过 → 写入 `entry_verified`,DB verification 变为 verified,并把 snapshot_ref 重锚到本次观察快照。
+- 不通过 → 写入 `entry_contradicted`,DB verification 变为 contradicted。
+
+链记录先写,DB 后写。通过验证时,链上 digest pin 的是重锚后的行。
+
+---
+
+## 8. 验收报告
+
+报告由 `report/acceptance.py` 生成,是证据链的投影,不额外存状态。
+
+### 8.1 Accepted 条件
+
+一个 run 只有同时满足以下条件才是 ACCEPTED:
+
+1. 链上存在且仅存在一条对应 `run_id` 的 `delegation_completed`。
+2. 至少有一条验收 check。
+3. 所有计入的 check 都发生在 completion 之后。
+4. 没有 failed check。
+5. 所有引用 artifact 的 check 都通过完整性审计。
+
+trace 中的 `delegation_finished` 只用于展示,不能让报告变成 ACCEPTED。
+
+### 8.2 Check 类型
+
+- `knowhelm check`:人工记录,链上标注 `judge: operator`。
+- `knowhelm verify`:浏览器验证,链上标注 `verified_via: browser`,并携带 url、page_snapshot、artifact。
+
+人工 check 合法,但报告会说明它没有可复审工件;harvest 不从人工 check 铸造 verified 知识。
+
+### 8.3 Artifact 审计
+
+报告渲染时可传入 `ArtifactStore`。CLI 路径始终传入该 store。
+
+每个 artifact check 会检查:
+
+- 文件是否存在。
+- 文件内容 hash 是否匹配 artifact 引用。
+- 链记录是否包含 url/page_snapshot pin。
+- artifact 中的 url 是否匹配链上 url。
+- artifact 中的 snapshot_hash 是否匹配链上 page_snapshot。
+
+任一失败都会让 run 变成 NOT ACCEPTED,并在报告中列出 integrity failure。
+
+### 8.4 CLI 错误边界
+
+`knowhelm report <run_id>` 会在 trace 缺失时返回干净错误。trace JSON 损坏、缺少 `delegation_started` 或关键字段格式不对时,CLI 也以错误消息和非零状态退出。证据链校验失败同样由 CLI 捕获,不会打印 Python traceback。
+
+---
+
+## 9. Harvest 知识回流
+
+`knowhelm harvest <run_id>` 只处理 ACCEPTED run。
+
+### 9.1 回流来源
+
+harvest 产生两类输出:
+
+1. **Browser-verified checks → verified acceptance entries**
+   - expectation 来自人。
+   - 页面由浏览器验证。
+   - check 和 artifact 都在链上可审计。
+   - 铸造出的条目 born-verified。
+
+2. **Changed code → draft entries**
+   - 从 `base_commit` 到当前 HEAD 的变更文件重新反构。
+   - LLM 提取结果 born-draft。
+   - 验收通过不自动给代码反构产物授信。
+
+### 9.2 Base commit
+
+变更范围以链上 `delegation_completed.base_commit` 为准,不读取 trace 里的 base commit。工作树有未提交源码改动时拒绝 harvest,避免把不可复现内容锚定到错误 commit。
+
+### 9.3 链先行
+
+minted 条目先在内存中计算出最终内容和 digest。`knowledge_harvested` 写链成功后,才把 verified 状态落到 DB。链写失败不会留下无背书 strong 行。
+
+### 9.4 Review 与 demotion
+
+harvest 会输出需要人工关注的集合:
+
+- `unauditable_checks`:缺少可复审工件的 check,不铸造。
+- `review`:同一页面上已有强条目,需要人判断是否仍成立。
+- `stale`:源文件发生变化的既有代码条目。
+- `demoted`:重锚后失去当前 digest 背书的强条目。
+
+旧断言与新断言的取代关系不自动推断,由操作者通过 supersede 明确记录。
+
+---
+
+## 10. 反构管线
+
+### 10.1 代码反构
+
+`reverse_code` 从代码文件中提取断言级知识:
+
+- 按文件和大小分批。
+- 提取与分类分为两个 LLM 步骤。
+- 输出必须是合法 JSON。
+- 条目 source 锚定当前 git commit。
+- 新条目默认 draft/unverified。
+
+### 10.2 Web 反构
+
+`reverse_web` 从浏览器探索得到的页面观察中提取知识:
+
+- 页面观察作为证据输入。
+- 条目 source 为 Web URL。
+- snapshot_ref 为页面观察快照哈希。
+- 新条目默认 draft/unverified。
+
+### 10.3 去重
+
+`KnowledgeStore.add` 做精确去重。代码来源的去重 locator key 只取文件部分,避免同一文件跨 commit 产生重复行;具体新鲜度由 snapshot_ref/locator 锚点表达。
+
+---
+
+## 11. Web 探索
+
+`Explorer` 采用 observe-plan-act 循环:
+
+1. 观察当前页面。
+2. 记录页面摘要和可操作元素。
+3. 选择下一步导航或停止。
+4. 保存探索 trace。
+
+约束:
+
+- 同源限制。
+- 最大页面数限制。
+- 遇到登录墙时,headless 模式跳过;headed 模式把真实浏览器窗口交给人登录。
+- knowhelm 不保存凭据,不自动提交登录表单。
+
+---
+
+## 12. Companion skill
+
+`knowhelm init` 可安装 Claude Code companion skill。
+
+skill 的作用是让编码代理理解 knowhelm 的协作规则:
+
+- 阅读和尊重 context pack。
+- 把 established facts 当作约束。
+- 把 references 当作需核对的信息。
+- 完成工作后给操作者起草可验证的验收断言。
+- 不主动运行 harvest/approve/reject/supersede。
+
+Codex companion skill 当前未实现;CLI 已能通过 `--agent codex` 委托 Codex。
+
+---
+
+## 13. CLI 命令面
+
+主要命令:
+
+```text
+knowhelm init [--skill|--no-skill]
+knowhelm ingest --from code <path> [--agent claude|codex]
+knowhelm ingest --from web <url> [--headed] [--max-pages N]
+knowhelm run <task> [--agent claude|codex]
+knowhelm check <run_id> <check> (--pass|--fail) [--detail <text>]
+knowhelm verify <run_id> <url> <expectation> [--headed]
+knowhelm report [run_id]
+knowhelm harvest <run_id> [--agent claude|codex]
+knowhelm knowledge list [--stale]
+knowhelm knowledge approve <entry_id>
+knowhelm knowledge reject <entry_id>
+knowhelm knowledge supersede <new_id> <old_id>
+knowhelm knowledge verify <entry_id> [--headed]
+```
+
+文件路径相关的 run id 使用严格正则校验,避免路径穿越。
+
+---
+
+## 14. 安全语义
+
+knowhelm 的威胁模型是 **honest workstation**:
+
+- 本机、文件系统、OS 用户可信。
+- 防御对象是有项目目录写权限的编码代理。
+- 不防御能写 `~/.knowhelm/keys/` 的本地攻击者、恶意代理二进制或 root。
+
+### 14.1 防御点
+
+| 威胁 | 机制 |
+|---|---|
+| 页面 prompt injection | 确定性断言不过模型;LLM 输入使用随机 nonce untrusted 定界符;context pack 声明数据非指令且条目按单行 JSON 渲染 |
+| 证据篡改 | HMAC 链;树外 key/head;append 前验链;artifact 内容寻址;url/snapshot pin;check 时序;单 completion 约束 |
+| 信任洗白/压制 | digest 绑定;链重放;DB strong 无背书降级;链 strong 不被 DB draft 压制;rejected/superseded 链权威 |
+| 凭据误捕获 | 不自动登录;headed 登录交人;artifact 0600/0700;`.knowhelm/` 加入 gitignore |
+
+### 14.2 设计取舍
+
+- `run` 不会每次重新打开浏览器验证 Web strong entry;它信任最近一次验证并打印提醒。
+- 页面 snapshot_hash 覆盖的是裁判实际读取的有界窗口,不是完整 DOM。
+- operator check 是有效人工背书,但没有机器可复审工件;报告会标注,harvest 不铸造。
+- append 与 head 更新之间如果发生崩溃,最新记录在下一次 verify 之前没有 head 截断保护;下一次 verify 会关闭这个窗口。
+
+---
+
+## 15. 测试策略
+
+测试目标是把关键安全语义写成可执行约束。当前测试覆盖:
+
+- 证据链 append/verify/head/truncation/key 权限。
+- artifact hash、权限、路径引用校验。
+- deterministic expectation 与 LLM verifier JSON 解析。
+- chain-backed trust 与 DB trust cache 的不一致场景。
+- rejected/superseded 链重放。
+- context pack strong/reference 分层。
+- trace 不作为验收权威。
+- completion/check 时序。
+- duplicate completion 拒绝。
+- artifact 缺失、篡改、掉包、缺 pin 的报告降级。
+- harvest 链先行、幂等、dirty tree 拒绝、unauditable check 不铸造。
+- CLI 错误边界和路径穿越防护。
+
+测试环境约定:
+
+- `KNOWHELM_KEY_DIR` 指向临时目录。
+- 测试不会触碰真实 `~/.knowhelm/keys/`。
+- Playwright smoke 测试在依赖缺失时跳过。
+
+---
+
+## 16. 当前状态与后续方向
+
+当前实现已经具备本地最小闭环:
+
+```text
+ingest → run → check/verify → report → harvest
+```
+
+适合下一步用真实小项目跑完整流程,观察:
+
+- 反构出的知识是否足够有用。
+- context pack 是否能有效约束编码代理。
+- 浏览器验证是否覆盖真实验收需求。
+- harvest 回流是否形成可持续知识治理循环。
+
+后续可扩展方向:
+
+1. Codex companion skill。
+2. 更好的上下文检索策略,例如 embedding 或混合检索。
+3. 更丰富的验收断言 DSL。
+4. 更友好的 knowledge list/review 交互。
+5. GitHub 开源发布准备。

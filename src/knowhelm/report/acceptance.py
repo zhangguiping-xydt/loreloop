@@ -29,6 +29,10 @@ CHECK_EVENTS = {"check_passed", "check_failed"}
 DELEGATION_EVENT = "delegation_completed"
 
 
+class RunTraceError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class RunSummary:
     run_id: str
@@ -76,13 +80,43 @@ class RunEvaluation:
 
 
 def load_run(trace_path: Path) -> RunSummary:
-    events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
-    started = next(e for e in events if e["event"] == "delegation_started")
-    finished = any(e["event"] == "delegation_finished" for e in events)
+    try:
+        lines = trace_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise RunTraceError(f"cannot read run trace {trace_path}: {exc}") from exc
+
+    events = []
+    for line_no, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RunTraceError(
+                f"invalid run trace {trace_path}: line {line_no} is not JSON"
+            ) from exc
+        if not isinstance(event, dict):
+            raise RunTraceError(
+                f"invalid run trace {trace_path}: line {line_no} is not an object"
+            )
+        events.append(event)
+
+    started = next((e for e in events if e.get("event") == "delegation_started"), None)
+    if started is None:
+        raise RunTraceError(f"invalid run trace {trace_path}: missing delegation_started")
+    task = started.get("task")
+    if not isinstance(task, str):
+        raise RunTraceError(f"invalid run trace {trace_path}: delegation_started.task missing")
+    context_entries = started.get("context_entries", [])
+    if not isinstance(context_entries, list):
+        raise RunTraceError(
+            f"invalid run trace {trace_path}: delegation_started.context_entries is not a list"
+        )
+    finished = any(e.get("event") == "delegation_finished" for e in events)
     return RunSummary(
         run_id=trace_path.stem,
-        task=started["task"],
-        context_entries=started.get("context_entries", []),
+        task=task,
+        context_entries=context_entries,
         finished=finished,
         base_commit=started.get("base_commit"),
     )

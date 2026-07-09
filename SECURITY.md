@@ -6,10 +6,13 @@ knowhelm is local-first and assumes an **honest workstation**: the machine
 running knowhelm, its filesystem, and its OS user are trusted. Within that
 boundary, knowhelm defends against:
 
-- **Prompt injection from explored web pages.** Page content is untrusted
-  input. Deterministic assertions never pass through a model; the LLM judge
-  receives page content only inside explicit untrusted-data markers and is
-  instructed to treat imperative text in pages as evidence, not commands.
+- **Prompt injection from explored web pages and knowledge entries.** Page
+  content and stored knowledge are untrusted input. Deterministic assertions
+  never pass through a model; the LLM judge receives page content only inside
+  explicit untrusted-data markers and is instructed to treat imperative text
+  in pages as evidence, not commands. Context-pack entries are rendered as
+  single-line JSON objects and declared to be data, so embedded newlines,
+  Markdown headings, or fake task sections remain string values.
 - **After-the-fact tampering with evidence.** The evidence chain is
   HMAC-SHA256 linked, and the latest (index, chain hash) is committed next
   to the key outside the project tree, so deleting trailing records is
@@ -43,9 +46,11 @@ boundary, knowhelm defends against:
   digest of the entry's content and source. Before injection, `knowhelm run`
   recomputes that digest from the current DB row — an entry whose strong bit
   has no chain endorsement, or whose content was rewritten after
-  endorsement, is demoted to reference; `knowledge list` applies the same
-  rule, so a laundered bit never even DISPLAYS as strong. Trust bits are
-  written chain-first everywhere (verification, curation, harvest minting):
+  endorsement, is demoted to reference; a row whose current digest is
+  chain-endorsed remains strong even if the DB cache was flipped back to
+  draft. `knowledge list` applies the same rule, so SQLite edits can neither
+  launder nor suppress strong trust. Trust bits are written chain-first
+  everywhere (verification, curation, harvest minting):
   a crash between the two writes leaves a draft, never an unendorsed strong
   row. Only human or machine trust acts
   rebind a digest: when harvest re-anchors an endorsed entry to a new

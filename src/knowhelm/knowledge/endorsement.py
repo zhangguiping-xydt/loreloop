@@ -101,15 +101,17 @@ def endorsed_strong_digests(records: list[EvidenceRecord]) -> dict[str, set[str]
     return out
 
 
+def chain_endorsed_strong_ids(entries: list[Entry], records: list[EvidenceRecord]) -> set[str]:
+    """Entries whose current content digest is chain-endorsed strong."""
+    endorsed = endorsed_strong_digests(records)
+    return {e.id for e in entries if entry_digest(e) in endorsed.get(e.id, set())}
+
+
 def unendorsed_strong_ids(entries: list[Entry], records: list[EvidenceRecord]) -> set[str]:
     """Entries that claim strong trust in the DB but whose current content
     carries no matching chain endorsement — demote these before injection."""
-    endorsed = endorsed_strong_digests(records)
-    return {
-        e.id
-        for e in entries
-        if e.is_strong_evidence() and entry_digest(e) not in endorsed.get(e.id, set())
-    }
+    endorsed_ids = chain_endorsed_strong_ids(entries, records)
+    return {e.id for e in entries if e.is_strong_evidence() and e.id not in endorsed_ids}
 
 
 def chain_superseded_ids(records: list[EvidenceRecord]) -> set[str]:

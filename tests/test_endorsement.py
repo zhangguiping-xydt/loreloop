@@ -9,6 +9,7 @@ import pytest
 
 from knowhelm.evidence.chain import EvidenceChain
 from knowhelm.knowledge.endorsement import (
+    chain_endorsed_strong_ids,
     chain_rejected_ids,
     chain_superseded_ids,
     curate,
@@ -116,6 +117,20 @@ def test_content_rewrite_after_approval_is_not_endorsed(env):
 
     assert tampered.is_strong_evidence()
     assert unendorsed_strong_ids([tampered], chain.verify()) == {entry.id}
+
+
+def test_approval_survives_db_curation_flip_to_draft(env):
+    store, chain = env
+    entry = store.add(make_entry())
+    curate(store, chain, entry.id, Curation.APPROVED, NOW)
+
+    store._conn.execute("UPDATE entries SET curation = 'draft' WHERE id = ?", (entry.id,))
+    store._conn.commit()
+    suppressed = store.get(entry.id)
+
+    assert not suppressed.is_strong_evidence()
+    assert chain_endorsed_strong_ids([suppressed], chain.verify()) == {entry.id}
+    assert unendorsed_strong_ids([suppressed], chain.verify()) == set()
 
 
 def test_locator_rewrite_after_verification_is_not_endorsed(env):

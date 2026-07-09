@@ -45,12 +45,19 @@ class DelegateRunner:
         task: str,
         entries: list[Entry],
         unendorsed_ids: set[str] | frozenset[str] = frozenset(),
+        endorsed_ids: set[str] | frozenset[str] = frozenset(),
     ) -> DelegationResult:
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
         trace_path = self._runs_dir / f"{run_id}.jsonl"
         base_commit = _head_or_none(self._workdir)
         drifted = drifted_code_entry_ids(self._workdir, entries) if base_commit else set()
-        pack = select(task, entries, drifted_ids=drifted, unendorsed_ids=unendorsed_ids)
+        pack = select(
+            task,
+            entries,
+            drifted_ids=drifted,
+            unendorsed_ids=unendorsed_ids,
+            endorsed_ids=endorsed_ids,
+        )
         prefix = render(pack)
         prompt = f"{prefix}\n# Task\n\n{task}\n" if prefix else task
 
@@ -61,6 +68,7 @@ class DelegateRunner:
             context_entries=pack.entry_ids,
             drifted_entries=sorted(pack.drifted_ids & set(pack.entry_ids)),
             unendorsed_entries=sorted(pack.unendorsed_ids & set(pack.entry_ids)),
+            chain_endorsed_entries=sorted(pack.endorsed_ids & set(pack.entry_ids)),
             base_commit=base_commit,
         )
         try:
