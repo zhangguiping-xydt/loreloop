@@ -11,9 +11,11 @@ Endorsement binds CONTENT, not just identity: each trust event records a
 digest of the entry's substance (title, content, kind, source). An id alone
 would let the agent keep the endorsed row's trust bits while rewriting what
 the row actually says. At injection time the digest is recomputed from the
-current DB row; a mismatch demotes the entry to reference. Legitimate
-re-anchoring (verify pass on a drifted page, harvest re-anchoring an
-unchanged claim) refreshes the bound digest through its own chain event.
+current DB row; a mismatch demotes the entry to reference. The only events
+that refresh a bound digest are real trust acts on the current row —
+re-approval, or a verify pass on the drifted page. Harvest's ``reversed``
+digests are provenance only: LLM re-extraction is not a trust act, so they
+neither grant an endorsement nor move an existing one.
 
 The DB row itself is never rewritten on mismatch — the discrepancy is a
 signal for the operator, not something to silently repair.
@@ -84,17 +86,13 @@ def endorsed_strong_digests(records: list[EvidenceRecord]) -> dict[str, set[str]
                 for entry_id, digest in minted.items():
                     if digest:
                         verified[entry_id] = digest
-            # re-anchoring changes locator/snapshot of an unchanged claim;
-            # existing endorsements follow the entry to its new anchor
-            reversed_entries = payload.get("reversed")
-            if isinstance(reversed_entries, dict):
-                for entry_id, digest in reversed_entries.items():
-                    if not digest:
-                        continue
-                    if entry_id in approved:
-                        approved[entry_id] = digest
-                    if entry_id in verified:
-                        verified[entry_id] = digest
+            # The payload's "reversed" digests are deliberately NOT applied:
+            # re-reversal is LLM extraction, and letting it move an existing
+            # endorsement to the re-anchored row would launder trust — an
+            # agent that steers the extractor (comment pollution) into
+            # re-stating a claim whose facts changed would refresh the strong
+            # bit without any human act. A re-anchored strong entry stays
+            # demoted until a human re-approves or re-verifies it.
     out: dict[str, set[str]] = {}
     for entry_id, digest in approved.items():
         out.setdefault(entry_id, set()).add(digest)

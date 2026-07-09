@@ -27,10 +27,10 @@ from pathlib import Path
 
 from ..agents import AgentRunner
 from ..evidence.artifacts import ArtifactStore
-from ..evidence.chain import EvidenceChain
+from ..evidence.chain import EvidenceChain, EvidenceRecord
 from ..report.acceptance import RunSummary, evaluate_run
 from .code_reverse import changed_files, changed_paths, dirty_source_files, repo_head, reverse_code
-from .endorsement import chain_superseded_ids, entry_digest
+from .endorsement import chain_superseded_ids, entry_digest, unendorsed_strong_ids
 from .model import Channel, Entry, Kind, Source, Trust, Verification
 from .store import KnowledgeStore
 
@@ -48,6 +48,7 @@ class HarvestResult:
     stale: list[Entry] = field(default_factory=list)
     unauditable_checks: list[str] = field(default_factory=list)
     review: list[Entry] = field(default_factory=list)
+    demoted: list[Entry] = field(default_factory=list)
     head_commit: str | None = None
 
 
@@ -107,9 +108,15 @@ def harvest_run(
                 # re-extracted verbatim at head is confirmed, not stale.
                 stale = _stale_entries(store, touched, head)
 
-    # minted/reversed carry id -> digest of the FINAL stored row: minting
-    # endorses verified status bound to that content, and re-anchoring lets an
-    # existing endorsement follow the entry to its refreshed anchor.
+    # Re-anchoring moves the entry's digest away from any prior endorsement,
+    # and re-extraction earns no new one (an LLM restating a claim is not a
+    # trust act). Strong entries that just lost their endorsement are
+    # surfaced so the operator can re-approve or re-verify deliberately.
+    demoted = _demoted_by_reanchor(reversed_entries, records)
+
+    # minted carries id -> digest of the FINAL stored row: minting endorses
+    # verified status bound to that content. reversed digests are provenance
+    # only — endorsement replay ignores them (see endorsement module).
     chain.append(
         HARVEST_EVENT,
         {
@@ -129,8 +136,23 @@ def harvest_run(
         stale=stale,
         unauditable_checks=unauditable,
         review=review,
+        demoted=demoted,
         head_commit=head,
     )
+
+
+def _demoted_by_reanchor(
+    reversed_entries: list[Entry], records: list[EvidenceRecord]
+) -> list[Entry]:
+    """Re-anchored entries that claim strong trust but whose new digest has
+    no chain endorsement — the price of not letting LLM re-extraction move
+    endorsements. ``records`` predate this harvest's own event, which is
+    correct: that event grants no endorsement anyway."""
+    return [
+        e
+        for e in reversed_entries
+        if e.id in unendorsed_strong_ids(reversed_entries, records)
+    ]
 
 
 def _review_candidates(
@@ -163,13 +185,22 @@ def _store_minted(store: KnowledgeStore, entry: Entry, run_id: str, now: datetim
     against the live page, chain-backed — recording that on the existing
     entry is bookkeeping of a real event, not trust laundering. Works through
     the normal verification state machine; a prior CONTRADICTED flips to
-    VERIFIED because the newest browser evidence says the claim holds."""
+    VERIFIED because the newest browser evidence says the claim holds.
+
+    Every field of the reused row is forced to the canonical mint values
+    (title/kind here, snapshot on top of the content+locator match that
+    found it). The minted digest endorses the WHOLE row: leaving a
+    pre-planted title or kind in place would sign whatever the agent parked
+    on the row before the run — the digest must cover only what the browser
+    check actually vouches for."""
     existing = store.find_duplicate(entry)
     if existing is None:
         return store.add(entry)
     updated = store.set_verification(existing.id, Verification.VERIFIED, run_id, now)
     if entry.source.snapshot_ref and updated.source.snapshot_ref != entry.source.snapshot_ref:
         updated = store.set_snapshot_ref(existing.id, entry.source.snapshot_ref, now)
+    if (updated.title, updated.kind) != (entry.title, entry.kind):
+        updated = store.set_title_kind(existing.id, entry.title, entry.kind, now)
     return updated
 
 
@@ -180,8 +211,10 @@ def _store_reanchored(
     the same file, re-anchor the existing entry to head instead of inserting:
     the claim was just re-derived verbatim from the current source, so leaving
     the old anchor would flag it stale/drifted forever despite being fresh.
-    Trust state is untouched — the comparison is deterministic string
-    equality, not an LLM judgment."""
+    Trust columns are untouched, but a strong entry effectively DEMOTES here:
+    its chain endorsement was bound to the old anchor's digest, and no event
+    moves it — re-approval/re-verification is the human's call, because the
+    "verbatim claim" that triggered this could itself be steered LLM output."""
     existing = store.find_duplicate(entry)
     if existing is None:
         return store.add(entry)

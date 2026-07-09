@@ -52,7 +52,11 @@ class LinkType(enum.StrEnum):
 
 CURATION_TRANSITIONS: dict[Curation, frozenset[Curation]] = {
     Curation.DRAFT: frozenset({Curation.APPROVED, Curation.REJECTED}),
-    Curation.APPROVED: frozenset({Curation.REJECTED}),
+    # APPROVED -> APPROVED is re-endorsement: legitimate re-anchoring (e.g.
+    # harvest re-anchoring an unchanged claim) leaves an approved entry with
+    # no endorsement for its new digest, and only a fresh human approval of
+    # the CURRENT row may rebind it.
+    Curation.APPROVED: frozenset({Curation.APPROVED, Curation.REJECTED}),
     Curation.REJECTED: frozenset({Curation.DRAFT}),
 }
 

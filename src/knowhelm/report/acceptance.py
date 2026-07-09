@@ -6,6 +6,9 @@ signed evidence chain: checks, artifact audits, and the chain-endorsed
 The run trace under ``.knowhelm/runs/`` sits in the agent-writable tree, so
 it is display material only — a forged ``delegation_finished`` line or an
 edited ``base_commit`` there must never sway acceptance or harvest.
+Checks count only when they postdate the completion record on the chain,
+and a run id with more than one completion record is never accepted:
+evidence must be attributable to exactly one finished delegation.
 When an ArtifactStore is supplied, every artifact referenced on the chain is
 re-hashed and cross-checked: a missing, tampered, swapped or unpinned
 observation downgrades the verdict — a report must not claim acceptance
@@ -41,7 +44,14 @@ class RunEvaluation:
     passed: list[EvidenceRecord]
     failed: list[EvidenceRecord]
     broken_artifacts: list[tuple[str, str]]
-    completed: EvidenceRecord | None
+    completions: list[EvidenceRecord]
+
+    @property
+    def completed(self) -> EvidenceRecord | None:
+        """The FIRST completion record for the run. cmd_run appends exactly
+        one; a later record with the same run_id cannot rewrite the task or
+        base commit the first one pinned."""
+        return self.completions[0] if self.completions else None
 
     @property
     def finished(self) -> bool:
@@ -58,6 +68,7 @@ class RunEvaluation:
     def accepted(self) -> bool:
         return (
             self.finished
+            and len(self.completions) == 1
             and bool(self.checks)
             and not self.failed
             and not self.broken_artifacts
@@ -81,23 +92,31 @@ def evaluate_run(
     run: RunSummary, chain: EvidenceChain, artifacts: ArtifactStore | None = None
 ) -> RunEvaluation:
     records = chain.verify()
-    checks = [r for r in records if r.event in CHECK_EVENTS and r.payload.get("run_id") == run.run_id]
+    completions = [
+        r
+        for r in records
+        if r.event == DELEGATION_EVENT and r.payload.get("run_id") == run.run_id
+    ]
+    # Acceptance checks must postdate the completion record on the chain.
+    # Run ids appear in the trace while the agent is still working, so a
+    # check recorded before completion could only be checking work that did
+    # not exist yet — pre-planted "evidence" for a run still in flight.
+    after = completions[0].index if completions else -1
+    checks = [
+        r
+        for r in records
+        if r.event in CHECK_EVENTS
+        and r.payload.get("run_id") == run.run_id
+        and r.index > after
+    ]
     passed = [r for r in checks if r.event == "check_passed"]
     failed = [r for r in checks if r.event == "check_failed"]
-    completed = next(
-        (
-            r
-            for r in records
-            if r.event == DELEGATION_EVENT and r.payload.get("run_id") == run.run_id
-        ),
-        None,
-    )
     return RunEvaluation(
         checks=checks,
         passed=passed,
         failed=failed,
         broken_artifacts=_audit_artifacts(checks, artifacts),
-        completed=completed,
+        completions=completions,
     )
 
 
@@ -137,6 +156,13 @@ def render_report(
         lines += [
             "No chain-endorsed `delegation_completed` record exists for this run;",
             "the trace file alone is not acceptance evidence.",
+            "",
+        ]
+    elif len(evaluation.completions) > 1:
+        lines += [
+            f"{len(evaluation.completions)} `delegation_completed` records exist "
+            "for this run id; the evidence cannot be attributed to a single "
+            "delegation, so the run is not acceptable as recorded.",
             "",
         ]
     if not checks:

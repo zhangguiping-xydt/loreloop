@@ -20,7 +20,10 @@ boundary, knowhelm defends against:
   material only: acceptance and harvest key off the chain-endorsed
   `delegation_completed` record (run id, task, context, base commit), so a
   forged `delegation_finished` line or an edited `base_commit` in the trace
-  cannot sway a verdict. Editing, truncating or swapping evidence breaks
+  cannot sway a verdict. Checks count only when they postdate that
+  completion record on the chain — a check pre-planted while the run was
+  still in flight is ignored — and a run id with more than one completion
+  record is never accepted. Editing, truncating or swapping evidence breaks
   verification and degrades the acceptance verdict.
 - **Trust laundering.** LLM-derived knowledge is born draft/unverified.
   Only human-written, machine-checked, chain-backed assertions are born
@@ -31,10 +34,17 @@ boundary, knowhelm defends against:
   digest of the entry's content and source. Before injection, `knowhelm run`
   recomputes that digest from the current DB row — an entry whose strong bit
   has no chain endorsement, or whose content was rewritten after
-  endorsement, is demoted to reference. Supersession is likewise replayed
-  from the chain: deleting the DB links row does not resurrect a retired
-  entry. Passed web verifications always anchor the entry to the observed
-  page hash — an anchor-less entry counts as drifted, never as fresh.
+  endorsement, is demoted to reference. Only human or machine trust acts
+  rebind a digest: when harvest re-anchors an endorsed entry to a new
+  commit, the old endorsement does NOT follow it (LLM re-extraction can be
+  steered via comment pollution), the entry demotes, and harvest tells the
+  operator to re-approve. Minting onto an existing row forces the row's
+  title and kind to the values derived from the check itself, so the minted
+  digest never signs fields the agent pre-planted. Supersession is likewise
+  replayed from the chain: deleting the DB links row does not resurrect a
+  retired entry. Passed web verifications always anchor the entry to the
+  observed page hash — an anchor-less entry counts as drifted, never as
+  fresh.
 - **Accidental credential capture.** knowhelm never automates logins: at a
   login wall it either skips the page or hands the real browser window to
   the human. Observation artifacts may contain post-login page content, so

@@ -163,6 +163,15 @@ class KnowledgeStore:
             )
         return self._require(entry_id)
 
+    def set_title_kind(self, entry_id: str, title: str, kind: Kind, now: datetime) -> Entry:
+        self._require(entry_id)
+        with self._conn:
+            self._conn.execute(
+                "UPDATE entries SET title = ?, kind = ?, updated_at = ? WHERE id = ?",
+                (title, kind.value, _iso(now), entry_id),
+            )
+        return self._require(entry_id)
+
     def set_snapshot_ref(
         self, entry_id: str, snapshot_ref: str, now: datetime, locator: str | None = None
     ) -> Entry:

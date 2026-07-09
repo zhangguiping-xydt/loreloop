@@ -83,10 +83,10 @@ def test_curate_rejection_revokes_endorsement(env):
 def test_curate_invalid_transition_writes_no_chain_record(env):
     store, chain = env
     entry = store.add(make_entry())
-    curate(store, chain, entry.id, Curation.APPROVED, NOW)
+    curate(store, chain, entry.id, Curation.REJECTED, NOW)
 
     with pytest.raises(InvalidTransition):
-        curate(store, chain, entry.id, Curation.APPROVED, NOW)
+        curate(store, chain, entry.id, Curation.REJECTED, NOW)
 
     assert len([r for r in chain.verify() if r.event == "curation_changed"]) == 1
 
@@ -184,7 +184,13 @@ def test_harvest_legacy_list_payload_grants_nothing(env):
     assert unendorsed_strong_ids([strong(entry)], chain.verify()) == {entry.id}
 
 
-def test_harvest_reanchor_moves_existing_endorsement_to_new_digest(env):
+def test_harvest_reanchor_does_not_move_endorsement_to_new_digest(env):
+    # Codex round-3 H1: re-reversal is LLM extraction. If the harvested
+    # "reversed" digests moved endorsements, an agent could pollute comments
+    # so the extractor re-states a claim whose facts changed, and the re-
+    # anchored row would inherit the human's approval. The reversed digest
+    # must grant nothing: the re-anchored strong entry is demoted until a
+    # human re-approves the CURRENT row.
     from dataclasses import replace
 
     store, chain = env
@@ -200,10 +206,23 @@ def test_harvest_reanchor_moves_existing_endorsement_to_new_digest(env):
     )
 
     approved = replace(reanchored, trust=Trust(curation=Curation.APPROVED))
-    assert unendorsed_strong_ids([approved], chain.verify()) == set()
-    # ...and the OLD digest no longer stands: the endorsement moved, not forked
-    old_approved = replace(entry, trust=Trust(curation=Curation.APPROVED))
-    assert unendorsed_strong_ids([old_approved], chain.verify()) == {entry.id}
+    assert unendorsed_strong_ids([approved], chain.verify()) == {entry.id}
+
+
+def test_reapprove_rebinds_endorsement_to_current_row(env):
+    # The recovery path for a legitimately re-anchored entry: a fresh human
+    # approval of the current row. APPROVED -> APPROVED exists exactly for
+    # this re-endorsement.
+    store, chain = env
+    entry = store.add(make_entry())
+    curate(store, chain, entry.id, Curation.APPROVED, NOW)
+
+    store.set_snapshot_ref(entry.id, "def", NOW, locator="api.py@def")
+    moved = store.get(entry.id)
+    assert unendorsed_strong_ids([moved], chain.verify()) == {moved.id}
+
+    curate(store, chain, entry.id, Curation.APPROVED, NOW)
+    assert unendorsed_strong_ids([store.get(entry.id)], chain.verify()) == set()
 
 
 def test_db_only_strong_bit_is_not_endorsed(env):

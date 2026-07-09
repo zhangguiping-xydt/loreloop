@@ -73,6 +73,38 @@ def test_report_rejects_forged_trace_without_chain_record(workdir):
     assert "trace file alone is not acceptance evidence" in report
 
 
+def test_report_ignores_checks_recorded_before_completion(workdir):
+    # M1 attack: the run id is visible in the trace while the agent still
+    # works, so it could pre-plant a passing check before the delegation
+    # completes. Checks count only when they postdate the completion record.
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    record_check(chain, run.run_id, "planted before completion", passed=True)
+    endorse_run(chain, run.run_id)
+
+    report = render_report(run, chain)
+    assert "Verdict: NOT ACCEPTED" in report
+    assert "No acceptance checks were recorded" in report
+
+
+def test_report_rejects_duplicate_completion_records(workdir):
+    # M1: two completion records for one run id would let later "evidence"
+    # attach to an earlier delegation. Only exactly-one-completion accepts,
+    # and the first record pins the metadata.
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    endorse_run(chain, run.run_id, task="first completion")
+    record_check(chain, run.run_id, "ok", passed=True)
+    endorse_run(chain, run.run_id, task="second completion")
+
+    report = render_report(run, chain)
+    assert "Verdict: NOT ACCEPTED" in report
+    assert "cannot be attributed to a single delegation" in report
+    assert "Task: first completion" in report
+
+
 def test_report_prefers_chain_metadata_over_trace(workdir):
     # The trace's task line is agent-writable; the chain record wins.
     trace = write_trace(workdir)
@@ -170,9 +202,9 @@ def test_cli_invalid_curation_transition_exits_cleanly(workdir, capsys):
     with KnowledgeStore(db) as store:
         store.add(entry)
 
-    assert main(["knowledge", "approve", entry.id[:8]]) == 0
+    assert main(["knowledge", "reject", entry.id[:8]]) == 0
     capsys.readouterr()
-    assert main(["knowledge", "approve", entry.id[:8]]) == 2
+    assert main(["knowledge", "reject", entry.id[:8]]) == 2
     err = capsys.readouterr().err
     assert "invalid curation transition" in err
     assert "Traceback" not in err

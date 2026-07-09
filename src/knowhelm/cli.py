@@ -282,6 +282,14 @@ def cmd_harvest(args: argparse.Namespace) -> int:
               f"this run — check they still hold, supersede if not:")
         for entry in result.review:
             print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})")
+    if result.demoted:
+        print(f"  {len(result.demoted)} strong entr"
+              f"{'y was' if len(result.demoted) == 1 else 'ies were'} re-anchored and "
+              f"lost chain endorsement — they inject as reference until you "
+              f"re-approve (`knowhelm knowledge approve`):", file=sys.stderr)
+        for entry in result.demoted:
+            print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})",
+                  file=sys.stderr)
     return 0
 
 
