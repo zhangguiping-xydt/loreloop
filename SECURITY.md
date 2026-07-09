@@ -15,7 +15,14 @@ boundary, knowhelm defends against:
   to the key outside the project tree, so deleting trailing records is
   detected too. Appending re-verifies the whole chain first and refuses to
   extend a tampered or truncated one — a later legitimate append can never
-  build on a truncated prefix and move the head commitment past the damage. Observations are content-addressed artifacts (SHA-256-named,
+  build on a truncated prefix and move the head commitment past the damage.
+  A head commitment that is missing or lags the chain (a crash between the
+  chain append and the head commit) is healed on the next verification:
+  every record carries a valid HMAC from the out-of-tree key, so re-pinning
+  the signed tail endorses nothing an agent could have written. The
+  residual window — records appended in the instant before such a crash
+  are unpinned until the next knowhelm command re-pins them — requires the
+  crash itself and closes at the very next verification. Observations are content-addressed artifacts (SHA-256-named,
   re-hashed on load and cross-checked against the url/snapshot pin recorded
   on the chain; an artifact-bearing check without that pin is itself an
   integrity failure). Run traces under `.knowhelm/runs/` are display

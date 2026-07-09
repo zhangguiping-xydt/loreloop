@@ -161,10 +161,51 @@ def test_head_commitment_lives_outside_project_tree(chain, tmp_path):
     assert not head.is_relative_to(tmp_path)
 
 
-def test_missing_head_commitment_is_tolerated_for_preupgrade_chains(chain, tmp_path):
-    chain.append("check_passed", {})
-    key_path_for(tmp_path).with_suffix(".head").unlink()
+def test_verify_heals_missing_head_commitment(chain, tmp_path):
+    # A missing head (crash between the chain append and the head commit)
+    # leaves the tail without truncation protection. verify() re-pins it:
+    # every record carries a valid HMAC from the out-of-tree key, so healing
+    # endorses nothing the agent could have written — and from the next
+    # command on, truncation is detected again.
+    rec = chain.append("check_passed", {})
+    head_path = key_path_for(tmp_path).with_suffix(".head")
+    head_path.unlink()
+
     assert len(chain.verify()) == 1
+    assert json.loads(head_path.read_text()) == {
+        "index": rec.index, "chain_hash": rec.chain_hash,
+    }
+
+
+def test_verify_heals_lagging_head_and_rearms_truncation_detection(chain, tmp_path):
+    # Round-6 H1: a head left behind by a crash pins only an old record, so
+    # the unpinned suffix could be truncated silently. verify() advances the
+    # head to the signed tail; after that, deleting the tail is detected.
+    old = chain.append("check_passed", {"check": "pinned"})
+    latest = chain.append("check_failed", {"check": "the one the agent wants gone"})
+    head_path = key_path_for(tmp_path).with_suffix(".head")
+    head_path.write_text(json.dumps({"index": old.index, "chain_hash": old.chain_hash}))
+
+    chain.verify()
+    assert json.loads(head_path.read_text()) == {
+        "index": latest.index, "chain_hash": latest.chain_hash,
+    }
+    _rewrite(tmp_path, lambda ls: ls.pop())
+    with pytest.raises(ChainVerificationError, match="truncated"):
+        chain.verify()
+
+
+def test_verify_does_not_heal_a_truncated_chain(chain, tmp_path):
+    # Healing must never bless damage: when the head pins a record the chain
+    # no longer contains, verify raises instead of re-committing.
+    chain.append("check_passed", {})
+    buried = chain.append("check_failed", {})
+    _rewrite(tmp_path, lambda ls: ls.pop())
+
+    with pytest.raises(ChainVerificationError, match="truncated"):
+        chain.verify()
+    head = json.loads(key_path_for(tmp_path).with_suffix(".head").read_text())
+    assert head == {"index": buried.index, "chain_hash": buried.chain_hash}
 
 
 def test_key_is_per_project(tmp_path):

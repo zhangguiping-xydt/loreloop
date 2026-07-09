@@ -124,7 +124,29 @@ class EvidenceChain:
 
     def verify(self) -> list[EvidenceRecord]:
         """Return all records; raise ChainVerificationError on any tampering."""
-        return self._verify_records(self._read())
+        records = self._verify_records(self._read())
+        if records and self._head_lags(records):
+            # Heal a missing or lagging head: it arises from a crash between
+            # the chain append and the head commit, and until healed the
+            # unpinned tail records have no truncation protection. Advancing
+            # the head only endorses records that carry a valid HMAC from the
+            # out-of-tree key — records only the key holder could have
+            # written — so healing grants the agent nothing. Under the append
+            # lock, and re-read there: a stale snapshot must never rewind the
+            # head a concurrent append just committed.
+            lock_path = self._path.with_suffix(".lock")
+            with lock_path.open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                records = self._verify_records(self._read())
+                if records and self._head_lags(records):
+                    self._commit_head(records[-1])
+        return records
+
+    def _head_lags(self, records: list[EvidenceRecord]) -> bool:
+        if not self._head_path.exists():
+            return True
+        head = json.loads(self._head_path.read_text(encoding="utf-8"))
+        return head["index"] < records[-1].index
 
     def _verify_records(self, records: list[EvidenceRecord]) -> list[EvidenceRecord]:
         prev_hash = _GENESIS
