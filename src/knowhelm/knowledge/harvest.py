@@ -215,16 +215,21 @@ def _prospective_minted(store: KnowledgeStore, entry: Entry) -> Entry:
 
 
 def _persist_minted(store: KnowledgeStore, entry: Entry, run_id: str, now: datetime) -> None:
-    """Write a prospective minted row, AFTER its digest went on the chain."""
-    existing = store.get(entry.id)
-    if existing is None:
+    """Write a prospective minted row, AFTER its digest went on the chain.
+    All fields land in one atomic UPDATE: the chain endorsed the digest of the
+    complete row, so a partially-written one must be impossible."""
+    if store.get(entry.id) is None:
         store.add(entry)
         return
-    store.set_verification(entry.id, Verification.VERIFIED, run_id, now)
-    if existing.source.snapshot_ref != entry.source.snapshot_ref:
-        store.set_snapshot_ref(entry.id, entry.source.snapshot_ref, now)
-    if (existing.title, existing.kind) != (entry.title, entry.kind):
-        store.set_title_kind(entry.id, entry.title, entry.kind, now)
+    store.set_verification(
+        entry.id,
+        Verification.VERIFIED,
+        run_id,
+        now,
+        snapshot_ref=entry.source.snapshot_ref,
+        title=entry.title,
+        kind=entry.kind,
+    )
 
 
 def _store_reanchored(

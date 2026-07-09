@@ -123,6 +123,21 @@ def chain_superseded_ids(records: list[EvidenceRecord]) -> set[str]:
     }
 
 
+def chain_rejected_ids(records: list[EvidenceRecord]) -> set[str]:
+    """Entries whose LATEST chain-recorded curation is rejected. Rejection is
+    a human act appended by ``curate``; the DB curation column is a cache in
+    the agent-writable tree. Replaying the chain closes the resurrection
+    direction: flipping a rejected row back to draft in SQLite must not put
+    the entry back into injection. (A rejected entry can return legitimately:
+    the operator's reject -> draft transition appends its own curation event,
+    which stops being 'rejected' here.)"""
+    latest: dict[str, str] = {}
+    for rec in records:
+        if rec.event == CURATION_EVENT and rec.payload.get("entry_id"):
+            latest[rec.payload["entry_id"]] = rec.payload.get("curation")
+    return {eid for eid, cur in latest.items() if cur == Curation.REJECTED.value}
+
+
 def curate(
     store: KnowledgeStore,
     chain: EvidenceChain,

@@ -392,6 +392,66 @@ def test_cli_run_ignores_deleted_supersede_link(workdir, monkeypatch, capsys):
     assert "[superseded]" in line
 
 
+def test_cli_run_ignores_db_resurrection_of_rejected_entry(workdir, monkeypatch, capsys):
+    # Round-5 H2: a verified entry keeps its digest endorsement after the
+    # human rejects it (rejection is curation, not contradiction). If the
+    # agent flips the DB curation back to draft, the digest check alone would
+    # re-inject it as strong — the chain-rejected replay must keep it out.
+    from datetime import datetime, timezone
+
+    import knowhelm.cli as cli
+    from knowhelm.knowledge.endorsement import entry_digest
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    class FakeAgent:
+        def __init__(self):
+            self.prompts = []
+
+        def run(self, prompt):
+            self.prompts.append(prompt)
+            return "done"
+
+    entry = Entry(
+        title="Upload endpoint contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.WEB, locator="http://app.local/upload"),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+    chain = EvidenceChain.for_workdir(workdir)
+    chain.append(
+        "entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)}
+    )
+    assert main(["knowledge", "reject", entry.id[:8]]) == 0
+    capsys.readouterr()
+
+    now = datetime.now(timezone.utc).isoformat()
+    with KnowledgeStore(db) as store:
+        store._conn.execute(
+            "UPDATE entries SET curation = 'draft', verification = 'verified',"
+            " verified_at = ?, verified_by = 'run-x' WHERE id = ?",
+            (now, entry.id),
+        )
+        store._conn.commit()
+
+    agent = FakeAgent()
+    monkeypatch.setattr(cli, "_agent", lambda name: agent)
+    assert main(["run", "fix the upload endpoint"]) == 0
+    assert "POST /upload returns 201." not in agent.prompts[0]
+
+    # the list view stays honest too
+    assert main(["knowledge", "list"]) == 0
+    line = next(
+        li for li in capsys.readouterr().out.splitlines() if entry.id[:8] in li
+    )
+    assert "[rejected]" in line
+    assert "[strong]" not in line
+
+
 def test_cli_knowledge_list_flags_unendorsed_strong_as_ref(workdir, capsys):
     # Round-4 F1: the DB is agent-writable, so a strong bit UPDATEd straight
     # into it must not render as [strong] in the list view either — list

@@ -150,25 +150,37 @@ class KnowledgeStore:
         return self._require(entry_id)
 
     def set_verification(
-        self, entry_id: str, new: Verification, verified_by: str, now: datetime
+        self,
+        entry_id: str,
+        new: Verification,
+        verified_by: str,
+        now: datetime,
+        *,
+        snapshot_ref: str | None = None,
+        title: str | None = None,
+        kind: Kind | None = None,
     ) -> Entry:
+        """Record a verification outcome. The optional fields land in the SAME
+        statement: a verify or mint that also re-anchors/retitles must never
+        leave a half-written row — a crash between two UPDATEs would leave
+        verified trust on content whose digest the chain never endorsed."""
         self._require(entry_id)
         if new is Verification.UNVERIFIED:
             raise InvalidTransition("cannot transition back to unverified")
+        sets = ["verification = ?", "verified_at = ?", "verified_by = ?", "updated_at = ?"]
+        params: list[str] = [new.value, _iso(now), verified_by, _iso(now)]
+        for column, value in (
+            ("snapshot_ref", snapshot_ref),
+            ("title", title),
+            ("kind", kind.value if kind else None),
+        ):
+            if value is not None:
+                sets.append(f"{column} = ?")
+                params.append(value)
         with self._conn:
             self._conn.execute(
-                "UPDATE entries SET verification = ?, verified_at = ?, verified_by = ?,"
-                " updated_at = ? WHERE id = ?",
-                (new.value, _iso(now), verified_by, _iso(now), entry_id),
-            )
-        return self._require(entry_id)
-
-    def set_title_kind(self, entry_id: str, title: str, kind: Kind, now: datetime) -> Entry:
-        self._require(entry_id)
-        with self._conn:
-            self._conn.execute(
-                "UPDATE entries SET title = ?, kind = ?, updated_at = ? WHERE id = ?",
-                (title, kind.value, _iso(now), entry_id),
+                f"UPDATE entries SET {', '.join(sets)} WHERE id = ?",
+                (*params, entry_id),
             )
         return self._require(entry_id)
 

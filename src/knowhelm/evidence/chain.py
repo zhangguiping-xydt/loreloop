@@ -96,7 +96,12 @@ class EvidenceChain:
         lock_path = self._path.with_suffix(".lock")
         with lock_path.open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            records = self._read()
+            # Verify BEFORE extending: append is the only writer of the head
+            # commitment. Extending whatever is on disk unchecked would let
+            # the next legitimate append build on a truncated prefix and then
+            # overwrite the head — an honest operation blessing the tampering.
+            # Refusing here leaves the old head in place as standing evidence.
+            records = self._verify_records(self._read())
             prev_hash = records[-1].chain_hash if records else _GENESIS
             index = len(records)
             ts = datetime.now(timezone.utc).isoformat()
@@ -119,7 +124,9 @@ class EvidenceChain:
 
     def verify(self) -> list[EvidenceRecord]:
         """Return all records; raise ChainVerificationError on any tampering."""
-        records = self._read()
+        return self._verify_records(self._read())
+
+    def _verify_records(self, records: list[EvidenceRecord]) -> list[EvidenceRecord]:
         prev_hash = _GENESIS
         for i, rec in enumerate(records):
             if rec.index != i:

@@ -75,6 +75,30 @@ def test_verification_requires_actor_and_forbids_rollback(store):
         store.set_verification(e.id, Verification.UNVERIFIED, "run-43", NOW)
 
 
+def test_set_verification_writes_companion_fields_in_one_statement(store):
+    # Round-5 M3: a verify/mint that also re-anchors or retitles must land as
+    # ONE row state — the chain endorsed the digest of the complete row, so a
+    # crash between split UPDATEs would leave verified trust on content the
+    # chain never endorsed.
+    e = make_entry()
+    store.add(e)
+    statements = []
+    store._conn.set_trace_callback(
+        lambda sql: statements.append(sql) if sql.lstrip().startswith("UPDATE") else None
+    )
+    updated = store.set_verification(
+        e.id, Verification.VERIFIED, "run-42", NOW,
+        snapshot_ref="def456", title="Canonical title", kind=Kind.ACCEPTANCE,
+    )
+    store._conn.set_trace_callback(None)
+
+    assert len(statements) == 1
+    assert updated.trust.verification is Verification.VERIFIED
+    assert updated.source.snapshot_ref == "def456"
+    assert updated.title == "Canonical title"
+    assert updated.kind is Kind.ACCEPTANCE
+
+
 def test_strong_evidence_grading():
     draft = make_entry()
     assert not draft.is_strong_evidence()

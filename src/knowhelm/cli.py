@@ -14,6 +14,7 @@ from .evidence.chain import EvidenceChain
 from .knowledge.code_reverse import reverse_code
 from .knowledge.endorsement import (
     SUPERSEDE_EVENT,
+    chain_rejected_ids,
     chain_superseded_ids,
     curate,
     unendorsed_strong_ids,
@@ -164,12 +165,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     records = chain.verify()
     with _store(workdir) as store:
         entries = store.list_active()
-    # Supersession by chain replay, not DB links: deleting a row in the links
-    # table (inside the agent-writable tree) must not resurrect a retired
-    # entry. list_active() already applies DB links as a cache; the chain
-    # filter here is the authoritative pass.
-    superseded = chain_superseded_ids(records)
-    entries = [e for e in entries if e.id not in superseded]
+    # Retirement by chain replay, not DB state: deleting a links row must not
+    # resurrect a superseded entry, and flipping a rejected row's curation
+    # back in SQLite must not re-inject it (its verification endorsement
+    # survives rejection — rejection is curation, not contradiction — so the
+    # digest check alone would let it back in as strong). list_active()
+    # applies the DB as a cache; the chain filter is the authoritative pass.
+    retired = chain_superseded_ids(records) | chain_rejected_ids(records)
+    entries = [e for e in entries if e.id not in retired]
     # The DB sits in the agent-writable tree; its strong bits count only when
     # the chain endorses them FOR THE CURRENT CONTENT. Anything strong-in-DB
     # but unendorsed (no event, or content changed since endorsement) is
@@ -332,11 +335,13 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
 
     entries = store.list()
     # Chain replay, not DB state: a deleted links row must not un-supersede
-    # an entry, and a strong bit UPDATEd straight into the DB must not show
-    # as [strong] — the list view informs curation decisions, so it applies
-    # the same endorsement rules as injection.
+    # an entry, a strong bit UPDATEd straight into the DB must not show as
+    # [strong], and a chain-rejected entry stays rejected even if its DB
+    # curation was flipped back — the list view informs curation decisions,
+    # so it applies the same rules as injection.
     records = EvidenceChain.for_workdir(workdir).verify()
     superseded = chain_superseded_ids(records)
+    rejected = chain_rejected_ids(records)
     unendorsed = unendorsed_strong_ids(entries, records)
     drifted = drifted_code_entry_ids(workdir, entries) if (workdir / ".git").exists() else set()
     if args.stale:
@@ -345,10 +350,13 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
             print("no stale entries: every code anchor matches the current tree")
             return 0
     for e in entries:
-        strong = "strong" if e.is_strong_evidence() and e.id not in unendorsed else "ref"
+        demoted = e.id in unendorsed or e.id in rejected
+        strong = "strong" if e.is_strong_evidence() and not demoted else "ref"
         flags = ""
         if e.id in unendorsed:
             flags += "  [unendorsed: strong bit has no chain endorsement]"
+        if e.id in rejected:
+            flags += "  [rejected]"
         if e.id in superseded:
             flags += "  [superseded]"
         if e.id in drifted:

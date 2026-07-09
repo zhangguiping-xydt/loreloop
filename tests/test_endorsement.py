@@ -9,6 +9,7 @@ import pytest
 
 from knowhelm.evidence.chain import EvidenceChain
 from knowhelm.knowledge.endorsement import (
+    chain_rejected_ids,
     chain_superseded_ids,
     curate,
     entry_digest,
@@ -247,3 +248,46 @@ def test_chain_superseded_ids_replays_supersede_events(env):
     chain.append("entry_superseded", {"new_id": "n2", "old_id": "o2"})
 
     assert chain_superseded_ids(chain.verify()) == {"o1", "o2"}
+
+
+def test_chain_rejected_ids_replays_latest_curation(env):
+    # Round-5 H2 (resurrection direction): rejection lives on the chain; the
+    # DB curation column is a cache. The latest curation event decides.
+    store, chain = env
+    entry = store.add(make_entry())
+    other = store.add(make_entry(title="Other", content="Another claim."))
+
+    curate(store, chain, entry.id, Curation.REJECTED, NOW)
+    curate(store, chain, other.id, Curation.APPROVED, NOW)
+    assert chain_rejected_ids(chain.verify()) == {entry.id}
+
+    # the legitimate return path appends its own curation event
+    curate(store, chain, entry.id, Curation.DRAFT, NOW)
+    assert chain_rejected_ids(chain.verify()) == set()
+
+
+def test_rejection_survives_db_curation_flip(env):
+    # The attack: entry is verified (endorsed digest on chain), the human
+    # rejects it, the agent flips the DB curation back to draft. The digest
+    # endorsement survives rejection — rejection is curation, not
+    # contradiction — so only the chain-rejected replay keeps it out.
+    store, chain = env
+    entry = store.add(make_entry())
+    chain.append(
+        "entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)}
+    )
+    curate(store, chain, entry.id, Curation.REJECTED, NOW)
+
+    store._conn.execute(
+        "UPDATE entries SET curation = 'draft', verification = 'verified',"
+        " verified_at = ?, verified_by = 'run-x' WHERE id = ?",
+        (NOW.isoformat(), entry.id),
+    )
+    store._conn.commit()
+    resurrected = store.get(entry.id)
+
+    assert resurrected.is_strong_evidence()
+    # digest check alone would let it back in as strong…
+    assert unendorsed_strong_ids([resurrected], chain.verify()) == set()
+    # …the chain-rejected set is what keeps it retired
+    assert chain_rejected_ids(chain.verify()) == {entry.id}

@@ -224,10 +224,16 @@ def verify_entry(
             "verified_via": "browser",
         },
     )
-    new_status = Verification.VERIFIED if passed else Verification.CONTRADICTED
-    store.set_verification(entry.id, new_status, run_id, now)
-    if passed and entry.source.snapshot_ref != obs.snapshot_hash:
-        store.set_snapshot_ref(entry.id, obs.snapshot_hash, now)
+    # One atomic UPDATE: verification and re-anchor together. Split writes
+    # would leave a crash window holding VERIFIED on the old anchor — a row
+    # whose digest the chain never endorsed.
+    store.set_verification(
+        entry.id,
+        Verification.VERIFIED if passed else Verification.CONTRADICTED,
+        run_id,
+        now,
+        snapshot_ref=obs.snapshot_hash if passed else None,
+    )
     return EntryVerifyResult(passed=passed, reason=reason, drifted=drifted, record=record)
 
 

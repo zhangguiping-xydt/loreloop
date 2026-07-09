@@ -120,6 +120,32 @@ def test_detects_tail_truncation(chain, tmp_path):
         chain.verify()
 
 
+def test_append_refuses_to_extend_truncated_chain(chain, tmp_path):
+    # Round-5 H1: append is the only writer of the head commitment. If it
+    # extended whatever is on disk unchecked, the next LEGITIMATE append after
+    # a tail truncation would sign records on the truncated prefix and move
+    # the head past it — an honest operation laundering the tampering.
+    chain.append("check_passed", {"check": "fine"})
+    buried = chain.append("check_failed", {"check": "the one the agent wants gone"})
+    _rewrite(tmp_path, lambda ls: ls.pop())
+
+    with pytest.raises(ChainVerificationError, match="truncated"):
+        chain.append("check_passed", {"check": "laundering attempt"})
+
+    # the head still pins the buried record, so verification keeps failing
+    head = json.loads(key_path_for(tmp_path).with_suffix(".head").read_text())
+    assert head == {"index": buried.index, "chain_hash": buried.chain_hash}
+    with pytest.raises(ChainVerificationError, match="truncated"):
+        chain.verify()
+
+
+def test_append_refuses_to_extend_edited_chain(chain, tmp_path):
+    chain.append("check_passed", {"check": "original"})
+    _rewrite(tmp_path, lambda ls: ls[0]["payload"].update({"check": "forged"}))
+    with pytest.raises(ChainVerificationError, match="modified"):
+        chain.append("check_passed", {"check": "built on a forgery"})
+
+
 def test_detects_full_chain_replacement(chain, tmp_path):
     chain.append("check_failed", {"check": "inconvenient"})
     (tmp_path / ".knowhelm/evidence.jsonl").unlink()

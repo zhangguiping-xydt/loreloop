@@ -13,7 +13,9 @@ boundary, knowhelm defends against:
 - **After-the-fact tampering with evidence.** The evidence chain is
   HMAC-SHA256 linked, and the latest (index, chain hash) is committed next
   to the key outside the project tree, so deleting trailing records is
-  detected too. Observations are content-addressed artifacts (SHA-256-named,
+  detected too. Appending re-verifies the whole chain first and refuses to
+  extend a tampered or truncated one — a later legitimate append can never
+  build on a truncated prefix and move the head commitment past the damage. Observations are content-addressed artifacts (SHA-256-named,
   re-hashed on load and cross-checked against the url/snapshot pin recorded
   on the chain; an artifact-bearing check without that pin is itself an
   integrity failure). Run traces under `.knowhelm/runs/` are display
@@ -44,9 +46,15 @@ boundary, knowhelm defends against:
   steered via comment pollution), the entry demotes, and harvest tells the
   operator to re-approve. Minting onto an existing row forces the row's
   title and kind to the values derived from the check itself, so the minted
-  digest never signs fields the agent pre-planted. Supersession is likewise
-  replayed from the chain: deleting the DB links row does not resurrect a
-  retired entry. Passed web verifications always anchor the entry to the
+  digest never signs fields the agent pre-planted, and all fields of a
+  verify/mint write-back land in a single atomic UPDATE — no crash window
+  holds verified trust on a row state the chain never endorsed.
+  Supersession and rejection are likewise replayed from the chain: deleting
+  the DB links row does not resurrect a retired entry, and flipping a
+  rejected row's curation column back in SQLite does not re-inject it — an
+  entry rejected on the chain stays out until the operator's own
+  reject → draft transition appends a new curation event. Passed web
+  verifications always anchor the entry to the
   observed page hash — an anchor-less entry counts as drifted, never as
   fresh.
 - **Accidental credential capture.** knowhelm never automates logins: at a
