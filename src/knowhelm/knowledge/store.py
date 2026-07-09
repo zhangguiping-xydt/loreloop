@@ -84,11 +84,14 @@ class KnowledgeStore:
     def add(self, entry: Entry) -> Entry:
         """Insert the entry, or return the existing exact duplicate unchanged.
         Re-reversing unchanged truths (e.g. every harvest of a hot file) must
-        not multiply them."""
-        existing = self.find_duplicate(entry)
-        if existing is not None:
-            return existing
+        not multiply them. BEGIN IMMEDIATE makes check-then-insert atomic
+        across processes: two concurrent adds of the same fact must not both
+        pass the duplicate check and insert twins."""
         with self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            existing = self.find_duplicate(entry)
+            if existing is not None:
+                return existing
             self._conn.execute(
                 "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (

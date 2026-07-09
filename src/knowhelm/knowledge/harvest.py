@@ -189,9 +189,11 @@ def _mint_verified_checks(
     passed, run_id: str, now: datetime, artifacts: ArtifactStore | None
 ) -> tuple[list[Entry], list[str]]:
     """Mint born-verified entries from browser checks. Born-verified is only
-    honest when the observation material exists and matches its hash: a check
-    without a loadable artifact cannot be re-audited, so it never mints —
-    it is returned as unauditable instead of silently skipped."""
+    honest when the observation material exists, matches its hash AND matches
+    what the chain says was observed (url + page snapshot): a check whose
+    artifact is missing, tampered or swapped for a different observation
+    cannot be re-audited, so it never mints — it is returned as unauditable
+    instead of silently skipped."""
     minted: list[Entry] = []
     unauditable: list[str] = []
     seen: set[tuple[str, str]] = set()
@@ -204,7 +206,10 @@ def _mint_verified_checks(
         if not sha or artifacts is None:
             unauditable.append(check)
             continue
-        artifacts.load(sha)
+        data = artifacts.load(sha)
+        if data.get("url") != url or data.get("snapshot_hash") != payload.get("page_snapshot"):
+            unauditable.append(check)
+            continue
         if (check, url) in seen:
             continue
         seen.add((check, url))

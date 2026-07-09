@@ -128,6 +128,15 @@ def test_drift_detection_treats_unknown_anchor_as_drifted(repo):
     assert drifted_code_entry_ids(repo, [ghost]) == {ghost.id}
 
 
+def test_drift_detection_treats_missing_anchor_as_drifted(repo):
+    # a code entry with no snapshot_ref can never prove freshness
+    anchorless = Entry(
+        title="claim about app.py", content="app.py does things.", kind=Kind.BEHAVIOR,
+        source=Source(channel=Channel.CODE, locator="app.py"),
+    )
+    assert drifted_code_entry_ids(repo, [anchorless]) == {anchorless.id}
+
+
 def test_json_extraction_tolerates_surrounding_prose():
     assertions = [RawAssertion(claim="a", title="t", file="f")]
     out = 'Here you go:\n[{"id": 0, "kind": "constraint"}]\nDone.'

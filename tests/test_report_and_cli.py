@@ -88,10 +88,135 @@ def test_cli_knowledge_curation_flow(workdir, capsys):
 
     assert main(["knowledge", "list"]) == 0
     assert "[ref   ]" in capsys.readouterr().out
-    assert main(["knowledge", "approve", entry.id]) == 0
+    assert main(["knowledge", "approve", entry.id[:8]]) == 0
     capsys.readouterr()
     assert main(["knowledge", "list"]) == 0
     assert "[strong]" in capsys.readouterr().out
+
+    # the approval is endorsed on the evidence chain, not just the DB
+    records = EvidenceChain.for_workdir(workdir).verify()
+    assert records[-1].event == "curation_changed"
+    assert records[-1].payload == {"entry_id": entry.id, "curation": "approved"}
+
+
+def test_cli_curation_rejects_missing_or_ambiguous_prefix(workdir, capsys):
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    (workdir / ".knowhelm").mkdir()
+    KnowledgeStore(workdir / ".knowhelm/knowledge.db").close()
+
+    assert main(["knowledge", "approve", "deadbeef"]) == 2
+    assert "no entry matches" in capsys.readouterr().err
+    assert main(["knowledge", "approve"]) == 2
+    assert EvidenceChain.for_workdir(workdir).verify() == []
+
+
+def test_cli_invalid_curation_transition_exits_cleanly(workdir, capsys):
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    entry = Entry(
+        title="T", content="C", kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@abc"),
+    )
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+
+    assert main(["knowledge", "approve", entry.id[:8]]) == 0
+    capsys.readouterr()
+    assert main(["knowledge", "approve", entry.id[:8]]) == 2
+    err = capsys.readouterr().err
+    assert "invalid curation transition" in err
+    assert "Traceback" not in err
+    # no second endorsement for the refused transition
+    records = EvidenceChain.for_workdir(workdir).verify()
+    assert len([r for r in records if r.event == "curation_changed"]) == 1
+
+
+def test_cli_report_and_harvest_reject_path_traversal_run_ids(workdir, capsys):
+    assert main(["report", "../../../etc/passwd"]) == 2
+    assert "invalid run id" in capsys.readouterr().err
+    assert main(["harvest", "../escape"]) == 2
+    assert "invalid run id" in capsys.readouterr().err
+
+
+def test_cli_run_demotes_unendorsed_strong_entries(workdir, monkeypatch, capsys):
+    from datetime import datetime, timezone
+
+    import knowhelm.cli as cli
+    from knowhelm.knowledge.model import (
+        Channel, Entry, Kind, Source, Trust, Verification,
+    )
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    class FakeAgent:
+        def __init__(self):
+            self.prompts = []
+
+        def run(self, prompt):
+            self.prompts.append(prompt)
+            return "done"
+
+    now = datetime.now(timezone.utc)
+    laundered = Entry(
+        title="Upload endpoint contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.WEB, locator="http://app.local/upload"),
+        trust=Trust(verification=Verification.VERIFIED, verified_at=now, verified_by="forged"),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(laundered)
+
+    agent = FakeAgent()
+    monkeypatch.setattr(cli, "_agent", lambda name: agent)
+    assert main(["run", "fix the upload endpoint"]) == 0
+
+    err = capsys.readouterr().err
+    assert "without evidence-chain endorsement" in err
+    assert laundered.id[:8] in err
+    prompt = agent.prompts[0]
+    assert "Established facts" not in prompt
+    assert "Unverified references" in prompt
+
+
+def test_cli_run_keeps_chain_endorsed_strong_entries(workdir, monkeypatch, capsys):
+    import knowhelm.cli as cli
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    class FakeAgent:
+        def __init__(self):
+            self.prompts = []
+
+        def run(self, prompt):
+            self.prompts.append(prompt)
+            return "done"
+
+    entry = Entry(
+        title="Upload endpoint contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@abc"),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+
+    assert main(["knowledge", "approve", entry.id[:8]]) == 0
+    capsys.readouterr()
+
+    agent = FakeAgent()
+    monkeypatch.setattr(cli, "_agent", lambda name: agent)
+    assert main(["run", "fix the upload endpoint"]) == 0
+
+    assert "without evidence-chain endorsement" not in capsys.readouterr().err
+    assert "Established facts" in agent.prompts[0]
 
 
 def test_report_flags_missing_and_tampered_artifacts(workdir):
@@ -122,6 +247,59 @@ def test_report_flags_missing_and_tampered_artifacts(workdir):
     assert "file is missing" in report
 
 
+def test_report_flags_artifact_swapped_for_a_different_observation(workdir):
+    from knowhelm.evidence.artifacts import ArtifactStore
+    from knowhelm.webexplore.browser import Observation
+
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    real = Observation(url="http://app.local/upload", title="Upload", text="Max 50MB.")
+    sha, _ = artifacts.save_observation(real)
+    chain.append("check_passed", {
+        "run_id": run.run_id, "check": "page ok", "artifact": sha,
+        "url": real.url, "page_snapshot": real.snapshot_hash,
+    })
+    assert "Verdict: ACCEPTED" in render_report(run, chain, artifacts)
+
+    # swap: another hash-valid artifact of a DIFFERENT page replaces the ref
+    other = Observation(url="http://evil.local/", title="Other", text="whatever")
+    other_sha, _ = artifacts.save_observation(other)
+    swapped = EvidenceChain.for_workdir(workdir)
+    swapped.append("check_passed", {
+        "run_id": run.run_id, "check": "swapped", "artifact": other_sha,
+        "url": real.url, "page_snapshot": real.snapshot_hash,
+    })
+    report = render_report(run, swapped, artifacts)
+    assert "Verdict: NOT ACCEPTED" in report
+    assert "does not match the chain record" in report
+
+
+def test_report_notes_passed_checks_without_artifacts(workdir):
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    rec = record_check(chain, run.run_id, "looks right on my screen", passed=True)
+    assert rec.payload["judge"] == "operator"
+    report = render_report(run, chain)
+    assert "operator" in report
+    assert "cannot be re-audited" in report
+
+
+def test_report_escapes_markdown_table_breakers(workdir):
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    record_check(
+        chain, run.run_id, "cell | breaker", passed=False, detail="line1\nline2 | x"
+    )
+    report = render_report(run, chain)
+    row = next(line for line in report.splitlines() if "cell" in line and line.startswith("|"))
+    assert "cell \\| breaker" in row
+    assert "\n" not in row
+
+
 def test_cli_supersede_links_and_hides_old_entry(workdir, capsys):
     from knowhelm.knowledge.model import Channel, Entry, Kind, Source
     from knowhelm.knowledge.store import KnowledgeStore
@@ -142,6 +320,11 @@ def test_cli_supersede_links_and_hides_old_entry(workdir, capsys):
 
     assert main(["knowledge", "supersede", new.id[:8], old.id[:8]]) == 0
     assert "superseded: Old upload contract" in capsys.readouterr().out
+
+    # supersession silences an entry — endorsed on the chain like curation
+    records = EvidenceChain.for_workdir(workdir).verify()
+    assert records[-1].event == "entry_superseded"
+    assert records[-1].payload == {"new_id": new.id, "old_id": old.id}
 
     assert main(["knowledge", "list"]) == 0
     out = capsys.readouterr().out

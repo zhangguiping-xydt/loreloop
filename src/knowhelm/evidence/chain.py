@@ -15,6 +15,7 @@ honest-workstation threat model is enough for acceptance evidence.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import hmac
 import json
@@ -72,6 +73,12 @@ class EvidenceChain:
     def __init__(self, chain_path: Path, key_path: Path) -> None:
         self._path = chain_path
         self._key = _load_or_create_key(key_path)
+        # Head commitment lives NEXT TO THE KEY, outside the agent-writable
+        # tree. A hash chain alone cannot detect tail truncation: every prefix
+        # of a valid chain is itself a valid chain. Committing the latest
+        # (index, chain_hash) outside the tree closes that hole — deleting the
+        # trailing check_failed record now breaks verification.
+        self._head_path = key_path.with_suffix(".head")
         self._path.parent.mkdir(parents=True, exist_ok=True)
 
     @classmethod
@@ -84,22 +91,30 @@ class EvidenceChain:
         return cls(base / "evidence.jsonl", expected)
 
     def append(self, event: str, payload: dict[str, Any]) -> EvidenceRecord:
-        records = self._read()
-        prev_hash = records[-1].chain_hash if records else _GENESIS
-        index = len(records)
-        ts = datetime.now(timezone.utc).isoformat()
-        chain_hash = _chain_hash(prev_hash, index, ts, event, payload)
-        record = EvidenceRecord(
-            index=index,
-            ts=ts,
-            event=event,
-            payload=payload,
-            prev_hash=prev_hash,
-            chain_hash=chain_hash,
-            signature=self._sign(chain_hash),
-        )
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record.__dict__, ensure_ascii=False, sort_keys=True) + "\n")
+        # Cross-process exclusive lock: read-then-append without it lets two
+        # writers mint the same index and fork the chain.
+        lock_path = self._path.with_suffix(".lock")
+        with lock_path.open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            records = self._read()
+            prev_hash = records[-1].chain_hash if records else _GENESIS
+            index = len(records)
+            ts = datetime.now(timezone.utc).isoformat()
+            chain_hash = _chain_hash(prev_hash, index, ts, event, payload)
+            record = EvidenceRecord(
+                index=index,
+                ts=ts,
+                event=event,
+                payload=payload,
+                prev_hash=prev_hash,
+                chain_hash=chain_hash,
+                signature=self._sign(chain_hash),
+            )
+            with self._path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record.__dict__, ensure_ascii=False, sort_keys=True) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            self._commit_head(record)
         return record
 
     def verify(self) -> list[EvidenceRecord]:
@@ -117,7 +132,35 @@ class EvidenceChain:
             if not hmac.compare_digest(self._sign(rec.chain_hash), rec.signature):
                 raise ChainVerificationError(i, "signature invalid")
             prev_hash = rec.chain_hash
+        self._check_head(records)
         return records
+
+    def _commit_head(self, record: EvidenceRecord) -> None:
+        head = {"index": record.index, "chain_hash": record.chain_hash}
+        tmp = self._head_path.with_suffix(".head.tmp")
+        tmp.write_text(json.dumps(head), encoding="utf-8")
+        os.replace(tmp, self._head_path)
+
+    def _check_head(self, records: list[EvidenceRecord]) -> None:
+        """Truncation check: every prefix of a valid chain is itself valid, so
+        hash-chain verification alone accepts a chain whose tail was deleted.
+        The out-of-tree head commitment pins the record the chain must still
+        contain. A missing commitment file is tolerated (pre-upgrade chains);
+        it appears on the next append."""
+        if not self._head_path.exists():
+            return
+        head = json.loads(self._head_path.read_text(encoding="utf-8"))
+        index, chain_hash = head["index"], head["chain_hash"]
+        if len(records) <= index:
+            raise ChainVerificationError(
+                index,
+                f"chain has {len(records)} records but the head commitment "
+                f"requires record {index} — the tail was truncated. (If you "
+                f"deliberately reset this project, also remove "
+                f"{self._head_path})",
+            )
+        if records[index].chain_hash != chain_hash:
+            raise ChainVerificationError(index, "record does not match the head commitment")
 
     def _read(self) -> list[EvidenceRecord]:
         if not self._path.exists():
@@ -157,6 +200,11 @@ def _load_or_create_key(key_path: Path) -> bytes:
     key_path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(key_path.parent, 0o700)
     key = secrets.token_bytes(32)
-    key_path.write_bytes(key)
-    os.chmod(key_path, 0o600)
+    try:
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        # Two processes raced to create the key; the winner's key is the key.
+        return key_path.read_bytes()
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(key)
     return key

@@ -11,12 +11,19 @@ boundary, knowhelm defends against:
   receives page content only inside explicit untrusted-data markers and is
   instructed to treat imperative text in pages as evidence, not commands.
 - **After-the-fact tampering with evidence.** The evidence chain is
-  HMAC-SHA256 linked; observations are content-addressed artifacts
-  (SHA-256-named, re-hashed on load). Editing a record or an artifact breaks
-  verification and degrades the acceptance verdict.
+  HMAC-SHA256 linked, and the latest (index, chain hash) is committed next
+  to the key outside the project tree, so deleting trailing records is
+  detected too. Observations are content-addressed artifacts (SHA-256-named,
+  re-hashed on load and cross-checked against the url/snapshot recorded on
+  the chain). Editing, truncating or swapping evidence breaks verification
+  and degrades the acceptance verdict.
 - **Trust laundering.** LLM-derived knowledge is born draft/unverified.
   Only human-written, machine-checked, chain-backed assertions are born
-  verified. Verification can never be rolled back to unverified.
+  verified. Verification can never be rolled back to unverified. The SQLite
+  store sits inside the agent-writable tree, so its trust columns are not
+  taken at face value: every approval, verification and supersession is also
+  endorsed on the evidence chain, and `knowhelm run` demotes any entry whose
+  strong status lacks chain endorsement to reference before injection.
 - **Accidental credential capture.** knowhelm never automates logins: at a
   login wall it either skips the page or hands the real browser window to
   the human. Observation artifacts may contain post-login page content, so
@@ -26,6 +33,24 @@ Explicitly **out of scope**: an attacker with write access to the
 workstation (they can replace the binary, the key, and the chain together),
 a malicious coding agent binary, and confidentiality of the local SQLite
 store beyond file permissions.
+
+## Known limitations (deliberate trade-offs)
+
+- **Injection trusts the last verification.** `knowhelm run` does not
+  re-open a browser to re-check strong web entries before injecting them;
+  live pages may have drifted since verification. Re-verification is an
+  explicit, human-initiated act (`knowhelm knowledge verify`) because a
+  silent per-run browser sweep would be slow, break offline use, and hit
+  live systems as a side effect. `run` prints a reminder when strong web
+  entries are injected.
+- **Page snapshot hashes observe a bounded window.** The snapshot hash
+  covers title, visible text (truncated at the observation limit) and form
+  structure — not links or the full DOM. Including navigation/ad noise
+  would flag drift on every page load; the bound is the same one the judge
+  actually reads, so what is hashed is what was judged.
+- **Operator-vouched checks carry no machine evidence.** `knowhelm check`
+  records the operator's word (labeled `judge: operator` on the chain).
+  Reports call these out, and harvest never mints knowledge from them.
 
 ## Key material
 

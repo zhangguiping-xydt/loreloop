@@ -128,6 +128,24 @@ def test_verify_entry_saves_artifact(env, tmp_path):
     assert artifacts.load(sha)["snapshot_hash"] == PAGE.snapshot_hash
 
 
+def test_verify_entry_chain_failure_leaves_store_untouched(env):
+    # chain first, store second: trust state must never exist without its
+    # chain-backed justification
+    store, chain = env
+    entry = make_web_entry(PAGE.snapshot_hash)
+    store.add(entry)
+    runner = FakeRunner('{"passed": true, "reason": "ok"}')
+
+    def broken_append(event, payload):
+        raise OSError("disk full")
+
+    chain.append = broken_append
+    with pytest.raises(OSError):
+        verify_entry(FakeBrowser(), runner, chain, store, entry, "run-9")
+
+    assert store.get(entry.id).trust.verification is Verification.UNVERIFIED
+
+
 def test_verify_entry_rejects_non_web_channel(env):
     store, chain = env
     entry = Entry(

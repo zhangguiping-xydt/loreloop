@@ -113,29 +113,48 @@ def render_report(
             result = "PASS" if rec.event == "check_passed" else "FAIL"
             judge = rec.payload.get("judge", "-")
             sha = rec.payload.get("artifact")
-            artifact = f"`{sha[:16]}`" if sha else "-"
+            artifact = f"`{sha[:16]}`" if sha else "none (operator vouched)"
             lines.append(
-                f"| {rec.payload.get('check', '?')} | {result} | {judge} "
+                f"| {_md(rec.payload.get('check', '?'))} | {result} | {_md(str(judge))} "
                 f"| `{rec.chain_hash[:16]}` | {artifact} |"
             )
         lines.append("")
+        vouched = [r for r in passed if not r.payload.get("artifact")]
+        if vouched:
+            lines += [
+                f"Note: {len(vouched)} passed check(s) carry no evidence artifact — "
+                "they rest on the operator's word alone and cannot be re-audited.",
+                "",
+            ]
         if broken_artifacts:
             lines += ["### Evidence integrity failures", ""]
             for sha, problem in broken_artifacts:
-                lines.append(f"- artifact `{sha[:16]}`: {problem}")
+                lines.append(f"- artifact `{sha[:16]}`: {_md(problem)}")
             lines.append("")
         if failed:
             lines += ["### Failure details", ""]
             for rec in failed:
                 detail = rec.payload.get("detail", "no detail recorded")
-                lines.append(f"- **{rec.payload.get('check', '?')}**: {detail}")
+                lines.append(f"- **{_md(rec.payload.get('check', '?'))}**: {_md(detail)}")
             lines.append("")
     return "\n".join(lines)
+
+
+def _md(text: str) -> str:
+    """Neutralize characters that would break out of a Markdown table cell.
+    Check text and details are operator input, but they can also echo page
+    content — a `|` or newline must not let them forge extra columns/rows."""
+    return text.replace("|", "\\|").replace("\n", " ").replace("\r", " ")
 
 
 def _audit_artifacts(
     checks: list[EvidenceRecord], artifacts: ArtifactStore | None
 ) -> list[tuple[str, str]]:
+    """Load every referenced artifact AND cross-check it against the chain
+    payload. Hash integrity alone would accept a swap: replacing the artifact
+    reference with a different (valid) observation of a different page. The
+    url and page snapshot recorded on the signed chain pin which observation
+    the verdict was actually about."""
     if artifacts is None:
         return []
     broken = []
@@ -144,18 +163,31 @@ def _audit_artifacts(
         if not sha:
             continue
         try:
-            artifacts.load(sha)
+            data = artifacts.load(sha)
         except FileNotFoundError:
             broken.append((sha, "referenced on the chain but the file is missing"))
+            continue
         except ValueError as exc:
             broken.append((sha, str(exc)))
+            continue
+        chain_url = rec.payload.get("url")
+        if chain_url is not None and data.get("url") != chain_url:
+            broken.append((sha, f"artifact url {data.get('url')!r} does not match "
+                                f"the chain record ({chain_url!r})"))
+        chain_snap = rec.payload.get("page_snapshot")
+        if chain_snap is not None and data.get("snapshot_hash") != chain_snap:
+            broken.append((sha, "artifact snapshot hash does not match the chain record"))
     return broken
 
 
 def record_check(
     chain: EvidenceChain, run_id: str, check: str, passed: bool, detail: str | None = None
 ) -> EvidenceRecord:
-    payload: dict = {"run_id": run_id, "check": check}
+    """A manual check is the operator vouching personally — legitimate (a
+    human eyeballing the app is real acceptance) but carrying no machine
+    evidence. It is labeled ``judge: operator`` so reports and harvest can
+    tell it apart from browser-verified checks; harvest never mints from it."""
+    payload: dict = {"run_id": run_id, "check": check, "judge": "operator"}
     if detail:
         payload["detail"] = detail
     return chain.append("check_passed" if passed else "check_failed", payload)

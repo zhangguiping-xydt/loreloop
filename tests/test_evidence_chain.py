@@ -110,6 +110,37 @@ def test_operator_moved_legacy_key_keeps_old_chain_verifiable(tmp_path):
     assert [r.event for r in chain.verify()] == ["check_passed"]
 
 
+def test_detects_tail_truncation(chain, tmp_path):
+    # every prefix of a valid chain is itself a valid chain — only the
+    # out-of-tree head commitment catches a deleted trailing record
+    chain.append("check_passed", {"check": "looks fine"})
+    chain.append("check_failed", {"check": "the one the agent wants gone"})
+    _rewrite(tmp_path, lambda ls: ls.pop())
+    with pytest.raises(ChainVerificationError, match="truncated"):
+        chain.verify()
+
+
+def test_detects_full_chain_replacement(chain, tmp_path):
+    chain.append("check_failed", {"check": "inconvenient"})
+    (tmp_path / ".knowhelm/evidence.jsonl").unlink()
+    fresh = EvidenceChain.for_workdir(tmp_path)
+    with pytest.raises(ChainVerificationError):
+        fresh.verify()
+
+
+def test_head_commitment_lives_outside_project_tree(chain, tmp_path):
+    chain.append("check_passed", {})
+    head = key_path_for(tmp_path).with_suffix(".head")
+    assert head.exists()
+    assert not head.is_relative_to(tmp_path)
+
+
+def test_missing_head_commitment_is_tolerated_for_preupgrade_chains(chain, tmp_path):
+    chain.append("check_passed", {})
+    key_path_for(tmp_path).with_suffix(".head").unlink()
+    assert len(chain.verify()) == 1
+
+
 def test_key_is_per_project(tmp_path):
     a = tmp_path / "proj-a"
     b = tmp_path / "proj-b"

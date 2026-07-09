@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,11 +12,23 @@ from .agents import CODEX_RUNNER, AgentRunner
 from .delegate.runner import DelegateRunner
 from .evidence.chain import EvidenceChain
 from .knowledge.code_reverse import reverse_code
+from .knowledge.endorsement import SUPERSEDE_EVENT, curate, endorsed_strong_ids
 from .knowledge.model import Curation
 from .knowledge.store import KnowledgeStore
 from .report.acceptance import load_run, record_check, render_report
 
 DB_PATH = ".knowhelm/knowledge.db"
+
+# run ids are used to build filesystem paths; a strict shape rules out
+# traversal like "../../etc/passwd" without any path canonicalization games.
+_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
+
+
+def _run_trace(workdir: Path, run_id: str) -> Path | None:
+    if not _RUN_ID.match(run_id):
+        print(f"invalid run id: {run_id!r}", file=sys.stderr)
+        return None
+    return workdir / f".knowhelm/runs/{run_id}.jsonl"
 
 
 def _workdir() -> Path:
@@ -139,12 +152,27 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    from .knowledge.model import Channel
+
     workdir = _workdir()
     with _store(workdir) as store:
         entries = store.list_active()
-    runner = DelegateRunner(_agent(args.agent), workdir)
-    result = runner.run(args.task, entries)
     chain = EvidenceChain.for_workdir(workdir)
+    # The DB sits in the agent-writable tree; its strong bits count only when
+    # the chain endorses them. Anything strong-in-DB but unendorsed is injected
+    # as reference and flagged for the operator.
+    endorsed = endorsed_strong_ids(chain.verify())
+    unendorsed = {e.id for e in entries if e.is_strong_evidence() and e.id not in endorsed}
+    if unendorsed:
+        print(f"[knowhelm] WARNING: {len(unendorsed)} entr{'y' if len(unendorsed) == 1 else 'ies'} "
+              f"claim strong trust in the store without evidence-chain endorsement — "
+              f"injected as reference only. Inspect with `knowhelm knowledge list`:",
+              file=sys.stderr)
+        for e in entries:
+            if e.id in unendorsed:
+                print(f"    {e.id[:8]}  {e.title}", file=sys.stderr)
+    runner = DelegateRunner(_agent(args.agent), workdir)
+    result = runner.run(args.task, entries, unendorsed_ids=unendorsed)
     chain.append(
         "delegation_completed",
         {"run_id": result.run_id, "task": args.task, "context_entries": result.pack.entry_ids},
@@ -152,6 +180,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(result.output)
     print(f"\n[knowhelm] run {result.run_id}: injected {len(result.pack.entry_ids)} entries, "
           f"trace at {result.trace_path}", file=sys.stderr)
+    strong_web = [e for e in result.pack.strong if e.source.channel is Channel.WEB]
+    if strong_web:
+        # Known limitation, documented in SECURITY.md: injection trusts the
+        # last verification; it does not re-open a browser per run.
+        print(f"[knowhelm] note: {len(strong_web)} strong web entr"
+              f"{'y was' if len(strong_web) == 1 else 'ies were'} injected as-is; "
+              f"live pages may have changed since verification — "
+              f"re-check with `knowhelm knowledge verify`", file=sys.stderr)
     return 0
 
 
@@ -167,7 +203,9 @@ def cmd_report(args: argparse.Namespace) -> int:
     workdir = _workdir()
     runs_dir = workdir / ".knowhelm/runs"
     if args.run_id:
-        trace = runs_dir / f"{args.run_id}.jsonl"
+        trace = _run_trace(workdir, args.run_id)
+        if trace is None:
+            return 2
     else:
         traces = sorted(runs_dir.glob("run-*.jsonl")) if runs_dir.exists() else []
         if not traces:
@@ -189,7 +227,9 @@ def cmd_harvest(args: argparse.Namespace) -> int:
     from .knowledge.harvest import HarvestError, harvest_run
 
     workdir = _workdir()
-    trace = workdir / f".knowhelm/runs/{args.run_id}.jsonl"
+    trace = _run_trace(workdir, args.run_id)
+    if trace is None:
+        return 2
     if not trace.exists():
         print(f"no trace found for {args.run_id}", file=sys.stderr)
         return 2
@@ -230,16 +270,32 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
     with _store(workdir) as store:
         if args.action == "list":
             return _list_entries(args, workdir, store)
-        elif args.action == "approve":
-            entry = store.set_curation(args.entry_id, Curation.APPROVED, datetime.now(timezone.utc))
-            print(f"approved: {entry.title}")
-        elif args.action == "reject":
-            entry = store.set_curation(args.entry_id, Curation.REJECTED, datetime.now(timezone.utc))
-            print(f"rejected: {entry.title}")
+        elif args.action in ("approve", "reject"):
+            return _curate(args, workdir, store)
         elif args.action == "supersede":
-            return _supersede(args, store)
+            return _supersede(args, workdir, store)
         elif args.action == "verify":
             return _verify_entries(args, workdir, store)
+    return 0
+
+
+def _curate(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
+    if not args.entry_id:
+        print(f"usage: knowhelm knowledge {args.action} <entry_id>", file=sys.stderr)
+        return 2
+    target = _resolve_entry(store, args.entry_id)
+    if target is None:
+        return 2
+    from .knowledge.store import InvalidTransition
+
+    new = Curation.APPROVED if args.action == "approve" else Curation.REJECTED
+    chain = EvidenceChain.for_workdir(workdir)
+    try:
+        entry = curate(store, chain, target.id, new, datetime.now(timezone.utc))
+    except InvalidTransition as exc:
+        print(f"invalid curation transition: {exc}", file=sys.stderr)
+        return 2
+    print(f"{args.action}{'d' if args.action.endswith('e') else 'ed'}: {entry.title}")
     return 0
 
 
@@ -265,7 +321,7 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
     return 0
 
 
-def _supersede(args: argparse.Namespace, store: KnowledgeStore) -> int:
+def _supersede(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
     from .knowledge.model import Link, LinkType
 
     if not args.entry_id or not args.old_id:
@@ -275,6 +331,11 @@ def _supersede(args: argparse.Namespace, store: KnowledgeStore) -> int:
     old = _resolve_entry(store, args.old_id)
     if new is None or old is None:
         return 2
+    # Supersession silences an entry at injection time — a trust-affecting
+    # act, so it is endorsed on the chain like curation. Chain first.
+    EvidenceChain.for_workdir(workdir).append(
+        SUPERSEDE_EVENT, {"new_id": new.id, "old_id": old.id}
+    )
     store.add_link(Link(from_id=new.id, to_id=old.id, link_type=LinkType.SUPERSEDES))
     print(f"superseded: {old.title}  ({old.id[:8]})")
     print(f"        by: {new.title}  ({new.id[:8]})")

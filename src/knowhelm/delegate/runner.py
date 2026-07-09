@@ -39,12 +39,17 @@ class DelegateRunner:
         self._runs_dir = workdir / RUNS_DIR
         self._runs_dir.mkdir(parents=True, exist_ok=True)
 
-    def run(self, task: str, entries: list[Entry]) -> DelegationResult:
+    def run(
+        self,
+        task: str,
+        entries: list[Entry],
+        unendorsed_ids: set[str] | frozenset[str] = frozenset(),
+    ) -> DelegationResult:
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
         trace_path = self._runs_dir / f"{run_id}.jsonl"
         base_commit = _head_or_none(self._workdir)
         drifted = drifted_code_entry_ids(self._workdir, entries) if base_commit else set()
-        pack = select(task, entries, drifted_ids=drifted)
+        pack = select(task, entries, drifted_ids=drifted, unendorsed_ids=unendorsed_ids)
         prefix = render(pack)
         prompt = f"{prefix}\n# Task\n\n{task}\n" if prefix else task
 
@@ -54,6 +59,7 @@ class DelegateRunner:
             task=task,
             context_entries=pack.entry_ids,
             drifted_entries=sorted(pack.drifted_ids & set(pack.entry_ids)),
+            unendorsed_entries=sorted(pack.unendorsed_ids & set(pack.entry_ids)),
             base_commit=base_commit,
         )
         try:

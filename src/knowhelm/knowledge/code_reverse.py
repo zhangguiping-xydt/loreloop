@@ -117,14 +117,19 @@ def drifted_code_entry_ids(repo: Path, entries: list[Entry]) -> set[str]:
 
     Freshness is judged at read time against the anchor, never stored. An
     anchor commit that git no longer knows (rebased away, shallow clone)
-    counts as drifted: freshness that cannot be proven must not be assumed.
+    counts as drifted, and so does a code entry with no anchor at all:
+    freshness that cannot be proven must not be assumed.
     """
+    drifted: set[str] = set()
     by_anchor: dict[str, list[Entry]] = {}
     for entry in entries:
-        if entry.source.channel is Channel.CODE and entry.source.snapshot_ref:
+        if entry.source.channel is not Channel.CODE:
+            continue
+        if entry.source.snapshot_ref:
             by_anchor.setdefault(entry.source.snapshot_ref, []).append(entry)
+        else:
+            drifted.add(entry.id)
 
-    drifted: set[str] = set()
     for anchor, anchored in by_anchor.items():
         result = subprocess.run(
             ["git", "diff", "--name-only", "--no-renames", f"{anchor}..HEAD"],

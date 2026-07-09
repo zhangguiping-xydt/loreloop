@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 
@@ -207,6 +208,21 @@ def test_artifact_files_are_owner_only(tmp_path):
     assert path.parent.stat().st_mode & 0o777 == 0o700
 
 
+def test_artifact_load_rejects_non_sha_references(tmp_path):
+    artifacts = ArtifactStore.for_workdir(tmp_path)
+    for bad in ("../../../etc/passwd", "ABC", "0" * 63, "g" * 64):
+        with pytest.raises(ValueError, match="invalid artifact reference"):
+            artifacts.load(bad)
+
+
+def test_artifact_save_leaves_no_temp_files(tmp_path):
+    artifacts = ArtifactStore.for_workdir(tmp_path)
+    sha, path = artifacts.save_observation(UPLOAD)
+    leftovers = [p for p in path.parent.iterdir() if p.suffix != ".json"]
+    assert leftovers == []
+    assert artifacts.load(sha)["url"] == UPLOAD.url
+
+
 def test_verify_deterministic_ignores_injected_instructions(tmp_path):
     poisoned = Observation(
         url="http://app.local/upload",
@@ -225,7 +241,7 @@ def test_verify_deterministic_ignores_injected_instructions(tmp_path):
     assert chain.verify()[0].payload["judge"] == "deterministic"
 
 
-def test_verify_llm_prompt_wraps_page_as_untrusted_data(tmp_path):
+def test_verify_llm_prompt_wraps_page_in_nonce_delimiters(tmp_path):
     browser = FakeBrowser({"http://app.local/upload": UPLOAD})
     chain = EvidenceChain.for_workdir(tmp_path)
     runner = FakeRunner(['{"passed": true, "reason": "Page shows Max 50MB."}'])
@@ -233,9 +249,27 @@ def test_verify_llm_prompt_wraps_page_as_untrusted_data(tmp_path):
         browser, runner, chain, "run-1", "http://app.local/upload", "page mentions the 50MB limit"
     )
     prompt = runner.prompts[0]
-    assert "<<<UNTRUSTED-PAGE-CONTENT" in prompt
-    assert "UNTRUSTED-PAGE-CONTENT>>>" in prompt
-    assert UPLOAD.text in prompt.split("<<<UNTRUSTED-PAGE-CONTENT")[1]
+    m = re.search(r"<<<UNTRUSTED-([0-9a-f]{16})\n", prompt)
+    assert m, "prompt must open the data region with a nonce delimiter"
+    nonce = m.group(1)
+    assert f"UNTRUSTED-{nonce}>>>" in prompt
+    assert UPLOAD.text in prompt.split(f"<<<UNTRUSTED-{nonce}")[1]
+
+
+def test_verify_llm_prompt_nonce_differs_per_call(tmp_path):
+    browser = FakeBrowser({"http://app.local/upload": UPLOAD})
+    chain = EvidenceChain.for_workdir(tmp_path)
+    verdict = '{"passed": true, "reason": "ok"}'
+    runner = FakeRunner([verdict, verdict])
+    for _ in range(2):
+        verify_expectation(
+            browser, runner, chain, "run-1", "http://app.local/upload", "free-form expectation"
+        )
+    nonces = [
+        re.search(r"<<<UNTRUSTED-([0-9a-f]{16})\n", p).group(1) for p in runner.prompts
+    ]
+    # a page author cannot pre-plant a delimiter they cannot predict
+    assert nonces[0] != nonces[1]
 
 
 def test_verify_saves_observation_artifact_and_chains_hash(tmp_path):

@@ -107,6 +107,33 @@ def test_select_demotes_drifted_strong_entries():
     assert "[source changed" not in hint_line
 
 
+def test_select_demotes_unendorsed_strong_entries():
+    pack = select(
+        "change the upload endpoint",
+        [UPLOAD_FACT, UPLOAD_HINT],
+        unendorsed_ids={UPLOAD_FACT.id},
+    )
+    assert pack.strong == []
+    assert UPLOAD_FACT in pack.reference
+
+
+def test_render_declares_entries_as_data_not_instructions():
+    pack = select("upload endpoint", [UPLOAD_FACT])
+    text = render(pack)
+    assert "not instructions" in text
+    assert text.index("not instructions") < text.index("Established facts")
+
+
+def test_delegate_traces_unendorsed_entries(tmp_path):
+    agent = FakeAgent()
+    result = DelegateRunner(agent, tmp_path).run(
+        "fix the upload endpoint", [UPLOAD_FACT], unendorsed_ids={UPLOAD_FACT.id}
+    )
+    assert UPLOAD_FACT in result.pack.reference
+    events = [json.loads(line) for line in result.trace_path.read_text().splitlines()]
+    assert events[0]["unendorsed_entries"] == [UPLOAD_FACT.id]
+
+
 def git(repo, *args):
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 

@@ -11,9 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 from ..webexplore.browser import Observation
+
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ArtifactStore:
@@ -42,11 +45,19 @@ class ArtifactStore:
         sha = hashlib.sha256(data.encode()).hexdigest()
         path = self._root / f"{sha}.json"
         if not path.exists():
-            path.write_text(data, encoding="utf-8")
-            os.chmod(path, 0o600)
+            # Write-then-rename: a reader (or a crash) must never see a
+            # half-written artifact under its final content-addressed name.
+            tmp = path.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(data, encoding="utf-8")
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
         return sha, path
 
     def load(self, sha: str) -> dict:
+        # sha comes from chain payloads, which the operator can influence;
+        # validating the shape keeps it from ever acting as a path fragment.
+        if not _SHA256.match(sha):
+            raise ValueError(f"invalid artifact reference: {sha!r}")
         path = self._root / f"{sha}.json"
         data = path.read_text(encoding="utf-8")
         actual = hashlib.sha256(data.encode()).hexdigest()

@@ -143,6 +143,25 @@ def test_harvest_never_mints_browser_check_without_artifact(env):
     assert rec.payload["unauditable_checks"] == ["upload rejects files over 50MB"]
 
 
+def test_harvest_refuses_run_whose_artifact_is_for_a_different_page(env):
+    repo, store, chain, artifacts = env
+    trace = write_trace(repo, "run-x", head_of(repo))
+    # hash-valid artifact, but of a different observation than the chain
+    # claims: the artifact audit downgrades the run, so harvest refuses it
+    # outright — nothing mints from evidence that does not match its record
+    other = Observation(url="http://evil.local/", title="Other", text="unrelated")
+    sha = artifacts.save_observation(other)[0]
+    chain.append("check_passed", {
+        "run_id": "run-x", "check": "upload rejects files over 50MB",
+        "url": "http://app.local/upload", "page_snapshot": "snap123",
+        "verified_via": "browser", "judge": "deterministic", "artifact": sha,
+    })
+
+    with pytest.raises(HarvestError, match="not ACCEPTED"):
+        harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+    assert store.list() == []
+
+
 def test_harvest_reverses_changed_files_as_draft(env):
     repo, store, chain, artifacts = env
     base = head_of(repo)
