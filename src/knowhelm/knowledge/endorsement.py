@@ -5,13 +5,24 @@ columns cannot be taken at face value: one UPDATE would launder a draft into
 an established fact without touching the HMAC key. Every trust-raising act
 therefore also appends a chain record — curation by the operator, verification
 by browser runs, minting by harvest — and injection recomputes strong status
-from the chain. An entry that is strong in the DB but has no chain endorsement
-is demoted to reference for that injection; the DB row itself is not rewritten
-(the mismatch is a signal for the operator, not something to silently repair).
+from the chain.
+
+Endorsement binds CONTENT, not just identity: each trust event records a
+digest of the entry's substance (title, content, kind, source). An id alone
+would let the agent keep the endorsed row's trust bits while rewriting what
+the row actually says. At injection time the digest is recomputed from the
+current DB row; a mismatch demotes the entry to reference. Legitimate
+re-anchoring (verify pass on a drifted page, harvest re-anchoring an
+unchanged claim) refreshes the bound digest through its own chain event.
+
+The DB row itself is never rewritten on mismatch — the discrepancy is a
+signal for the operator, not something to silently repair.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 
 from ..evidence.chain import EvidenceChain, EvidenceRecord
@@ -22,29 +33,96 @@ CURATION_EVENT = "curation_changed"
 SUPERSEDE_EVENT = "entry_superseded"
 
 
-def endorsed_strong_ids(records: list[EvidenceRecord]) -> set[str]:
-    """Entry ids whose strong status is backed by the evidence chain.
+def entry_digest(entry: Entry) -> str:
+    """Canonical fingerprint of what an entry claims and where it points.
+    Trust state is deliberately excluded — the chain event sequence itself
+    carries trust; the digest pins the substance that trust was granted to."""
+    material = json.dumps(
+        {
+            "id": entry.id,
+            "title": entry.title,
+            "content": entry.content,
+            "kind": entry.kind.value,
+            "channel": entry.source.channel.value,
+            "locator": entry.source.locator,
+            "snapshot_ref": entry.source.snapshot_ref,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(material.encode()).hexdigest()
 
-    Curation follows the latest chain event per entry; verification follows
-    the latest browser outcome, plus harvest minting (which is itself a
-    chain-backed browser verification).
-    """
-    approved: set[str] = set()
-    verified: set[str] = set()
+
+def endorsed_strong_digests(records: list[EvidenceRecord]) -> dict[str, set[str]]:
+    """entry_id -> digests under which the chain currently endorses strong
+    status. An entry is chain-backed strong only if its CURRENT digest is in
+    this set. Events without a digest grant no endorsement: an unbound
+    endorsement is exactly the loophole this module exists to close."""
+    approved: dict[str, str] = {}
+    verified: dict[str, str] = {}
     for rec in records:
         payload = rec.payload
         if rec.event == CURATION_EVENT:
-            if payload.get("curation") == Curation.APPROVED.value:
-                approved.add(payload["entry_id"])
+            entry_id = payload.get("entry_id")
+            digest = payload.get("entry_digest")
+            if payload.get("curation") == Curation.APPROVED.value and digest:
+                approved[entry_id] = digest
             else:
-                approved.discard(payload["entry_id"])
+                approved.pop(entry_id, None)
         elif rec.event == "entry_verified":
-            verified.add(payload["entry_id"])
+            entry_id = payload.get("entry_id")
+            digest = payload.get("entry_digest")
+            if digest:
+                verified[entry_id] = digest
+            else:
+                verified.pop(entry_id, None)
         elif rec.event == "entry_contradicted":
-            verified.discard(payload["entry_id"])
+            verified.pop(payload.get("entry_id"), None)
         elif rec.event == "knowledge_harvested":
-            verified.update(payload.get("minted", []))
-    return approved | verified
+            minted = payload.get("minted")
+            if isinstance(minted, dict):
+                for entry_id, digest in minted.items():
+                    if digest:
+                        verified[entry_id] = digest
+            # re-anchoring changes locator/snapshot of an unchanged claim;
+            # existing endorsements follow the entry to its new anchor
+            reversed_entries = payload.get("reversed")
+            if isinstance(reversed_entries, dict):
+                for entry_id, digest in reversed_entries.items():
+                    if not digest:
+                        continue
+                    if entry_id in approved:
+                        approved[entry_id] = digest
+                    if entry_id in verified:
+                        verified[entry_id] = digest
+    out: dict[str, set[str]] = {}
+    for entry_id, digest in approved.items():
+        out.setdefault(entry_id, set()).add(digest)
+    for entry_id, digest in verified.items():
+        out.setdefault(entry_id, set()).add(digest)
+    return out
+
+
+def unendorsed_strong_ids(entries: list[Entry], records: list[EvidenceRecord]) -> set[str]:
+    """Entries that claim strong trust in the DB but whose current content
+    carries no matching chain endorsement — demote these before injection."""
+    endorsed = endorsed_strong_digests(records)
+    return {
+        e.id
+        for e in entries
+        if e.is_strong_evidence() and entry_digest(e) not in endorsed.get(e.id, set())
+    }
+
+
+def chain_superseded_ids(records: list[EvidenceRecord]) -> set[str]:
+    """Superseded set as the chain recorded it. The DB links table is in the
+    agent-writable tree: deleting a supersedes row there would resurrect a
+    retired entry, so activity decisions use the chain, DB links are cache."""
+    return {
+        rec.payload["old_id"]
+        for rec in records
+        if rec.event == SUPERSEDE_EVENT and rec.payload.get("old_id")
+    }
 
 
 def curate(
@@ -62,5 +140,8 @@ def curate(
         raise KeyError(entry_id)
     if new not in CURATION_TRANSITIONS[entry.trust.curation]:
         raise InvalidTransition(f"{entry.trust.curation.value} -> {new.value}")
-    chain.append(CURATION_EVENT, {"entry_id": entry_id, "curation": new.value})
+    chain.append(
+        CURATION_EVENT,
+        {"entry_id": entry_id, "curation": new.value, "entry_digest": entry_digest(entry)},
+    )
     return store.set_curation(entry_id, new, now)

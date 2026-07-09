@@ -136,10 +136,21 @@ class EvidenceChain:
         return records
 
     def _commit_head(self, record: EvidenceRecord) -> None:
+        # fsync file and directory: a crash right after append must not leave
+        # the head commitment pointing at an older record, or the window
+        # becomes a licensed truncation.
         head = {"index": record.index, "chain_hash": record.chain_hash}
         tmp = self._head_path.with_suffix(".head.tmp")
-        tmp.write_text(json.dumps(head), encoding="utf-8")
+        with tmp.open("w", encoding="utf-8") as fh:
+            fh.write(json.dumps(head))
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, self._head_path)
+        dir_fd = os.open(self._head_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
     def _check_head(self, records: list[EvidenceRecord]) -> None:
         """Truncation check: every prefix of a valid chain is itself valid, so

@@ -14,16 +14,27 @@ boundary, knowhelm defends against:
   HMAC-SHA256 linked, and the latest (index, chain hash) is committed next
   to the key outside the project tree, so deleting trailing records is
   detected too. Observations are content-addressed artifacts (SHA-256-named,
-  re-hashed on load and cross-checked against the url/snapshot recorded on
-  the chain). Editing, truncating or swapping evidence breaks verification
-  and degrades the acceptance verdict.
+  re-hashed on load and cross-checked against the url/snapshot pin recorded
+  on the chain; an artifact-bearing check without that pin is itself an
+  integrity failure). Run traces under `.knowhelm/runs/` are display
+  material only: acceptance and harvest key off the chain-endorsed
+  `delegation_completed` record (run id, task, context, base commit), so a
+  forged `delegation_finished` line or an edited `base_commit` in the trace
+  cannot sway a verdict. Editing, truncating or swapping evidence breaks
+  verification and degrades the acceptance verdict.
 - **Trust laundering.** LLM-derived knowledge is born draft/unverified.
   Only human-written, machine-checked, chain-backed assertions are born
   verified. Verification can never be rolled back to unverified. The SQLite
   store sits inside the agent-writable tree, so its trust columns are not
   taken at face value: every approval, verification and supersession is also
-  endorsed on the evidence chain, and `knowhelm run` demotes any entry whose
-  strong status lacks chain endorsement to reference before injection.
+  endorsed on the evidence chain, and each trust-raising event binds a
+  digest of the entry's content and source. Before injection, `knowhelm run`
+  recomputes that digest from the current DB row — an entry whose strong bit
+  has no chain endorsement, or whose content was rewritten after
+  endorsement, is demoted to reference. Supersession is likewise replayed
+  from the chain: deleting the DB links row does not resurrect a retired
+  entry. Passed web verifications always anchor the entry to the observed
+  page hash — an anchor-less entry counts as drifted, never as fresh.
 - **Accidental credential capture.** knowhelm never automates logins: at a
   login wall it either skips the page or hands the real browser window to
   the human. Observation artifacts may contain post-login page content, so

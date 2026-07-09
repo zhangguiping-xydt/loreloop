@@ -57,6 +57,18 @@ def write_trace(workdir, run_id, base_commit, finished=True):
     return path
 
 
+def start_run(repo, chain, run_id, base_commit, finished=True):
+    """Trace file plus — when the run really completed — the chain-endorsed
+    delegation_completed record that report/harvest treat as authority."""
+    trace = write_trace(repo, run_id, base_commit, finished=finished)
+    if finished:
+        chain.append("delegation_completed", {
+            "run_id": run_id, "task": "fix upload",
+            "context_entries": [], "base_commit": base_commit,
+        })
+    return trace
+
+
 def record_browser_check(
     chain, run_id, check="upload rejects files over 50MB", artifacts=None
 ):
@@ -89,9 +101,55 @@ def test_harvest_refuses_non_accepted_run(env):
         harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
 
 
+def test_harvest_refuses_forged_trace_without_chain_endorsement(env):
+    # H1 attack: the agent appends delegation_finished to the trace file.
+    # A passing check exists on the chain, but no chain-endorsed
+    # delegation_completed does — harvest must refuse, nothing mints.
+    repo, store, chain, artifacts = env
+    trace = write_trace(repo, "run-x", head_of(repo), finished=True)
+    record_browser_check(chain, "run-x", artifacts=artifacts)
+
+    with pytest.raises(HarvestError, match="not ACCEPTED"):
+        harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+    assert store.list() == []
+
+
+def test_harvest_uses_chain_base_commit_not_trace(env):
+    # The trace's base_commit is agent-writable: forging it to HEAD would
+    # hide all changed files from re-reversal and staleness checks. The
+    # chain-endorsed base commit drives both.
+    repo, store, chain, artifacts = env
+    base = head_of(repo)
+    write_trace(repo, "run-x", base)  # then overwrite base_commit with a forgery
+    chain.append("delegation_completed", {
+        "run_id": "run-x", "task": "fix upload",
+        "context_entries": [], "base_commit": base,
+    })
+    record_browser_check(chain, "run-x", artifacts=artifacts)
+
+    (repo / "api.py").write_text("def upload(): return 201\ndef delete(): return 204\n")
+    git(repo, "add", "api.py")
+    git(repo, "commit", "-m", "add delete")
+    forged = write_trace(repo, "run-x", head_of(repo))  # claims base == HEAD: "nothing changed"
+
+    extract = json.dumps([{
+        "claim": "DELETE returns 204.", "title": "Delete contract", "file": "api.py",
+    }])
+    classify = json.dumps([{"id": 0, "kind": "interface"}])
+    result = harvest_run(
+        load_run(forged), chain, store, FakeRunner([extract, classify]), repo,
+        artifacts=artifacts,
+    )
+
+    # chain says base != HEAD, so the changed file WAS re-reversed
+    assert len(result.reversed_entries) == 1
+    rec = next(r for r in chain.verify() if r.event == "knowledge_harvested")
+    assert rec.payload["base_commit"] == base
+
+
 def test_harvest_refuses_dirty_working_tree(env):
     repo, store, chain, artifacts = env
-    trace = write_trace(repo, "run-x", head_of(repo))
+    trace = start_run(repo, chain, "run-x", head_of(repo))
     record_browser_check(chain, "run-x", artifacts=artifacts)
     (repo / "api.py").write_text("def upload(): return 500  # uncommitted\n")
 
@@ -101,7 +159,7 @@ def test_harvest_refuses_dirty_working_tree(env):
 
 def test_harvest_mints_browser_checks_as_born_verified(env):
     repo, store, chain, artifacts = env
-    trace = write_trace(repo, "run-x", head_of(repo))
+    trace = start_run(repo, chain, "run-x", head_of(repo))
     record_browser_check(chain, "run-x", artifacts=artifacts)
 
     result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
@@ -121,7 +179,7 @@ def test_harvest_mints_browser_checks_as_born_verified(env):
 
 def test_harvest_skips_non_browser_checks(env):
     repo, store, chain, artifacts = env
-    trace = write_trace(repo, "run-x", head_of(repo))
+    trace = start_run(repo, chain, "run-x", head_of(repo))
     chain.append("check_passed", {"run_id": "run-x", "check": "tests pass"})
 
     result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
@@ -132,7 +190,7 @@ def test_harvest_skips_non_browser_checks(env):
 
 def test_harvest_never_mints_browser_check_without_artifact(env):
     repo, store, chain, artifacts = env
-    trace = write_trace(repo, "run-x", head_of(repo))
+    trace = start_run(repo, chain, "run-x", head_of(repo))
     record_browser_check(chain, "run-x")  # no artifact recorded
 
     result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
@@ -145,7 +203,7 @@ def test_harvest_never_mints_browser_check_without_artifact(env):
 
 def test_harvest_refuses_run_whose_artifact_is_for_a_different_page(env):
     repo, store, chain, artifacts = env
-    trace = write_trace(repo, "run-x", head_of(repo))
+    trace = start_run(repo, chain, "run-x", head_of(repo))
     # hash-valid artifact, but of a different observation than the chain
     # claims: the artifact audit downgrades the run, so harvest refuses it
     # outright — nothing mints from evidence that does not match its record
@@ -165,7 +223,7 @@ def test_harvest_refuses_run_whose_artifact_is_for_a_different_page(env):
 def test_harvest_reverses_changed_files_as_draft(env):
     repo, store, chain, artifacts = env
     base = head_of(repo)
-    trace = write_trace(repo, "run-x", base)
+    trace = start_run(repo, chain, "run-x", base)
     record_browser_check(chain, "run-x", artifacts=artifacts)
 
     (repo / "api.py").write_text("def upload(): return 201\ndef delete(): return 204\n")
@@ -198,7 +256,7 @@ def test_harvest_reports_stale_entries_without_touching_them(env):
         source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
     )
     store.add(old)
-    trace = write_trace(repo, "run-x", base)
+    trace = start_run(repo, chain, "run-x", base)
     record_browser_check(chain, "run-x", artifacts=artifacts)
 
     (repo / "api.py").write_text("def upload(): return 201  # changed\n")
@@ -229,7 +287,7 @@ def test_harvest_flags_entries_in_deleted_files_as_stale(env):
         source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
     )
     store.add(old)
-    trace = write_trace(repo, "run-x", base)
+    trace = start_run(repo, chain, "run-x", base)
     record_browser_check(chain, "run-x", artifacts=artifacts)
 
     git(repo, "rm", "api.py")
@@ -253,7 +311,7 @@ def test_harvest_flags_entries_in_deleted_files_as_stale(env):
 
 def test_harvest_is_idempotent_via_chain(env):
     repo, store, chain, artifacts = env
-    trace = write_trace(repo, "run-x", head_of(repo))
+    trace = start_run(repo, chain, "run-x", head_of(repo))
     record_browser_check(chain, "run-x", artifacts=artifacts)
 
     harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
@@ -266,7 +324,7 @@ def test_harvest_is_idempotent_via_chain(env):
 
 def test_harvest_dedupes_repeated_checks(env):
     repo, store, chain, artifacts = env
-    trace = write_trace(repo, "run-x", head_of(repo))
+    trace = start_run(repo, chain, "run-x", head_of(repo))
     record_browser_check(chain, "run-x", artifacts=artifacts)
     record_browser_check(chain, "run-x", artifacts=artifacts)
 
@@ -288,7 +346,7 @@ def test_harvest_mint_verifies_existing_draft_duplicate(env):
     store.add(draft)
     assert not draft.is_strong_evidence()
 
-    trace = write_trace(repo, "run-x", head_of(repo))
+    trace = start_run(repo, chain, "run-x", head_of(repo))
     record_browser_check(chain, "run-x", artifacts=artifacts)
 
     result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
@@ -328,7 +386,7 @@ def test_harvest_lists_prior_strong_entries_on_minted_pages_for_review(env):
     )
     store.add(prior)
     store.add(elsewhere)
-    trace = write_trace(repo, "run-x", head_of(repo))
+    trace = start_run(repo, chain, "run-x", head_of(repo))
     record_browser_check(chain, "run-x", artifacts=artifacts)
 
     result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
@@ -344,11 +402,11 @@ def test_harvest_review_skips_the_assertion_it_just_reminted(env):
     repo, store, chain, artifacts = env
     base = head_of(repo)
 
-    trace1 = write_trace(repo, "run-1", base)
+    trace1 = start_run(repo, chain, "run-1", base)
     record_browser_check(chain, "run-1", artifacts=artifacts)
     harvest_run(load_run(trace1), chain, store, FakeRunner([]), repo, artifacts=artifacts)
 
-    trace2 = write_trace(repo, "run-2", base)
+    trace2 = start_run(repo, chain, "run-2", base)
     record_browser_check(chain, "run-2", artifacts=artifacts)
     second = harvest_run(load_run(trace2), chain, store, FakeRunner([]), repo, artifacts=artifacts)
 
@@ -360,11 +418,11 @@ def test_harvest_mint_reuses_existing_entry_across_runs(env):
     repo, store, chain, artifacts = env
     base = head_of(repo)
 
-    trace1 = write_trace(repo, "run-1", base)
+    trace1 = start_run(repo, chain, "run-1", base)
     record_browser_check(chain, "run-1", artifacts=artifacts)
     first = harvest_run(load_run(trace1), chain, store, FakeRunner([]), repo, artifacts=artifacts)
 
-    trace2 = write_trace(repo, "run-2", base)
+    trace2 = start_run(repo, chain, "run-2", base)
     record_browser_check(chain, "run-2", artifacts=artifacts)
     second = harvest_run(load_run(trace2), chain, store, FakeRunner([]), repo, artifacts=artifacts)
 
@@ -381,7 +439,7 @@ def test_harvest_reanchors_unchanged_claim_instead_of_duplicating(env):
         source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
     )
     store.add(existing)
-    trace = write_trace(repo, "run-x", base)
+    trace = start_run(repo, chain, "run-x", base)
     record_browser_check(chain, "run-x", artifacts=artifacts)
 
     (repo / "api.py").write_text("def upload(): return 201\n# comment only\n")

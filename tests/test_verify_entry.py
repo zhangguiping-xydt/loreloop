@@ -98,6 +98,43 @@ def test_verify_entry_drift_pass_reanchors_snapshot(env):
     assert rec.payload["reanchored"] is True
 
 
+def test_verify_entry_without_anchor_counts_as_drifted_and_gets_anchored(env):
+    # H4: "no anchor" must never read as "still fresh". A pass anchors the
+    # entry to the observed page hash so it never stays anchor-less verified.
+    store, chain = env
+    entry = make_web_entry(None)
+    store.add(entry)
+    runner = FakeRunner('{"passed": true, "reason": "Page says Max 50MB."}')
+
+    result = verify_entry(FakeBrowser(), runner, chain, store, entry, "run-9")
+
+    assert result.drifted
+    stored = store.get(entry.id)
+    assert stored.source.snapshot_ref == PAGE.snapshot_hash
+    assert stored.trust.verification is Verification.VERIFIED
+    rec = chain.verify()[0]
+    assert rec.payload["anchor_drifted"] is True
+    assert rec.payload["reanchored"] is True
+
+
+def test_verify_entry_endorses_digest_of_reanchored_row(env):
+    # The chain endorsement must match the row the run leaves behind
+    # (anchored to the verified page), or injection would demote it.
+    from knowhelm.knowledge.endorsement import entry_digest, unendorsed_strong_ids
+
+    store, chain = env
+    entry = make_web_entry("stale-hash-from-old-ingest")
+    store.add(entry)
+    runner = FakeRunner('{"passed": true, "reason": "Still true."}')
+
+    verify_entry(FakeBrowser(), runner, chain, store, entry, "run-9")
+
+    stored = store.get(entry.id)
+    records = chain.verify()
+    assert records[0].payload["entry_digest"] == entry_digest(stored)
+    assert unendorsed_strong_ids([stored], records) == set()
+
+
 def test_verify_entry_drift_fail_keeps_old_anchor(env):
     store, chain = env
     entry = make_web_entry("stale-hash-from-old-ingest")

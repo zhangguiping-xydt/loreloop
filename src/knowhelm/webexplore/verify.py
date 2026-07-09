@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from ..agents import AgentRunner
@@ -182,7 +182,10 @@ def verify_entry(
 
     When the page drifted but the claim still holds, the entry is re-anchored
     to the page state that was actually verified, so strong evidence never
-    rests on a stale snapshot."""
+    rests on a stale snapshot. An entry with NO anchor counts as drifted —
+    "no anchor" must never read as "still fresh" — and a passed verification
+    always anchors the entry to the observed page hash."""
+    from ..knowledge.endorsement import entry_digest
     from ..knowledge.model import Channel, Verification
 
     if entry.source.channel is not Channel.WEB:
@@ -190,9 +193,17 @@ def verify_entry(
 
     obs = browser.observe(entry.source.locator)
     artifact_sha = artifacts.save_observation(obs)[0] if artifacts else None
-    drifted = bool(entry.source.snapshot_ref) and obs.snapshot_hash != entry.source.snapshot_ref
+    drifted = entry.source.snapshot_ref is None or obs.snapshot_hash != entry.source.snapshot_ref
     passed, reason, mode = _judge(runner, obs, entry.content, allow_deterministic=False)
     now = datetime.now(timezone.utc)
+    # The endorsement digest pins the entry as it will exist after write-back
+    # (anchored to the page hash that was actually verified), so the chain
+    # endorses the row the run leaves behind, not the stale pre-run row.
+    endorsed = (
+        replace(entry, source=replace(entry.source, snapshot_ref=obs.snapshot_hash))
+        if passed
+        else entry
+    )
     # Chain first, store second: trust state must never exist without its
     # chain-backed justification. If the append fails, the DB stays untouched;
     # the reverse order could leave strong evidence with no chain record.
@@ -201,6 +212,7 @@ def verify_entry(
         {
             "run_id": run_id,
             "entry_id": entry.id,
+            "entry_digest": entry_digest(endorsed),
             "claim": entry.content,
             "detail": reason,
             "url": obs.url,
@@ -214,7 +226,7 @@ def verify_entry(
     )
     new_status = Verification.VERIFIED if passed else Verification.CONTRADICTED
     store.set_verification(entry.id, new_status, run_id, now)
-    if passed and drifted:
+    if passed and entry.source.snapshot_ref != obs.snapshot_hash:
         store.set_snapshot_ref(entry.id, obs.snapshot_hash, now)
     return EntryVerifyResult(passed=passed, reason=reason, drifted=drifted, record=record)
 

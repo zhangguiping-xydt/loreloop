@@ -30,6 +30,7 @@ from ..evidence.artifacts import ArtifactStore
 from ..evidence.chain import EvidenceChain
 from ..report.acceptance import RunSummary, evaluate_run
 from .code_reverse import changed_files, changed_paths, dirty_source_files, repo_head, reverse_code
+from .endorsement import chain_superseded_ids, entry_digest
 from .model import Channel, Entry, Kind, Source, Trust, Verification
 from .store import KnowledgeStore
 
@@ -59,17 +60,22 @@ def harvest_run(
     artifacts: ArtifactStore | None = None,
 ) -> HarvestResult:
     repo = repo.resolve()
+    records = chain.verify()
     evaluation = evaluate_run(run, chain, artifacts)
     if not evaluation.accepted:
         raise HarvestError(
             f"run {run.run_id} is not ACCEPTED; only accepted runs feed the knowledge base"
         )
     if any(
-        r.event == HARVEST_EVENT and r.payload.get("run_id") == run.run_id
-        for r in chain.verify()
+        r.event == HARVEST_EVENT and r.payload.get("run_id") == run.run_id for r in records
     ):
         raise HarvestError(f"run {run.run_id} was already harvested")
-    if run.base_commit:
+    # The base commit comes from the chain-endorsed delegation_completed
+    # record, never from the trace: the trace lives in the agent-writable
+    # tree, and a forged base_commit there would steer which files get
+    # re-reversed and which entries get flagged stale.
+    base_commit = evaluation.base_commit
+    if base_commit:
         dirty = dirty_source_files(repo)
         if dirty:
             # Knowledge must anchor to a reproducible commit. Reversing a
@@ -82,18 +88,18 @@ def harvest_run(
 
     now = datetime.now(timezone.utc)
     minted, unauditable = _mint_verified_checks(evaluation.passed, run.run_id, now, artifacts)
-    review = _review_candidates(store, minted)
+    review = _review_candidates(store, minted, chain_superseded_ids(records))
     minted = _dedupe([_store_minted(store, e, run.run_id, now) for e in minted])
 
     reversed_entries: list[Entry] = []
     stale: list[Entry] = []
     head = None
-    if run.base_commit:
+    if base_commit:
         head = repo_head(repo)
-        if head != run.base_commit:
-            touched = changed_paths(repo, run.base_commit)
+        if head != base_commit:
+            touched = changed_paths(repo, base_commit)
             if touched:
-                raw = reverse_code(runner, repo, files=changed_files(repo, run.base_commit))
+                raw = reverse_code(runner, repo, files=changed_files(repo, base_commit))
                 reversed_entries = _dedupe(
                     [_store_reanchored(store, e, head, now) for e in raw]
                 )
@@ -101,16 +107,19 @@ def harvest_run(
                 # re-extracted verbatim at head is confirmed, not stale.
                 stale = _stale_entries(store, touched, head)
 
+    # minted/reversed carry id -> digest of the FINAL stored row: minting
+    # endorses verified status bound to that content, and re-anchoring lets an
+    # existing endorsement follow the entry to its refreshed anchor.
     chain.append(
         HARVEST_EVENT,
         {
             "run_id": run.run_id,
-            "minted": [e.id for e in minted],
-            "reversed": [e.id for e in reversed_entries],
+            "minted": {e.id: entry_digest(e) for e in minted},
+            "reversed": {e.id: entry_digest(e) for e in reversed_entries},
             "stale": [e.id for e in stale],
             "unauditable_checks": unauditable,
             "review": [e.id for e in review],
-            "base_commit": run.base_commit,
+            "base_commit": base_commit,
             "head_commit": head,
         },
     )
@@ -124,10 +133,15 @@ def harvest_run(
     )
 
 
-def _review_candidates(store: KnowledgeStore, minted: list[Entry]) -> list[Entry]:
+def _review_candidates(
+    store: KnowledgeStore, minted: list[Entry], superseded: set[str]
+) -> list[Entry]:
     """Pre-existing strong entries at the locators being minted. A new
     born-verified assertion about the same page may confirm, refine or
-    contradict them — a judgment for the curator, never automated here."""
+    contradict them — a judgment for the curator, never automated here.
+    ``superseded`` is the chain-endorsed set: entries the curator already
+    retired need no second review, and the chain (not the deletable DB links
+    table) decides who those are."""
     locators = {e.source.locator for e in minted}
     if not locators:
         return []
@@ -137,6 +151,7 @@ def _review_candidates(store: KnowledgeStore, minted: list[Entry]) -> list[Entry
         for e in store.list(channel=Channel.WEB)
         if e.source.locator in locators
         and e.is_strong_evidence()
+        and e.id not in superseded
         and (e.source.locator, e.content) not in minted_content
     ]
 

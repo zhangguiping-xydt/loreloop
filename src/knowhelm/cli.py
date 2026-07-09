@@ -12,7 +12,12 @@ from .agents import CODEX_RUNNER, AgentRunner
 from .delegate.runner import DelegateRunner
 from .evidence.chain import EvidenceChain
 from .knowledge.code_reverse import reverse_code
-from .knowledge.endorsement import SUPERSEDE_EVENT, curate, endorsed_strong_ids
+from .knowledge.endorsement import (
+    SUPERSEDE_EVENT,
+    chain_superseded_ids,
+    curate,
+    unendorsed_strong_ids,
+)
 from .knowledge.model import Curation
 from .knowledge.store import KnowledgeStore
 from .report.acceptance import load_run, record_check, render_report
@@ -155,27 +160,42 @@ def cmd_run(args: argparse.Namespace) -> int:
     from .knowledge.model import Channel
 
     workdir = _workdir()
+    chain = EvidenceChain.for_workdir(workdir)
+    records = chain.verify()
     with _store(workdir) as store:
         entries = store.list_active()
-    chain = EvidenceChain.for_workdir(workdir)
+    # Supersession by chain replay, not DB links: deleting a row in the links
+    # table (inside the agent-writable tree) must not resurrect a retired
+    # entry. list_active() already applies DB links as a cache; the chain
+    # filter here is the authoritative pass.
+    superseded = chain_superseded_ids(records)
+    entries = [e for e in entries if e.id not in superseded]
     # The DB sits in the agent-writable tree; its strong bits count only when
-    # the chain endorses them. Anything strong-in-DB but unendorsed is injected
-    # as reference and flagged for the operator.
-    endorsed = endorsed_strong_ids(chain.verify())
-    unendorsed = {e.id for e in entries if e.is_strong_evidence() and e.id not in endorsed}
+    # the chain endorses them FOR THE CURRENT CONTENT. Anything strong-in-DB
+    # but unendorsed (no event, or content changed since endorsement) is
+    # injected as reference and flagged for the operator.
+    unendorsed = unendorsed_strong_ids(entries, records)
     if unendorsed:
         print(f"[knowhelm] WARNING: {len(unendorsed)} entr{'y' if len(unendorsed) == 1 else 'ies'} "
-              f"claim strong trust in the store without evidence-chain endorsement — "
-              f"injected as reference only. Inspect with `knowhelm knowledge list`:",
+              f"claim strong trust in the store without evidence-chain endorsement "
+              f"of their current content — injected as reference only. "
+              f"Inspect with `knowhelm knowledge list`:",
               file=sys.stderr)
         for e in entries:
             if e.id in unendorsed:
                 print(f"    {e.id[:8]}  {e.title}", file=sys.stderr)
     runner = DelegateRunner(_agent(args.agent), workdir)
     result = runner.run(args.task, entries, unendorsed_ids=unendorsed)
+    # This chain record is the acceptance authority for the run: report and
+    # harvest key off it, not off the agent-writable trace file.
     chain.append(
         "delegation_completed",
-        {"run_id": result.run_id, "task": args.task, "context_entries": result.pack.entry_ids},
+        {
+            "run_id": result.run_id,
+            "task": args.task,
+            "context_entries": result.pack.entry_ids,
+            "base_commit": result.base_commit,
+        },
     )
     print(result.output)
     print(f"\n[knowhelm] run {result.run_id}: injected {len(result.pack.entry_ids)} entries, "
@@ -303,7 +323,9 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
     from .knowledge.code_reverse import drifted_code_entry_ids
 
     entries = store.list()
-    superseded = store.superseded_ids()
+    # Chain replay, not DB links: a deleted links row must not un-supersede
+    # an entry in any view that informs decisions.
+    superseded = chain_superseded_ids(EvidenceChain.for_workdir(workdir).verify())
     drifted = drifted_code_entry_ids(workdir, entries) if (workdir / ".git").exists() else set()
     if args.stale:
         entries = [e for e in entries if e.id in drifted and e.id not in superseded]

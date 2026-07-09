@@ -203,7 +203,12 @@ class KnowledgeStore:
     def list_active(self) -> list[Entry]:
         """Entries eligible for injection: not rejected, not superseded.
         Superseded entries stay in the store as history — supersession is a
-        link, not a status flag — but they no longer inform new work."""
+        link, not a status flag — but they no longer inform new work.
+
+        The links table is a convenience cache inside the agent-writable
+        tree: deleting a supersedes row here must not resurrect an entry, so
+        trust-sensitive callers additionally filter by the chain-replayed
+        superseded set (see ``endorsement.chain_superseded_ids``)."""
         superseded = self.superseded_ids()
         return [
             e

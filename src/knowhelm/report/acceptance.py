@@ -1,11 +1,15 @@
-"""Acceptance report: a Markdown projection of run trace + evidence chain.
+"""Acceptance report: a Markdown projection of the evidence chain.
 
-The report stores nothing of its own. It reads the delegation trace and the
-verified evidence chain, and renders a matrix of checks with their chain
-hashes so every claim in the report can be traced back to a signed record.
+The report stores nothing of its own. The verdict rests entirely on the
+signed evidence chain: checks, artifact audits, and the chain-endorsed
+``delegation_completed`` record that pins the run's task and base commit.
+The run trace under ``.knowhelm/runs/`` sits in the agent-writable tree, so
+it is display material only — a forged ``delegation_finished`` line or an
+edited ``base_commit`` there must never sway acceptance or harvest.
 When an ArtifactStore is supplied, every artifact referenced on the chain is
-re-hashed: a missing or tampered observation downgrades the verdict — a
-report must not claim acceptance while its evidence material is gone.
+re-hashed and cross-checked: a missing, tampered, swapped or unpinned
+observation downgrades the verdict — a report must not claim acceptance
+while its evidence material is gone or unaccounted for.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from ..evidence.artifacts import ArtifactStore
 from ..evidence.chain import EvidenceChain, EvidenceRecord
 
 CHECK_EVENTS = {"check_passed", "check_failed"}
+DELEGATION_EVENT = "delegation_completed"
 
 
 @dataclass(frozen=True)
@@ -36,7 +41,18 @@ class RunEvaluation:
     passed: list[EvidenceRecord]
     failed: list[EvidenceRecord]
     broken_artifacts: list[tuple[str, str]]
-    finished: bool
+    completed: EvidenceRecord | None
+
+    @property
+    def finished(self) -> bool:
+        """Chain-endorsed completion. The trace's ``delegation_finished`` line
+        is one file-append away from any process in the tree; only the signed
+        ``delegation_completed`` record counts."""
+        return self.completed is not None
+
+    @property
+    def base_commit(self) -> str | None:
+        return self.completed.payload.get("base_commit") if self.completed else None
 
     @property
     def accepted(self) -> bool:
@@ -68,12 +84,20 @@ def evaluate_run(
     checks = [r for r in records if r.event in CHECK_EVENTS and r.payload.get("run_id") == run.run_id]
     passed = [r for r in checks if r.event == "check_passed"]
     failed = [r for r in checks if r.event == "check_failed"]
+    completed = next(
+        (
+            r
+            for r in records
+            if r.event == DELEGATION_EVENT and r.payload.get("run_id") == run.run_id
+        ),
+        None,
+    )
     return RunEvaluation(
         checks=checks,
         passed=passed,
         failed=failed,
         broken_artifacts=_audit_artifacts(checks, artifacts),
-        finished=run.finished,
+        completed=completed,
     )
 
 
@@ -88,18 +112,33 @@ def render_report(
     broken_artifacts = evaluation.broken_artifacts
     verdict = "ACCEPTED" if evaluation.accepted else "NOT ACCEPTED"
 
+    # Run metadata comes from the chain record when it exists; the trace is a
+    # fallback for display only and cannot make the verdict look better.
+    completed = evaluation.completed
+    task = completed.payload.get("task", run.task) if completed else run.task
+    context = (
+        completed.payload.get("context_entries", run.context_entries)
+        if completed
+        else run.context_entries
+    )
     lines = [
         f"# Acceptance report — {run.run_id}",
         "",
         f"- Generated: {datetime.now(timezone.utc).isoformat()}",
-        f"- Task: {run.task}",
-        f"- Delegation finished: {'yes' if run.finished else 'no'}",
-        f"- Knowledge entries injected: {len(run.context_entries)}",
+        f"- Task: {task}",
+        f"- Delegation completed (chain-endorsed): {'yes' if evaluation.finished else 'no'}",
+        f"- Knowledge entries injected: {len(context)}",
         f"- Evidence chain: verified, {len(records)} records intact",
         "",
         f"## Verdict: {verdict}",
         "",
     ]
+    if not evaluation.finished:
+        lines += [
+            "No chain-endorsed `delegation_completed` record exists for this run;",
+            "the trace file alone is not acceptance evidence.",
+            "",
+        ]
     if not checks:
         lines += ["No acceptance checks were recorded for this run.", ""]
     else:
@@ -154,7 +193,10 @@ def _audit_artifacts(
     payload. Hash integrity alone would accept a swap: replacing the artifact
     reference with a different (valid) observation of a different page. The
     url and page snapshot recorded on the signed chain pin which observation
-    the verdict was actually about."""
+    the verdict was actually about — a check that carries an artifact but no
+    such pin cannot prove the artifact is about ITS page, so the missing pin
+    is itself an integrity failure (operator checks carry no artifact and are
+    untouched by this rule)."""
     if artifacts is None:
         return []
     broken = []
@@ -171,11 +213,15 @@ def _audit_artifacts(
             broken.append((sha, str(exc)))
             continue
         chain_url = rec.payload.get("url")
-        if chain_url is not None and data.get("url") != chain_url:
+        chain_snap = rec.payload.get("page_snapshot")
+        if chain_url is None or chain_snap is None:
+            broken.append((sha, "chain record carries an artifact but no url/page_snapshot "
+                                "pin — the artifact cannot be tied to the verdict"))
+            continue
+        if data.get("url") != chain_url:
             broken.append((sha, f"artifact url {data.get('url')!r} does not match "
                                 f"the chain record ({chain_url!r})"))
-        chain_snap = rec.payload.get("page_snapshot")
-        if chain_snap is not None and data.get("snapshot_hash") != chain_snap:
+        if data.get("snapshot_hash") != chain_snap:
             broken.append((sha, "artifact snapshot hash does not match the chain record"))
     return broken
 

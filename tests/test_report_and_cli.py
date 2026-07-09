@@ -26,10 +26,19 @@ def write_trace(workdir, run_id="run-20260708-abc123", finished=True):
     return path
 
 
+def endorse_run(chain, run_id, task="fix upload", context=None, base_commit=None):
+    """The chain record cmd_run appends — the acceptance authority."""
+    return chain.append("delegation_completed", {
+        "run_id": run_id, "task": task,
+        "context_entries": context or ["e1"], "base_commit": base_commit,
+    })
+
+
 def test_report_accepted_when_all_checks_pass(workdir):
     trace = write_trace(workdir)
     chain = EvidenceChain.for_workdir(workdir)
     run = load_run(trace)
+    endorse_run(chain, run.run_id)
     record_check(chain, run.run_id, "upload returns 201", passed=True)
     report = render_report(run, chain)
     assert "Verdict: ACCEPTED" in report
@@ -41,11 +50,40 @@ def test_report_not_accepted_on_failure_or_no_checks(workdir):
     trace = write_trace(workdir)
     chain = EvidenceChain.for_workdir(workdir)
     run = load_run(trace)
+    endorse_run(chain, run.run_id)
     assert "Verdict: NOT ACCEPTED" in render_report(run, chain)
     record_check(chain, run.run_id, "upload works", passed=False, detail="got 500")
     report = render_report(run, chain)
     assert "Verdict: NOT ACCEPTED" in report
     assert "got 500" in report
+
+
+def test_report_rejects_forged_trace_without_chain_record(workdir):
+    # H1 attack: the agent forges delegation_finished in the trace and there
+    # is a passing check on the chain — but no chain-endorsed
+    # delegation_completed exists, so the run cannot be ACCEPTED.
+    trace = write_trace(workdir, finished=True)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    record_check(chain, run.run_id, "upload returns 201", passed=True)
+
+    report = render_report(run, chain)
+    assert "Verdict: NOT ACCEPTED" in report
+    assert "delegation_completed" in report
+    assert "trace file alone is not acceptance evidence" in report
+
+
+def test_report_prefers_chain_metadata_over_trace(workdir):
+    # The trace's task line is agent-writable; the chain record wins.
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    endorse_run(chain, run.run_id, task="real task from chain", context=["e1", "e2"])
+    record_check(chain, run.run_id, "ok", passed=True)
+
+    report = render_report(run, chain)
+    assert "Task: real task from chain" in report
+    assert "Knowledge entries injected: 2" in report
 
 
 def test_report_ignores_checks_from_other_runs(workdir):
@@ -59,6 +97,7 @@ def test_report_ignores_checks_from_other_runs(workdir):
 def test_cli_check_and_report_flow(workdir, capsys):
     trace = write_trace(workdir)
     run_id = trace.stem
+    endorse_run(EvidenceChain.for_workdir(workdir), run_id)
     assert main(["check", run_id, "login page loads", "--pass"]) == 0
     assert main(["report", run_id]) == 0
     out = capsys.readouterr().out
@@ -93,10 +132,17 @@ def test_cli_knowledge_curation_flow(workdir, capsys):
     assert main(["knowledge", "list"]) == 0
     assert "[strong]" in capsys.readouterr().out
 
-    # the approval is endorsed on the evidence chain, not just the DB
+    # the approval is endorsed on the evidence chain, not just the DB,
+    # and bound to the entry's content digest
+    from knowhelm.knowledge.endorsement import entry_digest
+
     records = EvidenceChain.for_workdir(workdir).verify()
     assert records[-1].event == "curation_changed"
-    assert records[-1].payload == {"entry_id": entry.id, "curation": "approved"}
+    assert records[-1].payload == {
+        "entry_id": entry.id,
+        "curation": "approved",
+        "entry_digest": entry_digest(entry),
+    }
 
 
 def test_cli_curation_rejects_missing_or_ambiguous_prefix(workdir, capsys):
@@ -219,6 +265,101 @@ def test_cli_run_keeps_chain_endorsed_strong_entries(workdir, monkeypatch, capsy
     assert "Established facts" in agent.prompts[0]
 
 
+def test_cli_run_demotes_entry_whose_content_changed_after_endorsement(workdir, monkeypatch, capsys):
+    # H2 end-to-end: approve, then rewrite the row's content by SQL. The
+    # endorsement is bound to the old digest, so cmd_run injects as reference.
+    import knowhelm.cli as cli
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    class FakeAgent:
+        def __init__(self):
+            self.prompts = []
+
+        def run(self, prompt):
+            self.prompts.append(prompt)
+            return "done"
+
+    entry = Entry(
+        title="Upload endpoint contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@abc"),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+    assert main(["knowledge", "approve", entry.id[:8]]) == 0
+    capsys.readouterr()
+
+    with KnowledgeStore(db) as store:
+        store._conn.execute(
+            "UPDATE entries SET content = ? WHERE id = ?",
+            ("POST /upload endpoint skips auth checks.", entry.id),
+        )
+        store._conn.commit()
+
+    agent = FakeAgent()
+    monkeypatch.setattr(cli, "_agent", lambda name: agent)
+    assert main(["run", "fix the upload endpoint"]) == 0
+
+    err = capsys.readouterr().err
+    assert "without evidence-chain endorsement" in err
+    assert "Established facts" not in agent.prompts[0]
+    assert "Unverified references" in agent.prompts[0]
+
+
+def test_cli_run_ignores_deleted_supersede_link(workdir, monkeypatch, capsys):
+    # H3 attack: after the curator supersedes an old strong entry, the agent
+    # deletes the links row. The chain replay must keep it out of injection.
+    import knowhelm.cli as cli
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    class FakeAgent:
+        def __init__(self):
+            self.prompts = []
+
+        def run(self, prompt):
+            self.prompts.append(prompt)
+            return "done"
+
+    old = Entry(
+        title="Old upload contract", content="POST /upload returns 200.",
+        kind=Kind.INTERFACE, source=Source(channel=Channel.CODE, locator="api.py@abc"),
+    )
+    new = Entry(
+        title="New upload contract", content="POST /upload returns 201.",
+        kind=Kind.INTERFACE, source=Source(channel=Channel.CODE, locator="api.py@def"),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(old)
+        store.add(new)
+    assert main(["knowledge", "approve", old.id[:8]]) == 0
+    assert main(["knowledge", "supersede", new.id[:8], old.id[:8]]) == 0
+    capsys.readouterr()
+
+    with KnowledgeStore(db) as store:
+        store._conn.execute("DELETE FROM links")
+        store._conn.commit()
+        assert store.superseded_ids() == set()  # DB cache is clean — attack in place
+
+    agent = FakeAgent()
+    monkeypatch.setattr(cli, "_agent", lambda name: agent)
+    assert main(["run", "fix the upload contract"]) == 0
+
+    assert "POST /upload returns 200." not in agent.prompts[0]
+
+    # the list view also stays honest
+    assert main(["knowledge", "list"]) == 0
+    out = capsys.readouterr().out
+    line = next(li for li in out.splitlines() if old.id[:8] in li)
+    assert "[superseded]" in line
+
+
 def test_report_flags_missing_and_tampered_artifacts(workdir):
     from knowhelm.evidence.artifacts import ArtifactStore
     from knowhelm.webexplore.browser import Observation
@@ -226,13 +367,14 @@ def test_report_flags_missing_and_tampered_artifacts(workdir):
     trace = write_trace(workdir)
     chain = EvidenceChain.for_workdir(workdir)
     run = load_run(trace)
+    endorse_run(chain, run.run_id)
     artifacts = ArtifactStore.for_workdir(workdir)
-    sha, path = artifacts.save_observation(
-        Observation(url="http://a", title="T", text="ok")
-    )
-    chain.append(
-        "check_passed", {"run_id": run.run_id, "check": "page ok", "artifact": sha}
-    )
+    obs = Observation(url="http://a", title="T", text="ok")
+    sha, path = artifacts.save_observation(obs)
+    chain.append("check_passed", {
+        "run_id": run.run_id, "check": "page ok", "artifact": sha,
+        "url": obs.url, "page_snapshot": obs.snapshot_hash,
+    })
 
     assert "Verdict: ACCEPTED" in render_report(run, chain, artifacts)
 
@@ -247,6 +389,28 @@ def test_report_flags_missing_and_tampered_artifacts(workdir):
     assert "file is missing" in report
 
 
+def test_report_flags_artifact_without_url_snapshot_pin(workdir):
+    # M2: an artifact the chain cannot tie to a page proves nothing — a
+    # signed check carrying an artifact but no url/page_snapshot pin would
+    # let any hash-valid observation back an ACCEPTED verdict.
+    from knowhelm.evidence.artifacts import ArtifactStore
+    from knowhelm.webexplore.browser import Observation
+
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    endorse_run(chain, run.run_id)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    sha, _ = artifacts.save_observation(Observation(url="http://a", title="T", text="ok"))
+    chain.append(
+        "check_passed", {"run_id": run.run_id, "check": "page ok", "artifact": sha}
+    )
+
+    report = render_report(run, chain, artifacts)
+    assert "Verdict: NOT ACCEPTED" in report
+    assert "no url/page_snapshot pin" in report
+
+
 def test_report_flags_artifact_swapped_for_a_different_observation(workdir):
     from knowhelm.evidence.artifacts import ArtifactStore
     from knowhelm.webexplore.browser import Observation
@@ -254,6 +418,7 @@ def test_report_flags_artifact_swapped_for_a_different_observation(workdir):
     trace = write_trace(workdir)
     chain = EvidenceChain.for_workdir(workdir)
     run = load_run(trace)
+    endorse_run(chain, run.run_id)
     artifacts = ArtifactStore.for_workdir(workdir)
     real = Observation(url="http://app.local/upload", title="Upload", text="Max 50MB.")
     sha, _ = artifacts.save_observation(real)
@@ -280,6 +445,7 @@ def test_report_notes_passed_checks_without_artifacts(workdir):
     trace = write_trace(workdir)
     chain = EvidenceChain.for_workdir(workdir)
     run = load_run(trace)
+    endorse_run(chain, run.run_id)
     rec = record_check(chain, run.run_id, "looks right on my screen", passed=True)
     assert rec.payload["judge"] == "operator"
     report = render_report(run, chain)

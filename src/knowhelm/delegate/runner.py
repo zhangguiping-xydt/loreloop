@@ -30,6 +30,7 @@ class DelegationResult:
     output: str
     trace_path: Path
     pack: ContextPack
+    base_commit: str | None
 
 
 class DelegateRunner:
@@ -68,7 +69,13 @@ class DelegateRunner:
             self._trace(trace_path, "delegation_failed", error=str(exc))
             raise
         self._trace(trace_path, "delegation_finished", output_chars=len(output))
-        return DelegationResult(run_id=run_id, output=output, trace_path=trace_path, pack=pack)
+        return DelegationResult(
+            run_id=run_id,
+            output=output,
+            trace_path=trace_path,
+            pack=pack,
+            base_commit=base_commit,
+        )
 
     def _trace(self, path: Path, event: str, **fields) -> None:
         record = {
