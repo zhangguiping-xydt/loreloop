@@ -431,6 +431,56 @@ def test_harvest_reports_reanchored_strong_entries_as_demoted(env):
     assert unendorsed_strong_ids([stored], chain.verify()) == {existing.id}
 
 
+def test_harvest_chain_failure_leaves_no_strong_bits_in_store(env):
+    # Round-4 F2: chain before trust bits. If the knowledge_harvested append
+    # fails, the DB must not keep a VERIFIED row that the chain never
+    # endorsed — the whole mint write happens after the append succeeds.
+    repo, store, chain, artifacts = env
+    trace = start_run(repo, chain, "run-x", head_of(repo))
+    record_browser_check(chain, "run-x", artifacts=artifacts)
+
+    original_append = chain.append
+
+    def broken_append(event, payload):
+        if event == "knowledge_harvested":
+            raise OSError("disk full")
+        return original_append(event, payload)
+
+    chain.append = broken_append
+    with pytest.raises(OSError):
+        harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    assert all(not e.is_strong_evidence() for e in store.list())
+
+
+def test_harvest_chain_failure_leaves_existing_draft_untouched(env):
+    # Same failure, reuse path: a matching draft row must stay draft.
+    repo, store, chain, artifacts = env
+    draft = Entry(
+        title="Upload limit", content="upload rejects files over 50MB",
+        kind=Kind.BEHAVIOR,
+        source=Source(channel=Channel.WEB, locator="http://app.local/upload"),
+    )
+    store.add(draft)
+    trace = start_run(repo, chain, "run-x", head_of(repo))
+    record_browser_check(chain, "run-x", artifacts=artifacts)
+
+    original_append = chain.append
+
+    def broken_append(event, payload):
+        if event == "knowledge_harvested":
+            raise OSError("disk full")
+        return original_append(event, payload)
+
+    chain.append = broken_append
+    with pytest.raises(OSError):
+        harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    stored = store.get(draft.id)
+    assert stored.trust.verification is Verification.UNVERIFIED
+    assert not stored.is_strong_evidence()
+
+
 def test_harvest_lists_prior_strong_entries_on_minted_pages_for_review(env):
     repo, store, chain, artifacts = env
     from datetime import datetime, timezone

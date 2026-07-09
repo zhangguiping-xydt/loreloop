@@ -331,9 +331,13 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
     from .knowledge.code_reverse import drifted_code_entry_ids
 
     entries = store.list()
-    # Chain replay, not DB links: a deleted links row must not un-supersede
-    # an entry in any view that informs decisions.
-    superseded = chain_superseded_ids(EvidenceChain.for_workdir(workdir).verify())
+    # Chain replay, not DB state: a deleted links row must not un-supersede
+    # an entry, and a strong bit UPDATEd straight into the DB must not show
+    # as [strong] — the list view informs curation decisions, so it applies
+    # the same endorsement rules as injection.
+    records = EvidenceChain.for_workdir(workdir).verify()
+    superseded = chain_superseded_ids(records)
+    unendorsed = unendorsed_strong_ids(entries, records)
     drifted = drifted_code_entry_ids(workdir, entries) if (workdir / ".git").exists() else set()
     if args.stale:
         entries = [e for e in entries if e.id in drifted and e.id not in superseded]
@@ -341,8 +345,10 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
             print("no stale entries: every code anchor matches the current tree")
             return 0
     for e in entries:
-        strong = "strong" if e.is_strong_evidence() else "ref"
+        strong = "strong" if e.is_strong_evidence() and e.id not in unendorsed else "ref"
         flags = ""
+        if e.id in unendorsed:
+            flags += "  [unendorsed: strong bit has no chain endorsement]"
         if e.id in superseded:
             flags += "  [superseded]"
         if e.id in drifted:

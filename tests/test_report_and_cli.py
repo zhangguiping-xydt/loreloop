@@ -392,6 +392,40 @@ def test_cli_run_ignores_deleted_supersede_link(workdir, monkeypatch, capsys):
     assert "[superseded]" in line
 
 
+def test_cli_knowledge_list_flags_unendorsed_strong_as_ref(workdir, capsys):
+    # Round-4 F1: the DB is agent-writable, so a strong bit UPDATEd straight
+    # into it must not render as [strong] in the list view either — list
+    # informs curation decisions and applies the same endorsement rules as
+    # injection.
+    from datetime import datetime, timezone
+
+    from knowhelm.knowledge.model import (
+        Channel, Entry, Kind, Source, Trust, Verification,
+    )
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    laundered = Entry(
+        title="Laundered fact", content="Agent says this is verified.",
+        kind=Kind.BEHAVIOR,
+        source=Source(channel=Channel.WEB, locator="http://app.local/x"),
+        trust=Trust(
+            verification=Verification.VERIFIED,
+            verified_at=datetime.now(timezone.utc), verified_by="forged",
+        ),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(laundered)
+
+    assert main(["knowledge", "list"]) == 0
+    out = capsys.readouterr().out
+    line = next(li for li in out.splitlines() if laundered.id[:8] in li)
+    assert "[ref   ]" in line
+    assert "[unendorsed" in line
+    assert "[strong]" not in line
+
+
 def test_report_flags_missing_and_tampered_artifacts(workdir):
     from knowhelm.evidence.artifacts import ArtifactStore
     from knowhelm.webexplore.browser import Observation

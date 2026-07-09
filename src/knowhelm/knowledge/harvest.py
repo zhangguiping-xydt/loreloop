@@ -21,7 +21,7 @@ appended on success and re-harvesting the same run is refused.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -88,9 +88,13 @@ def harvest_run(
             )
 
     now = datetime.now(timezone.utc)
-    minted, unauditable = _mint_verified_checks(evaluation.passed, run.run_id, now, artifacts)
-    review = _review_candidates(store, minted, chain_superseded_ids(records))
-    minted = _dedupe([_store_minted(store, e, run.run_id, now) for e in minted])
+    candidates, unauditable = _mint_verified_checks(evaluation.passed, run.run_id, now, artifacts)
+    review = _review_candidates(store, candidates, chain_superseded_ids(records))
+    # Chain before trust bits: the minted rows are only COMPUTED here — their
+    # digests go on the chain first, and the DB is written after the append
+    # succeeds. A failure anywhere in between leaves drafts and re-anchors at
+    # worst, never a strong bit without its chain-backed justification.
+    minted = _dedupe([_prospective_minted(store, e) for e in candidates])
 
     reversed_entries: list[Entry] = []
     stale: list[Entry] = []
@@ -114,9 +118,10 @@ def harvest_run(
     # surfaced so the operator can re-approve or re-verify deliberately.
     demoted = _demoted_by_reanchor(reversed_entries, records)
 
-    # minted carries id -> digest of the FINAL stored row: minting endorses
-    # verified status bound to that content. reversed digests are provenance
-    # only — endorsement replay ignores them (see endorsement module).
+    # minted carries id -> digest of the row the mint WILL leave: minting
+    # endorses verified status bound to that content. reversed digests are
+    # provenance only — endorsement replay ignores them (see endorsement
+    # module).
     chain.append(
         HARVEST_EVENT,
         {
@@ -130,6 +135,8 @@ def harvest_run(
             "head_commit": head,
         },
     )
+    for e in minted:
+        _persist_minted(store, e, run.run_id, now)
     return HarvestResult(
         minted=minted,
         reversed_entries=reversed_entries,
@@ -178,30 +185,46 @@ def _review_candidates(
     ]
 
 
-def _store_minted(store: KnowledgeStore, entry: Entry, run_id: str, now: datetime) -> Entry:
-    """Store a born-verified assertion. If the identical claim already exists
-    for the same page (e.g. a draft from web ingestion), the verification
-    that just happened must land on it: this run really did check the claim
-    against the live page, chain-backed — recording that on the existing
-    entry is bookkeeping of a real event, not trust laundering. Works through
-    the normal verification state machine; a prior CONTRADICTED flips to
-    VERIFIED because the newest browser evidence says the claim holds.
+def _prospective_minted(store: KnowledgeStore, entry: Entry) -> Entry:
+    """The row a mint WILL leave, computed without writing. If the identical
+    claim already exists for the same page (e.g. a draft from web ingestion),
+    the verification lands on that row — recording a real, chain-backed
+    browser check on the existing entry is bookkeeping, not laundering; a
+    prior CONTRADICTED flips to VERIFIED because the newest evidence says
+    the claim holds.
 
     Every field of the reused row is forced to the canonical mint values
-    (title/kind here, snapshot on top of the content+locator match that
-    found it). The minted digest endorses the WHOLE row: leaving a
-    pre-planted title or kind in place would sign whatever the agent parked
-    on the row before the run — the digest must cover only what the browser
-    check actually vouches for."""
+    (title/kind, snapshot on top of the content+locator match that found
+    it). The minted digest endorses the WHOLE row: leaving a pre-planted
+    title or kind in place would sign whatever the agent parked on the row
+    before the run — the digest must cover only what the browser check
+    actually vouches for."""
     existing = store.find_duplicate(entry)
     if existing is None:
-        return store.add(entry)
-    updated = store.set_verification(existing.id, Verification.VERIFIED, run_id, now)
-    if entry.source.snapshot_ref and updated.source.snapshot_ref != entry.source.snapshot_ref:
-        updated = store.set_snapshot_ref(existing.id, entry.source.snapshot_ref, now)
-    if (updated.title, updated.kind) != (entry.title, entry.kind):
-        updated = store.set_title_kind(existing.id, entry.title, entry.kind, now)
-    return updated
+        return entry
+    return replace(
+        existing,
+        title=entry.title,
+        kind=entry.kind,
+        source=replace(
+            existing.source,
+            snapshot_ref=entry.source.snapshot_ref or existing.source.snapshot_ref,
+        ),
+        trust=entry.trust,
+    )
+
+
+def _persist_minted(store: KnowledgeStore, entry: Entry, run_id: str, now: datetime) -> None:
+    """Write a prospective minted row, AFTER its digest went on the chain."""
+    existing = store.get(entry.id)
+    if existing is None:
+        store.add(entry)
+        return
+    store.set_verification(entry.id, Verification.VERIFIED, run_id, now)
+    if existing.source.snapshot_ref != entry.source.snapshot_ref:
+        store.set_snapshot_ref(entry.id, entry.source.snapshot_ref, now)
+    if (existing.title, existing.kind) != (entry.title, entry.kind):
+        store.set_title_kind(entry.id, entry.title, entry.kind, now)
 
 
 def _store_reanchored(

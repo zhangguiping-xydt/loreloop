@@ -34,7 +34,11 @@ boundary, knowhelm defends against:
   digest of the entry's content and source. Before injection, `knowhelm run`
   recomputes that digest from the current DB row — an entry whose strong bit
   has no chain endorsement, or whose content was rewritten after
-  endorsement, is demoted to reference. Only human or machine trust acts
+  endorsement, is demoted to reference; `knowledge list` applies the same
+  rule, so a laundered bit never even DISPLAYS as strong. Trust bits are
+  written chain-first everywhere (verification, curation, harvest minting):
+  a crash between the two writes leaves a draft, never an unendorsed strong
+  row. Only human or machine trust acts
   rebind a digest: when harvest re-anchors an endorsed entry to a new
   commit, the old endorsement does NOT follow it (LLM re-extraction can be
   steered via comment pollution), the entry demotes, and harvest tells the
