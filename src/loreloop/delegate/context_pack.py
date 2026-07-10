@@ -29,10 +29,42 @@ _ASCII_WORD = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]{2,}")
 _CJK_RUN = re.compile(r"[一-鿿]+")
 _ASCII_STOPWORDS = frozenset(
     {
-        "the", "and", "for", "with", "from", "this", "that", "these", "those",
-        "are", "was", "were", "been", "being", "does", "did", "has", "had",
-        "who", "when", "where", "what", "why", "how", "into", "onto", "than",
-        "then", "used", "using", "use", "its", "our", "your", "their", "you",
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+        "that",
+        "these",
+        "those",
+        "are",
+        "was",
+        "were",
+        "been",
+        "being",
+        "does",
+        "did",
+        "has",
+        "had",
+        "who",
+        "when",
+        "where",
+        "what",
+        "why",
+        "how",
+        "into",
+        "onto",
+        "than",
+        "then",
+        "used",
+        "using",
+        "use",
+        "its",
+        "our",
+        "your",
+        "their",
+        "you",
     }
 )
 _TITLE_WEIGHT = 3.0
@@ -84,8 +116,7 @@ class Bm25Scorer:
             doc_freq.update(set(counts))
         n = len(self._counts)
         self._idf = {
-            term: math.log(1 + (n - df + 0.5) / (df + 0.5))
-            for term, df in doc_freq.items()
+            term: math.log(1 + (n - df + 0.5) / (df + 0.5)) for term, df in doc_freq.items()
         }
 
     def score(self, query_terms: list[str], entry: Entry) -> float:
@@ -166,8 +197,7 @@ def rank_entries(
         original_score = scorer.score(original_terms, entry)
         expansion_score = scorer.score(expansion_terms, entry)
         lexical = (
-            _ORIGINAL_QUERY_WEIGHT * original_score
-            + _EXPANSION_QUERY_WEIGHT * expansion_score
+            _ORIGINAL_QUERY_WEIGHT * original_score + _EXPANSION_QUERY_WEIGHT * expansion_score
         )
         if lexical <= 0:
             continue
@@ -183,9 +213,11 @@ def rank_entries(
                 original_score,
                 expansion_score,
                 len(entry_terms & original_unique) / len(original_unique)
-                if original_unique else 0.0,
+                if original_unique
+                else 0.0,
                 len(entry_terms & expansion_unique) / len(expansion_unique)
-                if expansion_unique else 0.0,
+                if expansion_unique
+                else 0.0,
             )
         )
     ranked.sort(key=lambda item: (-item.adjusted_score, item.entry.id))
@@ -267,8 +299,7 @@ def select(
         )
     ]
     strong = [
-        e for e in relevant
-        if (e.is_strong_evidence() or e.id in endorsed) and e.id not in demoted
+        e for e in relevant if (e.is_strong_evidence() or e.id in endorsed) and e.id not in demoted
     ]
     strong_ids = {e.id for e in strong}
     return ContextPack(

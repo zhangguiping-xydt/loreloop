@@ -34,7 +34,7 @@ from .actions import (
     parse_action_script,
     script_locator,
 )
-from .browser import Browser, Observation
+from .browser import Browser, BrowserError, Observation, require_http_url, same_origin
 
 # The delimiter embeds a per-call random nonce: a fixed marker string could be
 # planted verbatim inside a malicious page to close the data region early and
@@ -67,6 +67,7 @@ Judge strictly from the observed content. Output a single JSON object
   {{"passed": true or false, "reason": "<one sentence citing the observed content>"}}
 """
 
+
 @dataclass(frozen=True)
 class VerifyResult:
     passed: bool
@@ -97,6 +98,7 @@ def parse_assertion(expectation: str) -> tuple[str, str] | None:
     a free-form expectation. An empty needle raises: ``"" in text`` is
     vacuously true and must never produce a PASS. Callers can use this to
     fail fast before any browser work."""
+    _validate_expectation_text(expectation)
     for prefix in _PREFIXES:
         if expectation.startswith(prefix):
             needle = expectation.removeprefix(prefix).strip()
@@ -106,6 +108,15 @@ def parse_assertion(expectation: str) -> tuple[str, str] | None:
                 )
             return prefix, needle
     return None
+
+
+def _validate_expectation_text(expectation: str) -> None:
+    if not isinstance(expectation, str) or not expectation.strip():
+        raise MalformedExpectation("acceptance expectation must be non-empty")
+    if len(expectation) > 4_000:
+        raise MalformedExpectation("acceptance expectation must be at most 4000 characters")
+    if any(ord(ch) < 32 and ch not in "\t\n\r" for ch in expectation):
+        raise MalformedExpectation("acceptance expectation contains control characters")
 
 
 def deterministic_check(obs: Observation, expectation: str) -> tuple[bool, str] | None:
@@ -158,7 +169,10 @@ def verify_expectation(
     expectation: str,
     artifacts: ArtifactStore | None = None,
 ) -> VerifyResult:
+    require_http_url(url)
     obs = browser.observe(url)
+    if not same_origin(obs.url, url):
+        raise BrowserError(f"verification left allowed origin: {obs.url}")
     artifact_sha = artifacts.save_observation(obs)[0] if artifacts else None
     passed, reason, mode = _judge(runner, obs, expectation)
     record = chain.append(
@@ -188,10 +202,9 @@ def verify_script_expectation(
     artifacts: ArtifactStore | None = None,
     allow_writes: bool = False,
 ) -> VerifyResult:
+    _validate_expectation_text(expectation)
     script_artifact = _save_script_artifact(artifacts, script)
-    execution = execute_action_script(
-        browser, script, base_url=base_url, allow_writes=allow_writes
-    )
+    execution = execute_action_script(browser, script, base_url=base_url, allow_writes=allow_writes)
     trace_artifact = _save_trace_artifact(artifacts, execution)
     if not execution.succeeded:
         reason = f"interaction script {execution.status}: {execution.reason or 'stopped'}"
@@ -209,12 +222,15 @@ def verify_script_expectation(
                 "script_artifact": script_artifact,
                 "trace_artifact": trace_artifact,
                 "steps_completed": execution.steps_completed,
+                "allow_writes": allow_writes,
             },
         )
         return VerifyResult(False, reason, None, record)
 
     obs = execution.final_observation
     assert obs is not None
+    if not same_origin(obs.url, script.base):
+        raise BrowserError(f"verification left allowed origin: {obs.url}")
     artifact_sha = artifacts.save_observation(obs)[0] if artifacts else None
     passed, reason, mode = _judge(runner, obs, expectation)
     record = chain.append(
@@ -233,6 +249,7 @@ def verify_script_expectation(
             "script_artifact": script_artifact,
             "trace_artifact": trace_artifact,
             "steps_completed": execution.steps_completed,
+            "allow_writes": allow_writes,
         },
     )
     return VerifyResult(passed=passed, reason=reason, snapshot=obs.snapshot_hash, record=record)
@@ -267,7 +284,10 @@ def verify_entry(
             browser, runner, chain, store, entry, run_id, script_digest, artifacts
         )
 
+    require_http_url(entry.source.locator)
     obs = browser.observe(entry.source.locator)
+    if not same_origin(obs.url, entry.source.locator):
+        raise BrowserError(f"entry verification left allowed origin: {obs.url}")
     artifact_sha = artifacts.save_observation(obs)[0] if artifacts else None
     drifted = entry.source.snapshot_ref is None or obs.snapshot_hash != entry.source.snapshot_ref
     passed, reason, mode = _judge(runner, obs, entry.content, allow_deterministic=False)
@@ -359,15 +379,16 @@ def _verify_script_entry(
                 "reanchored": False,
                 "judge": "action-script",
                 "verified_via": "browser",
+                "allow_writes": False,
             },
         )
-        store.set_verification(
-            entry.id, Verification.CONTRADICTED, run_id, now
-        )
+        store.set_verification(entry.id, Verification.CONTRADICTED, run_id, now)
         return EntryVerifyResult(False, reason, True, record)
 
     obs = execution.final_observation
     assert obs is not None
+    if not same_origin(obs.url, script.base):
+        raise BrowserError(f"entry verification left allowed origin: {obs.url}")
     artifact_sha = artifacts.save_observation(obs)[0]
     drifted = entry.source.snapshot_ref is None or obs.snapshot_hash != entry.source.snapshot_ref
     passed, reason, mode = _judge(runner, obs, entry.content, allow_deterministic=False)
@@ -396,6 +417,7 @@ def _verify_script_entry(
             "anchor_drifted": drifted,
             "reanchored": passed and drifted,
             "verified_via": "browser",
+            "allow_writes": False,
         },
     )
     store.set_verification(

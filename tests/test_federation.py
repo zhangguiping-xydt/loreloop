@@ -137,9 +137,7 @@ def test_rejected_foreign_entries_are_not_returned(tmp_path):
     assert entries == []
 
 
-def test_search_selects_project_by_alias_and_reports_foreign_trust(
-    tmp_path, monkeypatch, capsys
-):
+def test_search_selects_project_by_alias_and_reports_foreign_trust(tmp_path, monkeypatch, capsys):
     current = git_repo(tmp_path / "current")
     foreign = git_repo(tmp_path / "foreign")
     entry = manual_entry()
@@ -177,9 +175,7 @@ def test_search_tag_without_all_selects_tagged_projects(tmp_path, monkeypatch, c
     assert "[hr-fund]" in capsys.readouterr().out
 
 
-def test_import_is_always_born_draft_with_foreign_digest_provenance(
-    tmp_path, monkeypatch, capsys
-):
+def test_import_is_always_born_draft_with_foreign_digest_provenance(tmp_path, monkeypatch, capsys):
     current = git_repo(tmp_path / "current")
     foreign = git_repo(tmp_path / "foreign")
     source = manual_entry()
@@ -266,14 +262,19 @@ def test_run_with_related_applies_overlap_order_budget_and_records_ids(
     agent = FakeAgent()
     monkeypatch.setattr(cli, "_agent", lambda name: agent)
 
-    assert main([
-        "run",
-        "fix upload endpoint",
-        "--no-expand",
-        "--with-related",
-        "--related-limit",
-        "1",
-    ]) == 0
+    assert (
+        main(
+            [
+                "run",
+                "fix upload endpoint",
+                "--no-expand",
+                "--with-related",
+                "--related-limit",
+                "1",
+            ]
+        )
+        == 0
+    )
 
     assert "Related project references" in agent.prompts[0]
     assert "Shared upload policy" in agent.prompts[0]

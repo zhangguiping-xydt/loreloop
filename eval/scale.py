@@ -89,7 +89,12 @@ def benchmark_retrieval(sizes: list[int], repetitions: int, k: int) -> list[dict
                 started = time.perf_counter()
                 pack = select(f"canonical {query} marker {key}", entries, limit=k)
                 timings.append((time.perf_counter() - started) * 1000)
-                examples.append({"relevant": [f"entry-{QUERIES.index((query, key)):05d}"], "ranking": pack.entry_ids})
+                examples.append(
+                    {
+                        "relevant": [f"entry-{QUERIES.index((query, key)):05d}"],
+                        "ranking": pack.entry_ids,
+                    }
+                )
                 token_estimates.append((len(render(pack)) + 3) // 4)
         metrics = evaluate_rankings(examples, k=k)
         rows.append(

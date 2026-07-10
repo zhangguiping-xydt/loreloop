@@ -11,6 +11,9 @@ import pytest
 
 from loreloop.evidence.chain import EvidenceChain
 from loreloop.knowledge.endorsement import (
+    TrustProjectionError,
+    assert_trust_projection,
+    chain_contradicted_ids,
     chain_endorsed_strong_ids,
     chain_rejected_ids,
     chain_superseded_ids,
@@ -34,7 +37,9 @@ NOW = datetime(2026, 7, 9, tzinfo=timezone.utc)
 
 def make_entry(title="Upload contract", content="POST /upload returns 201."):
     return Entry(
-        title=title, content=content, kind=Kind.INTERFACE,
+        title=title,
+        content=content,
+        kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator="api.py@abc"),
     )
 
@@ -103,10 +108,26 @@ def test_curate_endorses_approval_with_content_digest(env):
     assert updated.trust.curation is Curation.APPROVED
     records = chain.verify()
     assert records[-1].event == "curation_changed"
-    assert records[-1].payload == {
+    assert records[-1].payload | {"entry": None} == {
         "entry_id": entry.id,
         "curation": "approved",
         "entry_digest": entry_digest(entry),
+        "entry": None,
+    }
+    assert records[-1].payload["entry"] == {
+        "id": entry.id,
+        "title": entry.title,
+        "content": entry.content,
+        "kind": entry.kind.value,
+        "source": {
+            "channel": entry.source.channel.value,
+            "locator": entry.source.locator,
+            "snapshot_ref": entry.source.snapshot_ref,
+            "symbol": entry.source.symbol,
+            "line_start": entry.source.line_start,
+            "line_end": entry.source.line_end,
+            "excerpt": entry.source.excerpt,
+        },
     }
     assert unendorsed_strong_ids([updated], records) == set()
 
@@ -175,9 +196,7 @@ def test_approval_survives_db_curation_flip_to_draft(env):
 def test_locator_rewrite_after_verification_is_not_endorsed(env):
     store, chain = env
     entry = store.add(make_entry())
-    chain.append(
-        "entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)}
-    )
+    chain.append("entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)})
 
     store._conn.execute(
         "UPDATE entries SET locator = ? WHERE id = ?", ("http://evil.local/", entry.id)
@@ -191,9 +210,7 @@ def test_locator_rewrite_after_verification_is_not_endorsed(env):
 def test_verified_event_with_digest_endorses_current_row(env):
     store, chain = env
     entry = store.add(make_entry())
-    chain.append(
-        "entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)}
-    )
+    chain.append("entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)})
 
     assert unendorsed_strong_ids([strong(entry)], chain.verify()) == set()
 
@@ -212,12 +229,26 @@ def test_events_without_digest_grant_no_endorsement(env):
 def test_contradiction_revokes_verification_endorsement(env):
     store, chain = env
     entry = store.add(make_entry())
-    chain.append(
-        "entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)}
-    )
+    chain.append("entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)})
     chain.append("entry_contradicted", {"entry_id": entry.id})
 
     assert unendorsed_strong_ids([strong(entry)], chain.verify()) == {entry.id}
+
+
+def test_newer_contradiction_overrides_approval_until_operator_reapproves(env):
+    store, chain = env
+    entry = store.add(make_entry())
+    curate(store, chain, entry.id, Curation.APPROVED, NOW)
+    chain.append("entry_contradicted", {"entry_id": entry.id})
+
+    approved = store.get(entry.id)
+    assert chain_contradicted_ids(chain.verify()) == {entry.id}
+    assert unendorsed_strong_ids([approved], chain.verify()) == {entry.id}
+
+    curate(store, chain, entry.id, Curation.APPROVED, NOW)
+
+    assert chain_contradicted_ids(chain.verify()) == set()
+    assert unendorsed_strong_ids([store.get(entry.id)], chain.verify()) == set()
 
 
 def test_harvest_minted_digests_endorse(env):
@@ -284,16 +315,32 @@ def test_db_only_strong_bit_is_not_endorsed(env):
     store, chain = env
     # simulate the attack: agent UPDATEs the store directly, no chain event
     laundered = Entry(
-        title="Laundered", content="Agent says this is a fact.", kind=Kind.BEHAVIOR,
+        title="Laundered",
+        content="Agent says this is a fact.",
+        kind=Kind.BEHAVIOR,
         source=Source(channel=Channel.WEB, locator="http://x", snapshot_ref="s"),
         trust=Trust(
-            verification=Verification.VERIFIED, verified_at=NOW, verified_by="forged",
+            verification=Verification.VERIFIED,
+            verified_at=NOW,
+            verified_by="forged",
         ),
     )
     store.add(laundered)
 
     assert laundered.is_strong_evidence()
     assert unendorsed_strong_ids([laundered], chain.verify()) == {laundered.id}
+
+
+def test_projection_fails_closed_when_chain_backed_row_is_deleted(env):
+    store, chain = env
+    entry = store.add(make_entry())
+    curate(store, chain, entry.id, Curation.APPROVED, NOW)
+
+    store._conn.execute("DELETE FROM entries WHERE id = ?", (entry.id,))
+    store._conn.commit()
+
+    with pytest.raises(TrustProjectionError, match="missing from knowledge.db"):
+        assert_trust_projection(store.list(), chain.verify())
 
 
 def test_chain_superseded_ids_replays_supersede_events(env):
@@ -327,9 +374,7 @@ def test_rejection_survives_db_curation_flip(env):
     # contradiction — so only the chain-rejected replay keeps it out.
     store, chain = env
     entry = store.add(make_entry())
-    chain.append(
-        "entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)}
-    )
+    chain.append("entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)})
     curate(store, chain, entry.id, Curation.REJECTED, NOW)
 
     store._conn.execute(

@@ -1,5 +1,11 @@
 # Security Policy
 
+## Supported versions
+
+LoreLoop is early alpha. Security fixes are applied to the latest release and
+the `main` branch; older alpha releases may require upgrading rather than a
+backport.
+
 ## Threat model: honest workstation
 
 LoreLoop is local-first and assumes an **honest workstation**: the machine
@@ -44,12 +50,13 @@ boundary, LoreLoop defends against:
   taken at face value: every approval, verification and supersession is also
   endorsed on the evidence chain, and each trust-raising event binds a
   digest of the entry's content and source. Before injection, `loreloop run`
-  recomputes that digest from the current DB row — an entry whose strong bit
-  has no chain endorsement, or whose content was rewritten after
-  endorsement, is demoted to reference; a row whose current digest is
-  chain-endorsed remains strong even if the DB cache was flipped back to
-  draft. `knowledge list` applies the same rule, so SQLite edits can neither
-  launder nor suppress strong trust. Trust bits are written chain-first
+  recomputes that digest from the current DB row. A DB-only strong bit is
+  demoted, but deletion or an unexplained rewrite of a chain-backed row fails
+  closed: delegation stops instead of exposing attacker-controlled content as
+  a reference. A row whose current digest is chain-endorsed remains strong
+  even if the DB cache was flipped back to draft. `knowledge list` applies the
+  same replay rules, so SQLite edits can neither launder nor silently suppress
+  strong trust. Trust bits are written chain-first
   everywhere (verification, curation, harvest minting):
   a crash between the two writes leaves a draft, never an unendorsed strong
   row. Only human or machine trust acts
@@ -72,12 +79,24 @@ boundary, LoreLoop defends against:
 - **Accidental credential capture.** LoreLoop never automates logins: at a
   login wall it either skips the page or hands the real browser window to
   the human. Observation artifacts may contain post-login page content, so
-  they are written 0600 in a 0700 directory.
+  they are written 0600 in a 0700 directory. Command evidence redacts common
+  secret assignments, labels, and secret-valued environment variables from
+  stdout/stderr before storing artifacts or chain details.
 
-Explicitly **out of scope**: an attacker with write access to the
-workstation (they can replace the binary, the key, and the chain together),
-a malicious coding agent binary, and confidentiality of the local SQLite
-store beyond file permissions.
+- **Agent subprocess capability reduction.** Inference is launched in a
+  temporary directory with Claude tools disabled or Codex read-only sandboxing
+  and user/project rules ignored. Delegation uses explicit non-bypass workspace
+  permissions. LoreLoop removes operator key/registry variables and marks child
+  processes so its signing API refuses their append attempts. This is defense
+  in depth for cooperative tools, not an OS security boundary: a malicious
+  agent binary can ignore conventions, reset environment variables, or attack
+  anything the OS user can access.
+
+Explicitly **out of scope**: an attacker with write access to the workstation
+(they can replace the binary, the key, and the chain together), a malicious or
+compromised coding-agent binary, a model deliberately escaping the provided
+CLI capability profile, and confidentiality of local state beyond filesystem
+permissions.
 
 ## Runtime security contract
 
@@ -86,21 +105,35 @@ These statements are observable behavior, not aspirational documentation:
 | Promise | Runtime enforcement | Regression coverage |
 |---|---|---|
 | Foreign federation is read-only | SQLite opens with `mode=ro`; chain verification never creates or advances a foreign head/key | `tests/test_federation.py`, `tests/test_evidence_chain.py` |
-| Trust cannot be raised by SQLite edits | Current entry digests must replay from HMAC-chain curation/verification events | `tests/test_endorsement.py`, `tests/test_report_and_cli.py` |
-| Browser scope cannot escape origin silently | Redirect targets, robots, sitemaps, discovered links, and action steps are checked after resolution | `tests/test_webexplore.py`, `tests/test_verify_entry.py` |
-| Scripted writes require operator opt-in | Non-search fill/select and POST submit require `--allow-writes`; passwords/destructive controls stay blocked | `tests/test_webexplore.py`, `tests/test_report_and_cli.py` |
+| Trust cannot be raised or silently rewritten by SQLite edits | Current entry digests must replay from HMAC-chain events; missing/unexplained chain-backed rows stop delegation | `tests/test_endorsement.py`, `tests/test_report_and_cli.py` |
+| Browser scope cannot escape origin silently | Redirect targets, robots, sitemaps, discovered links, network requests, action steps, and final observations are checked | `tests/test_webexplore.py`, `tests/test_smoke_playwright.py` |
+| Scripted writes require operator opt-in | Network interception blocks same-origin non-GET requests without `--allow-writes`; password/destructive controls stay blocked | `tests/test_webexplore.py`, `tests/test_smoke_playwright.py` |
+| Agent children do not receive normal signing capability | Key/registry variables are removed; the child marker makes evidence append fail; inference/delegation commands use explicit permission profiles | `tests/test_delegate.py`, `tests/test_evidence_chain.py` |
 | Interrupted/failed work is not acceptance | Trace records an explicit failed/interrupted terminal event; only one chain-backed completion can be accepted | `tests/test_delegate.py`, `tests/test_report_and_cli.py` |
 | Chain-first harvest survives a DB crash | Signed harvest events carry complete minted rows; a retry restores only missing digest-matching rows without appending a second event | `tests/test_harvest.py` |
 | Schema upgrades preserve rollback material | Ordered transaction, pre-upgrade SQLite backup, refusal of newer versions | `tests/test_knowledge_store.py` |
 | Expected failures do not leak tracebacks | argparse and runtime failures share `error`/`reason`/`next` output | `tests/test_cli_help.py`, CLI E2E tests |
 
-On POSIX, newly created key/artifact directories and files use `0700`/`0600`.
+On POSIX, newly created state, key, trace, database, chain, lock, and artifact
+directories/files use `0700`/`0600` as appropriate and reject symlink
+substitution at their protected paths.
 On Windows, Python's POSIX mode bits are not an ACL mechanism; confidentiality
 there relies on the current user's profile/directory ACL. A custom
 `LORELOOP_KEY_DIR` remains the operator's security boundary and should not be
 shared with other accounts.
 
 ## Known limitations (deliberate trade-offs)
+
+- **Local storage is not local inference.** Claude Code and Codex may send
+  source snippets, page observations, and prompts to their configured model
+  provider. Provider retention, residency, account policy, and transport are
+  outside LoreLoop's control. Do not ingest data you are not authorized to
+  disclose to that provider.
+- **Browser write fencing cannot repair unsafe server semantics.** Cross-origin
+  requests and default non-GET requests are blocked, but a same-origin GET can
+  still have side effects in a poorly designed application. Run action scripts
+  against disposable or staging systems and review scripts before using
+  `--allow-writes`.
 
 - **Injection trusts the last verification.** `loreloop run` does not
   re-open a browser to re-check strong web entries before injecting them;
@@ -133,6 +166,8 @@ content from your running application.
 
 ## Reporting a vulnerability
 
-Open a GitHub security advisory (preferred) or an issue marked [security]
-without exploit details, and we will follow up privately. Please do not
-publish working exploits before a fix is released.
+Open a private GitHub Security Advisory. Do not open a public issue containing
+exploit details, credentials, private source, or sensitive evidence artifacts.
+Include affected versions, impact, reproduction steps, and any suggested fix.
+We will acknowledge the report as soon as maintainers are available and
+coordinate disclosure after a fix is released.

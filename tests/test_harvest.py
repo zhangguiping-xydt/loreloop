@@ -51,10 +51,15 @@ def write_trace(workdir, run_id, base_commit, finished=True):
         if isinstance(base_commit, dict)
         else {"base_commit": base_commit}
     )
-    events = [{
-        "ts": "t0", "event": "delegation_started", "task": "fix upload",
-        "context_entries": [], **base_field,
-    }]
+    events = [
+        {
+            "ts": "t0",
+            "event": "delegation_started",
+            "task": "fix upload",
+            "context_entries": [],
+            **base_field,
+        }
+    ]
     if finished:
         events.append({"ts": "t1", "event": "delegation_finished", "output_chars": 1})
     path = runs / f"{run_id}.jsonl"
@@ -72,19 +77,26 @@ def start_run(repo, chain, run_id, base_commit, finished=True):
             if isinstance(base_commit, dict)
             else {"base_commit": base_commit}
         )
-        chain.append("delegation_completed", {
-            "run_id": run_id, "task": "fix upload",
-            "context_entries": [], **base_field,
-        })
+        chain.append(
+            "delegation_completed",
+            {
+                "run_id": run_id,
+                "task": "fix upload",
+                "context_entries": [],
+                **base_field,
+            },
+        )
     return trace
 
 
-def record_browser_check(
-    chain, run_id, check="upload rejects files over 50MB", artifacts=None
-):
+def record_browser_check(chain, run_id, check="upload rejects files over 50MB", artifacts=None):
     payload = {
-        "run_id": run_id, "check": check, "url": "http://app.local/upload",
-        "page_snapshot": "snap123", "verified_via": "browser", "judge": "deterministic",
+        "run_id": run_id,
+        "check": check,
+        "url": "http://app.local/upload",
+        "page_snapshot": "snap123",
+        "verified_via": "browser",
+        "judge": "deterministic",
     }
     if artifacts is not None:
         obs = Observation(url="http://app.local/upload", title="Upload", text="Max 50MB.")
@@ -131,10 +143,15 @@ def test_harvest_uses_chain_base_commit_not_trace(env):
     repo, store, chain, artifacts = env
     base = head_of(repo)
     write_trace(repo, "run-x", base)  # then overwrite base_commit with a forgery
-    chain.append("delegation_completed", {
-        "run_id": "run-x", "task": "fix upload",
-        "context_entries": [], "base_commit": base,
-    })
+    chain.append(
+        "delegation_completed",
+        {
+            "run_id": "run-x",
+            "task": "fix upload",
+            "context_entries": [],
+            "base_commit": base,
+        },
+    )
     record_browser_check(chain, "run-x", artifacts=artifacts)
 
     (repo / "api.py").write_text("def upload(): return 201\ndef delete(): return 204\n")
@@ -142,12 +159,22 @@ def test_harvest_uses_chain_base_commit_not_trace(env):
     git(repo, "commit", "-m", "add delete")
     forged = write_trace(repo, "run-x", head_of(repo))  # claims base == HEAD: "nothing changed"
 
-    extract = json.dumps([{
-        "claim": "DELETE returns 204.", "title": "Delete contract", "file": "api.py",
-    }])
+    extract = json.dumps(
+        [
+            {
+                "claim": "DELETE returns 204.",
+                "title": "Delete contract",
+                "file": "api.py",
+            }
+        ]
+    )
     classify = json.dumps([{"id": 0, "kind": "interface"}])
     result = harvest_run(
-        load_run(forged), chain, store, FakeRunner([extract, classify]), repo,
+        load_run(forged),
+        chain,
+        store,
+        FakeRunner([extract, classify]),
+        repo,
         artifacts=artifacts,
     )
 
@@ -225,19 +252,22 @@ def test_harvest_mints_script_checks_with_script_locator(env):
             "final_snapshot": obs.snapshot_hash,
         }
     )[0]
-    chain.append("check_passed", {
-        "run_id": "run-x",
-        "check": "filtered products show one item",
-        "url": obs.url,
-        "page_snapshot": obs.snapshot_hash,
-        "verified_via": "browser",
-        "judge": "deterministic",
-        "artifact": artifacts.save_observation(obs)[0],
-        "script_digest": digest,
-        "script_locator": f"script:{digest}",
-        "script_artifact": script_sha,
-        "trace_artifact": trace_sha,
-    })
+    chain.append(
+        "check_passed",
+        {
+            "run_id": "run-x",
+            "check": "filtered products show one item",
+            "url": obs.url,
+            "page_snapshot": obs.snapshot_hash,
+            "verified_via": "browser",
+            "judge": "deterministic",
+            "artifact": artifacts.save_observation(obs)[0],
+            "script_digest": digest,
+            "script_locator": f"script:{digest}",
+            "script_artifact": script_sha,
+            "trace_artifact": trace_sha,
+        },
+    )
 
     result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
 
@@ -283,6 +313,34 @@ def test_harvest_mints_successful_command_checks_as_verified_evidence(env):
     assert stored.trust.verification is Verification.VERIFIED
 
 
+def test_harvest_rejects_command_evidence_after_repository_state_changes(env):
+    import sys
+
+    from loreloop.report.acceptance import record_command_check
+
+    repo, store, chain, artifacts = env
+    trace = start_run(repo, chain, "run-stale-command", head_of(repo))
+    record_command_check(
+        chain,
+        artifacts,
+        "run-stale-command",
+        "the unit test suite passes",
+        [sys.executable, "-c", "print('tests passed')"],
+        cwd=repo,
+    )
+    (repo / "api.py").write_text("def upload(): return 202\n")
+
+    with pytest.raises(HarvestError, match="command evidence.*is stale"):
+        harvest_run(
+            load_run(trace),
+            chain,
+            store,
+            FakeRunner([]),
+            repo,
+            artifacts=artifacts,
+        )
+
+
 def test_harvest_never_mints_browser_check_without_artifact(env):
     repo, store, chain, artifacts = env
     trace = start_run(repo, chain, "run-x", head_of(repo))
@@ -304,11 +362,18 @@ def test_harvest_refuses_run_whose_artifact_is_for_a_different_page(env):
     # outright — nothing mints from evidence that does not match its record
     other = Observation(url="http://evil.local/", title="Other", text="unrelated")
     sha = artifacts.save_observation(other)[0]
-    chain.append("check_passed", {
-        "run_id": "run-x", "check": "upload rejects files over 50MB",
-        "url": "http://app.local/upload", "page_snapshot": "snap123",
-        "verified_via": "browser", "judge": "deterministic", "artifact": sha,
-    })
+    chain.append(
+        "check_passed",
+        {
+            "run_id": "run-x",
+            "check": "upload rejects files over 50MB",
+            "url": "http://app.local/upload",
+            "page_snapshot": "snap123",
+            "verified_via": "browser",
+            "judge": "deterministic",
+            "artifact": sha,
+        },
+    )
 
     with pytest.raises(HarvestError, match="not ACCEPTED"):
         harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
@@ -325,12 +390,22 @@ def test_harvest_reverses_changed_files_as_draft(env):
     git(repo, "add", "api.py")
     git(repo, "commit", "-m", "add delete")
 
-    extract = json.dumps([{
-        "claim": "DELETE returns 204.", "title": "Delete contract", "file": "api.py",
-    }])
+    extract = json.dumps(
+        [
+            {
+                "claim": "DELETE returns 204.",
+                "title": "Delete contract",
+                "file": "api.py",
+            }
+        ]
+    )
     classify = json.dumps([{"id": 0, "kind": "interface"}])
     result = harvest_run(
-        load_run(trace), chain, store, FakeRunner([extract, classify]), repo,
+        load_run(trace),
+        chain,
+        store,
+        FakeRunner([extract, classify]),
+        repo,
         artifacts=artifacts,
     )
 
@@ -346,7 +421,8 @@ def test_harvest_reports_stale_entries_without_touching_them(env):
     repo, store, chain, artifacts = env
     base = head_of(repo)
     old = Entry(
-        title="Old upload contract", content="POST /upload returns 200.",
+        title="Old upload contract",
+        content="POST /upload returns 200.",
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
     )
@@ -358,12 +434,22 @@ def test_harvest_reports_stale_entries_without_touching_them(env):
     git(repo, "add", "api.py")
     git(repo, "commit", "-m", "change upload")
 
-    extract = json.dumps([{
-        "claim": "POST /upload returns 201.", "title": "Upload contract", "file": "api.py",
-    }])
+    extract = json.dumps(
+        [
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload contract",
+                "file": "api.py",
+            }
+        ]
+    )
     classify = json.dumps([{"id": 0, "kind": "interface"}])
     result = harvest_run(
-        load_run(trace), chain, store, FakeRunner([extract, classify]), repo,
+        load_run(trace),
+        chain,
+        store,
+        FakeRunner([extract, classify]),
+        repo,
         artifacts=artifacts,
     )
 
@@ -377,7 +463,8 @@ def test_harvest_flags_entries_in_deleted_files_as_stale(env):
     repo, store, chain, artifacts = env
     base = head_of(repo)
     old = Entry(
-        title="Doomed contract", content="api.py exposes upload().",
+        title="Doomed contract",
+        content="api.py exposes upload().",
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
     )
@@ -390,13 +477,22 @@ def test_harvest_flags_entries_in_deleted_files_as_stale(env):
     git(repo, "add", "handlers.py")
     git(repo, "commit", "-m", "rename api to handlers")
 
-    extract = json.dumps([{
-        "claim": "handlers.py exposes upload().", "title": "Upload handler",
-        "file": "handlers.py",
-    }])
+    extract = json.dumps(
+        [
+            {
+                "claim": "handlers.py exposes upload().",
+                "title": "Upload handler",
+                "file": "handlers.py",
+            }
+        ]
+    )
     classify = json.dumps([{"id": 0, "kind": "interface"}])
     result = harvest_run(
-        load_run(trace), chain, store, FakeRunner([extract, classify]), repo,
+        load_run(trace),
+        chain,
+        store,
+        FakeRunner([extract, classify]),
+        repo,
         artifacts=artifacts,
     )
 
@@ -428,17 +524,13 @@ def test_harvest_resumes_db_materialization_after_chain_first_crash(env):
 
     store.add = disk_failure
     with pytest.raises(OSError, match="simulated DB write failure"):
-        harvest_run(
-            load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts
-        )
+        harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
 
     assert store.list() == []
     assert [record.event for record in chain.verify()].count("knowledge_harvested") == 1
 
     store.add = original_add
-    resumed = harvest_run(
-        load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts
-    )
+    resumed = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
 
     assert resumed.resumed
     assert len(resumed.minted) == 1
@@ -461,10 +553,13 @@ def test_harvest_mint_verifies_existing_draft_duplicate(env):
     repo, store, chain, artifacts = env
     obs = Observation(url="http://app.local/upload", title="Upload", text="Max 50MB.")
     draft = Entry(
-        title="Upload limit", content="upload rejects files over 50MB",
+        title="Upload limit",
+        content="upload rejects files over 50MB",
         kind=Kind.BEHAVIOR,
         source=Source(
-            channel=Channel.WEB, locator="http://app.local/upload", snapshot_ref="stale-snap",
+            channel=Channel.WEB,
+            locator="http://app.local/upload",
+            snapshot_ref="stale-snap",
         ),
     )
     store.add(draft)
@@ -525,7 +620,8 @@ def test_harvest_reports_reanchored_strong_entries_as_demoted(env):
     repo, store, chain, artifacts = env
     base = head_of(repo)
     existing = Entry(
-        title="Upload contract", content="POST /upload returns 201.",
+        title="Upload contract",
+        content="POST /upload returns 201.",
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
     )
@@ -539,12 +635,22 @@ def test_harvest_reports_reanchored_strong_entries_as_demoted(env):
     git(repo, "add", "api.py")
     git(repo, "commit", "-m", "cosmetic change")
 
-    extract = json.dumps([{
-        "claim": "POST /upload returns 201.", "title": "Upload contract", "file": "api.py",
-    }])
+    extract = json.dumps(
+        [
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload contract",
+                "file": "api.py",
+            }
+        ]
+    )
     classify = json.dumps([{"id": 0, "kind": "interface"}])
     result = harvest_run(
-        load_run(trace), chain, store, FakeRunner([extract, classify]), repo,
+        load_run(trace),
+        chain,
+        store,
+        FakeRunner([extract, classify]),
+        repo,
         artifacts=artifacts,
     )
 
@@ -581,7 +687,8 @@ def test_harvest_chain_failure_leaves_existing_draft_untouched(env):
     # Same failure, reuse path: a matching draft row must stay draft.
     repo, store, chain, artifacts = env
     draft = Entry(
-        title="Upload limit", content="upload rejects files over 50MB",
+        title="Upload limit",
+        content="upload rejects files over 50MB",
         kind=Kind.BEHAVIOR,
         source=Source(channel=Channel.WEB, locator="http://app.local/upload"),
     )
@@ -612,21 +719,25 @@ def test_harvest_lists_prior_strong_entries_on_minted_pages_for_review(env):
     from loreloop.knowledge.model import Trust
 
     prior = Entry(
-        title="Old upload page fact", content="Upload page allows 100MB files.",
+        title="Old upload page fact",
+        content="Upload page allows 100MB files.",
         kind=Kind.BEHAVIOR,
         source=Source(channel=Channel.WEB, locator="http://app.local/upload", snapshot_ref="old"),
         trust=Trust(
             verification=Verification.VERIFIED,
-            verified_at=datetime.now(timezone.utc), verified_by="run-0",
+            verified_at=datetime.now(timezone.utc),
+            verified_by="run-0",
         ),
     )
     elsewhere = Entry(
-        title="Login page fact", content="Login redirects to dashboard.",
+        title="Login page fact",
+        content="Login redirects to dashboard.",
         kind=Kind.BEHAVIOR,
         source=Source(channel=Channel.WEB, locator="http://app.local/login", snapshot_ref="old"),
         trust=Trust(
             verification=Verification.VERIFIED,
-            verified_at=datetime.now(timezone.utc), verified_by="run-0",
+            verified_at=datetime.now(timezone.utc),
+            verified_by="run-0",
         ),
     )
     store.add(prior)
@@ -679,18 +790,22 @@ def test_harvest_flags_semantically_similar_code_claims_for_review(env):
     (repo / "api.py").write_text("MAX_UPLOAD_MB = 50\n")
     git(repo, "add", "api.py")
     git(repo, "commit", "-m", "raise upload limit")
-    runner = FakeRunner([
-        json.dumps([{
-            "claim": "The upload size limit is 50 MB.",
-            "title": "Upload size policy",
-            "file": "api.py",
-        }]),
-        json.dumps([{"id": 0, "kind": "constraint"}]),
-    ])
-
-    result = harvest_run(
-        load_run(trace), chain, store, runner, repo, artifacts=artifacts
+    runner = FakeRunner(
+        [
+            json.dumps(
+                [
+                    {
+                        "claim": "The upload size limit is 50 MB.",
+                        "title": "Upload size policy",
+                        "file": "api.py",
+                    }
+                ]
+            ),
+            json.dumps([{"id": 0, "kind": "constraint"}]),
+        ]
     )
+
+    result = harvest_run(load_run(trace), chain, store, runner, repo, artifacts=artifacts)
 
     assert [entry.id for entry in result.review] == [prior.id]
     record = next(r for r in chain.verify() if r.event == "knowledge_harvested")
@@ -717,7 +832,8 @@ def test_harvest_reanchors_unchanged_claim_instead_of_duplicating(env):
     repo, store, chain, artifacts = env
     base = head_of(repo)
     existing = Entry(
-        title="Upload contract", content="POST /upload returns 201.",
+        title="Upload contract",
+        content="POST /upload returns 201.",
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
     )
@@ -730,12 +846,22 @@ def test_harvest_reanchors_unchanged_claim_instead_of_duplicating(env):
     git(repo, "commit", "-m", "cosmetic change")
     head = head_of(repo)
 
-    extract = json.dumps([{
-        "claim": "POST /upload returns 201.", "title": "Upload contract", "file": "api.py",
-    }])
+    extract = json.dumps(
+        [
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload contract",
+                "file": "api.py",
+            }
+        ]
+    )
     classify = json.dumps([{"id": 0, "kind": "interface"}])
     result = harvest_run(
-        load_run(trace), chain, store, FakeRunner([extract, classify]), repo,
+        load_run(trace),
+        chain,
+        store,
+        FakeRunner([extract, classify]),
+        repo,
         artifacts=artifacts,
     )
 
@@ -768,9 +894,7 @@ def test_harvest_refuses_when_any_member_repository_is_dirty(tmp_path):
 
     try:
         with pytest.raises(HarvestError, match="repository 'backend'.*uncommitted"):
-            harvest_run(
-                load_run(trace), chain, store, FakeRunner([]), workdir, artifacts=artifacts
-            )
+            harvest_run(load_run(trace), chain, store, FakeRunner([]), workdir, artifacts=artifacts)
     finally:
         store.close()
 
@@ -796,19 +920,23 @@ def test_harvest_reverses_each_repository_with_its_own_locator(tmp_path):
     (backend / "api.py").write_text("def upload(): return 202\n")
     git(backend, "add", "api.py")
     git(backend, "commit", "-m", "change backend")
-    runner = FakeRunner([
-        json.dumps([{
-            "claim": "Backend upload returns 202.",
-            "title": "Backend upload",
-            "file": "api.py",
-        }]),
-        json.dumps([{"id": 0, "kind": "interface"}]),
-    ])
+    runner = FakeRunner(
+        [
+            json.dumps(
+                [
+                    {
+                        "claim": "Backend upload returns 202.",
+                        "title": "Backend upload",
+                        "file": "api.py",
+                    }
+                ]
+            ),
+            json.dumps([{"id": 0, "kind": "interface"}]),
+        ]
+    )
 
     try:
-        result = harvest_run(
-            load_run(trace), chain, store, runner, workdir, artifacts=artifacts
-        )
+        result = harvest_run(load_run(trace), chain, store, runner, workdir, artifacts=artifacts)
         assert len(result.reversed_entries) == 1
         assert result.reversed_entries[0].source.locator.startswith("repo:backend/api.py@")
         rec = next(r for r in chain.verify() if r.event == "knowledge_harvested")
@@ -827,18 +955,19 @@ def test_harvest_ignores_related_entries_on_the_completion_record(env):
     repo, store, chain, artifacts = env
     base = head_of(repo)
     trace = write_trace(repo, "run-related", {".": base})
-    chain.append("delegation_completed", {
-        "run_id": "run-related",
-        "task": "fix upload",
-        "context_entries": [],
-        "related_entries": ["foreign#abc123"],
-        "base_commits": {".": base},
-    })
+    chain.append(
+        "delegation_completed",
+        {
+            "run_id": "run-related",
+            "task": "fix upload",
+            "context_entries": [],
+            "related_entries": ["foreign#abc123"],
+            "base_commits": {".": base},
+        },
+    )
     record_browser_check(chain, "run-related", artifacts=artifacts)
 
-    result = harvest_run(
-        load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts
-    )
+    result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
 
     assert len(result.minted) == 1
     assert result.reversed_entries == []

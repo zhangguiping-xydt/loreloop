@@ -15,7 +15,7 @@ from loreloop.webexplore.actions import (
     parse_action_script,
     script_locator,
 )
-from loreloop.webexplore.browser import Observation, same_origin
+from loreloop.webexplore.browser import BrowserError, Observation, require_http_url, same_origin
 from loreloop.webexplore.explorer import Explorer
 from loreloop.webexplore.verify import deterministic_check, verify_expectation
 from loreloop.webexplore.web_reverse import extract_web_assertions, reverse_web
@@ -80,8 +80,37 @@ def test_snapshot_hash_ignores_whitespace_but_not_content():
 
 def test_same_origin():
     assert same_origin("http://a.com/x", "http://a.com/y")
+    assert same_origin("http://A.com.:80/x", "http://a.com/y")
     assert not same_origin("http://a.com", "https://a.com")
     assert not same_origin("http://a.com", "http://b.com")
+
+
+def test_browser_entry_points_reject_non_http_urls():
+    for url in ("file:///etc/passwd", "javascript:alert(1)", "data:text/plain,x"):
+        with pytest.raises(BrowserError, match="absolute HTTP"):
+            require_http_url(url)
+
+
+def test_verify_rejects_cross_origin_final_observation_before_signing(tmp_path):
+    redirected = Observation(
+        url="http://evil.other/phish",
+        title="Other origin",
+        text="Maximum file size is 50MB.",
+    )
+    browser = FakeBrowser({"http://app.local/upload": redirected})
+    chain = EvidenceChain.for_workdir(tmp_path)
+
+    with pytest.raises(BrowserError, match="left allowed origin"):
+        verify_expectation(
+            browser,
+            FakeRunner([]),
+            chain,
+            "run-1",
+            "http://app.local/upload",
+            "contains:Maximum file size is 50MB",
+        )
+
+    assert chain.verify() == []
 
 
 def test_explore_stays_same_origin_and_traces(tmp_path):
@@ -128,9 +157,10 @@ def test_remote_seed_fetch_rejects_cross_origin_redirect(tmp_path, monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: Response())
     explorer = Explorer(FakeBrowser({}), tmp_path)
 
-    assert explorer._fetch_text(
-        "http://app.local/robots.txt", allowed_origin="http://app.local"
-    ) is None
+    assert (
+        explorer._fetch_text("http://app.local/robots.txt", allowed_origin="http://app.local")
+        is None
+    )
 
 
 def test_explore_login_wall_handover_resolves(tmp_path):
@@ -138,7 +168,9 @@ def test_explore_login_wall_handover_resolves(tmp_path):
     browser = FakeBrowser(
         {
             "http://app.local": Observation(
-                url="http://app.local", title="H", text="x",
+                url="http://app.local",
+                title="H",
+                text="x",
                 links=["http://app.local/admin"],
             ),
             "http://app.local/admin": ADMIN_LOGIN,
@@ -168,9 +200,7 @@ def test_explore_hands_over_when_start_url_is_login_page(tmp_path):
         handover_resolves={"http://app.local/login": resolved},
     )
 
-    result = Explorer(browser, tmp_path, discover_seeds=False).explore(
-        "http://app.local/login"
-    )
+    result = Explorer(browser, tmp_path, discover_seeds=False).explore("http://app.local/login")
 
     assert len(browser.handovers) == 1
     assert [page.title for page in result.pages] == ["Dashboard"]
@@ -229,7 +259,9 @@ def test_explore_login_wall_skip_mode(tmp_path):
     browser = FakeBrowser(
         {
             "http://app.local": Observation(
-                url="http://app.local", title="H", text="x",
+                url="http://app.local",
+                title="H",
+                text="x",
                 links=["http://app.local/admin"],
             ),
             "http://app.local/admin": ADMIN_LOGIN,
@@ -313,15 +345,20 @@ def test_verify_rejects_malformed_verdict(tmp_path):
     chain = EvidenceChain.for_workdir(tmp_path)
     with pytest.raises(ExtractionError):
         verify_expectation(
-            browser, FakeRunner(["it works!"]), chain, "run-1",
-            "http://app.local/upload", "anything",
+            browser,
+            FakeRunner(["it works!"]),
+            chain,
+            "run-1",
+            "http://app.local/upload",
+            "anything",
         )
     assert chain.verify() == []
 
 
 def test_deterministic_check_prefixes():
     assert deterministic_check(UPLOAD, "contains: Max 50MB") == (
-        True, "page text contains 'Max 50MB'"
+        True,
+        "page text contains 'Max 50MB'",
     )
     assert deterministic_check(UPLOAD, "contains: 100MB")[0] is False
     assert deterministic_check(UPLOAD, "absent: 100MB")[0] is True
@@ -413,9 +450,7 @@ def test_verify_llm_prompt_nonce_differs_per_call(tmp_path):
         verify_expectation(
             browser, runner, chain, "run-1", "http://app.local/upload", "free-form expectation"
         )
-    nonces = [
-        re.search(r"<<<UNTRUSTED-([0-9a-f]{16})\n", p).group(1) for p in runner.prompts
-    ]
+    nonces = [re.search(r"<<<UNTRUSTED-([0-9a-f]{16})\n", p).group(1) for p in runner.prompts]
     # a page author cannot pre-plant a delimiter they cannot predict
     assert nonces[0] != nonces[1]
 
@@ -425,8 +460,13 @@ def test_verify_saves_observation_artifact_and_chains_hash(tmp_path):
     chain = EvidenceChain.for_workdir(tmp_path)
     artifacts = ArtifactStore.for_workdir(tmp_path)
     result = verify_expectation(
-        browser, FakeRunner([]), chain, "run-1",
-        "http://app.local/upload", "contains: Max 50MB", artifacts=artifacts,
+        browser,
+        FakeRunner([]),
+        chain,
+        "run-1",
+        "http://app.local/upload",
+        "contains: Max 50MB",
+        artifacts=artifacts,
     )
     assert result.passed
     sha = chain.verify()[0].payload["artifact"]
@@ -499,8 +539,14 @@ def test_verify_script_records_replayable_artifacts(tmp_path, monkeypatch):
     artifacts = ArtifactStore.for_workdir(tmp_path)
 
     result = verify_mod.verify_script_expectation(
-        FakeBrowser({}), FakeRunner([]), chain, "run-1", "http://app.local",
-        script, "contains: Max 50MB", artifacts=artifacts,
+        FakeBrowser({}),
+        FakeRunner([]),
+        chain,
+        "run-1",
+        "http://app.local",
+        script,
+        "contains: Max 50MB",
+        artifacts=artifacts,
     )
 
     assert result.passed
@@ -510,6 +556,42 @@ def test_verify_script_records_replayable_artifacts(tmp_path, monkeypatch):
     assert artifacts.load(rec.payload["script_artifact"])["type"] == "interaction_script"
     assert artifacts.load(rec.payload["trace_artifact"])["status"] == "completed"
     assert artifacts.load(rec.payload["artifact"])["snapshot_hash"] == UPLOAD.snapshot_hash
+
+
+def test_verify_script_rejects_cross_origin_final_observation(tmp_path, monkeypatch):
+    script = parse_action_script(
+        {"version": 1, "base": "http://app.local", "steps": [{"goto": "/upload"}]}
+    )
+    escaped = Observation(
+        url="http://evil.other/result",
+        title="Escaped",
+        text="Max 50MB",
+    )
+
+    monkeypatch.setattr(
+        verify_mod,
+        "execute_action_script",
+        lambda *args, **kwargs: ActionExecution(
+            script.digest,
+            "completed",
+            [StepTrace(0, {"goto": "/upload"}, "completed", "ok", 1, escaped.url)],
+            final_observation=escaped,
+        ),
+    )
+    chain = EvidenceChain.for_workdir(tmp_path)
+
+    with pytest.raises(BrowserError, match="left allowed origin"):
+        verify_mod.verify_script_expectation(
+            FakeBrowser({}),
+            FakeRunner([]),
+            chain,
+            "run-1",
+            "http://app.local",
+            script,
+            "contains:Max 50MB",
+        )
+
+    assert chain.verify() == []
 
 
 def test_verify_script_failure_records_no_final_snapshot(tmp_path, monkeypatch):
@@ -530,8 +612,14 @@ def test_verify_script_failure_records_no_final_snapshot(tmp_path, monkeypatch):
     artifacts = ArtifactStore.for_workdir(tmp_path)
 
     result = verify_mod.verify_script_expectation(
-        FakeBrowser({}), FakeRunner([]), chain, "run-1", "http://app.local",
-        script, "contains: anything", artifacts=artifacts,
+        FakeBrowser({}),
+        FakeRunner([]),
+        chain,
+        "run-1",
+        "http://app.local",
+        script,
+        "contains: anything",
+        artifacts=artifacts,
     )
 
     assert not result.passed

@@ -65,9 +65,7 @@ def summarize_sessions(sessions: list[dict[str, Any]]) -> dict[str, Any]:
         "wrong_turns": sum(len(item["wrong_turns"]) for item in sessions),
         "help_lookups": sum(len(item["help_lookups"]) for item in sessions),
         "recovery_attempts": sum(len(item["recovery_attempts"]) for item in sessions),
-        "abandoned_steps": [
-            item["abandoned_step"] for item in sessions if item["abandoned_step"]
-        ],
+        "abandoned_steps": [item["abandoned_step"] for item in sessions if item["abandoned_step"]],
         "trust_model_explanations": [
             {
                 "participant_id": item["participant_id"],

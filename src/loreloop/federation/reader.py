@@ -37,9 +37,7 @@ class FederationWarning:
     message: str
 
 
-def read_project(
-    project_id: str, path: Path
-) -> tuple[list[ForeignEntry], list[FederationWarning]]:
+def read_project(project_id: str, path: Path) -> tuple[list[ForeignEntry], list[FederationWarning]]:
     workdir = path.resolve()
     db = state_path(workdir, "knowledge.db")
     if not workdir.is_dir():
@@ -55,7 +53,14 @@ def read_project(
     warnings: list[FederationWarning] = []
     try:
         records = EvidenceChain.verify_readonly(workdir)
-    except (FederatedTrustUnavailable, ChainVerificationError, OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+    except (
+        FederatedTrustUnavailable,
+        ChainVerificationError,
+        OSError,
+        ValueError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as exc:
         records = None
         warnings.append(FederationWarning(project_id, f"trust unavailable: {exc}"))
 
@@ -68,7 +73,9 @@ def read_project(
         )
     except RepoConfigError as exc:
         drifted = {entry.id for entry in entries if entry.source.channel is Channel.CODE}
-        warnings.append(FederationWarning(project_id, f"repository configuration is invalid: {exc}"))
+        warnings.append(
+            FederationWarning(project_id, f"repository configuration is invalid: {exc}")
+        )
 
     if records is None:
         return [
@@ -118,9 +125,7 @@ def _grade_entries(
         is_drifted = entry.id in drifted
         if is_strong and is_drifted:
             status += " (anchor drifted since)"
-        graded.append(
-            ForeignEntry(project_id, entry, is_strong, is_drifted, status, ts)
-        )
+        graded.append(ForeignEntry(project_id, entry, is_strong, is_drifted, status, ts))
     return graded
 
 

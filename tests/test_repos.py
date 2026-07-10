@@ -11,7 +11,9 @@ from loreloop.knowledge.repos import (
     load_repos,
     parse_code_locator,
     resolve_repo,
+    save_repos,
 )
+from loreloop.paths import StatePathError
 
 
 def init_repo(path: Path) -> Path:
@@ -42,10 +44,7 @@ def test_code_locator_parsing(locator, expected):
 
 def test_code_locator_formats_both_repository_shapes():
     assert format_code_locator(".", "src/api.py", "abc") == "src/api.py@abc"
-    assert (
-        format_code_locator("backend", "src/api.py", "abc")
-        == "repo:backend/src/api.py@abc"
-    )
+    assert format_code_locator("backend", "src/api.py", "abc") == "repo:backend/src/api.py@abc"
 
 
 @pytest.mark.parametrize(
@@ -82,6 +81,25 @@ def test_load_repos_rejects_non_git_paths(tmp_path):
     config.write_text(json.dumps({"version": 1, "repos": {"plain": str(plain)}}))
 
     with pytest.raises(RepoConfigError, match="not a git root"):
+        load_repos(workdir)
+
+
+def test_repository_config_is_private_and_rejects_symlink_substitution(tmp_path):
+    workdir = init_repo(tmp_path / "workdir")
+    backend = init_repo(tmp_path / "backend")
+    save_repos(workdir, {"backend": backend})
+    config = workdir / ".loreloop/repos.json"
+
+    assert config.stat().st_mode & 0o777 == 0o600
+    outside = tmp_path / "outside-repos.json"
+    outside.write_text(config.read_text(encoding="utf-8"), encoding="utf-8")
+    config.unlink()
+    try:
+        config.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are unavailable on this platform")
+
+    with pytest.raises(StatePathError, match="symlinked repository configuration"):
         load_repos(workdir)
 
 

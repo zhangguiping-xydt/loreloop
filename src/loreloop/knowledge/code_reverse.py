@@ -10,8 +10,10 @@ must return valid JSON or the batch fails; there are no keyword fallbacks.
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,9 +22,41 @@ from ..agents import AgentRunner
 from .model import Channel, Entry, Kind, Source
 from .repos import RepoConfigError, format_code_locator, load_repos, parse_code_locator
 
-DEFAULT_EXTENSIONS = (".py", ".ts", ".tsx", ".js", ".go", ".rs", ".java", ".sql")
+DEFAULT_EXTENSIONS = (
+    ".py",
+    ".pyi",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".vue",
+    ".svelte",
+    ".go",
+    ".rs",
+    ".java",
+    ".kt",
+    ".kts",
+    ".c",
+    ".h",
+    ".cc",
+    ".cpp",
+    ".hpp",
+    ".cs",
+    ".rb",
+    ".php",
+    ".swift",
+    ".scala",
+    ".sql",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".yaml",
+    ".yml",
+    ".toml",
+)
 _MAX_FILE_BYTES = 60_000
 _MAX_BATCH_FILES = 8
+_MAX_BATCH_BYTES = 180_000
 EXTRACT_PROMPT_VERSION = "code-extract-v3"
 CLASSIFY_PROMPT_VERSION = "claim-classify-v2"
 
@@ -110,14 +144,16 @@ class RawAssertion:
 
 
 def scan_repo(repo: Path, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS) -> list[Path]:
-    tracked = subprocess.run(
-        ["git", "ls-files"], cwd=repo, capture_output=True, text=True, check=True
-    ).stdout.splitlines()
-    return [
-        repo / line
-        for line in tracked
-        if line.endswith(extensions) and (repo / line).stat().st_size <= _MAX_FILE_BYTES
-    ]
+    repo = repo.resolve()
+    tracked = _git_paths(repo, "ls-files", "-z")
+    files = []
+    for relpath in tracked:
+        if not relpath.endswith(extensions):
+            continue
+        path = _safe_regular_source(repo, relpath)
+        if path is not None and path.stat().st_size <= _MAX_FILE_BYTES:
+            files.append(path)
+    return files
 
 
 def repo_head(repo: Path) -> str:
@@ -134,10 +170,7 @@ def changed_paths(
     detection; use changed_files for reversal. ``--no-renames`` keeps both
     sides of a rename: detection would collapse it to the new path only,
     hiding exactly the old entries that need review."""
-    lines = subprocess.run(
-        ["git", "diff", "--name-only", "--no-renames", f"{base}..HEAD"],
-        cwd=repo, capture_output=True, text=True, check=True,
-    ).stdout.splitlines()
+    lines = _git_paths(repo, "diff", "--name-only", "-z", "--no-renames", f"{base}..HEAD")
     return [line for line in lines if line.endswith(extensions)]
 
 
@@ -147,9 +180,10 @@ def changed_files(
     """Changed source files that still exist, filtered like scan_repo —
     the reversal targets."""
     return [
-        repo / p
+        path
         for p in changed_paths(repo, base, extensions)
-        if (repo / p).exists() and (repo / p).stat().st_size <= _MAX_FILE_BYTES
+        if (path := _safe_regular_source(repo, p)) is not None
+        and path.stat().st_size <= _MAX_FILE_BYTES
     ]
 
 
@@ -184,33 +218,28 @@ def drifted_code_entry_ids(workdir: Path, entries: list[Entry]) -> set[str]:
             drifted.update(entry.id for entry, _ in anchored)
             continue
         result = subprocess.run(
-            ["git", "diff", "--name-only", "--no-renames", f"{anchor}..HEAD"],
-            cwd=repo, capture_output=True, text=True,
+            ["git", "diff", "--name-only", "-z", "--no-renames", f"{anchor}..HEAD"],
+            cwd=repo,
+            capture_output=True,
         )
         if result.returncode != 0:
             drifted.update(entry.id for entry, _ in anchored)
             continue
-        changed = set(result.stdout.splitlines())
+        changed = set(_decode_nul(result.stdout))
+        changed.update(dirty_source_files(repo))
         for entry, relpath in anchored:
             if relpath in changed:
                 drifted.add(entry.id)
     return drifted
 
 
-def dirty_source_files(
-    repo: Path, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS
-) -> list[str]:
+def dirty_source_files(repo: Path, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS) -> list[str]:
     """Source files with uncommitted changes (staged, unstaged or untracked)."""
-    lines = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=repo, capture_output=True, text=True, check=True,
-    ).stdout.splitlines()
-    dirty = []
-    for line in lines:
-        path = line[3:].split(" -> ")[-1].strip().strip('"')
-        if path.endswith(extensions):
-            dirty.append(path)
-    return dirty
+    paths: set[str] = set()
+    paths.update(_git_paths(repo, "diff", "--name-only", "-z"))
+    paths.update(_git_paths(repo, "diff", "--cached", "--name-only", "-z"))
+    paths.update(_git_paths(repo, "ls-files", "--others", "--exclude-standard", "-z"))
+    return sorted(path for path in paths if path.endswith(extensions))
 
 
 def extract_assertions(
@@ -221,12 +250,7 @@ def extract_assertions(
     retry_reason: str | None = None,
 ) -> list[RawAssertion]:
     valid_paths = {str(f.relative_to(repo)) for f in files}
-    source_lines = {
-        str(f.relative_to(repo)): f.read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines()
-        for f in files
-    }
+    source_lines = {str(f.relative_to(repo)): _read_regular_source(f).splitlines() for f in files}
     line_counts = {path: len(lines) for path, lines in source_lines.items()}
     blocks = []
     for f in files:
@@ -296,9 +320,7 @@ def extract_assertions(
                 )
         symbol_leaf = re.split(r"[.:]+", symbol)[-1] if symbol else None
         if symbol_leaf and symbol_leaf not in "\n".join(source_lines[item["file"]]):
-            raise ExtractionError(
-                f"evidence symbol {symbol!r} does not occur in {item['file']}"
-            )
+            raise ExtractionError(f"evidence symbol {symbol!r} does not occur in {item['file']}")
         assertions.append(
             RawAssertion(
                 claim=item["claim"],
@@ -314,9 +336,7 @@ def extract_assertions(
 
 
 def classify_claims(runner: AgentRunner, claims: list[str]) -> list[Kind]:
-    payload = json.dumps(
-        [{"id": i, "claim": c} for i, c in enumerate(claims)], ensure_ascii=False
-    )
+    payload = json.dumps([{"id": i, "claim": c} for i, c in enumerate(claims)], ensure_ascii=False)
     raw = runner.run(
         _CLASSIFY_PROMPT.format(
             prompt_version=CLASSIFY_PROMPT_VERSION,
@@ -339,9 +359,7 @@ def classify_claims(runner: AgentRunner, claims: list[str]) -> list[Kind]:
     return [kinds[i] for i in range(len(claims))]
 
 
-def classify_assertions(
-    runner: AgentRunner, assertions: list[RawAssertion]
-) -> list[Kind]:
+def classify_assertions(runner: AgentRunner, assertions: list[RawAssertion]) -> list[Kind]:
     return classify_claims(runner, [a.claim for a in assertions])
 
 
@@ -355,8 +373,7 @@ def reverse_code(
     head = repo_head(repo)
     targets = files if files is not None else scan_repo(repo)
     entries: list[Entry] = []
-    for start in range(0, len(targets), _MAX_BATCH_FILES):
-        batch = targets[start : start + _MAX_BATCH_FILES]
+    for batch in _source_batches(targets):
         try:
             assertions = extract_assertions(runner, repo, batch)
         except ExtractionError as exc:
@@ -408,6 +425,63 @@ def _jaccard(left: set[str], right: set[str]) -> float:
 
 def _normalized_excerpt(text: str) -> str:
     return " ".join(text.split())
+
+
+def _git_paths(repo: Path, *args: str) -> list[str]:
+    result = subprocess.run(["git", *args], cwd=repo, capture_output=True, check=True)
+    return _decode_nul(result.stdout)
+
+
+def _decode_nul(raw: bytes) -> list[str]:
+    return [os.fsdecode(item) for item in raw.split(b"\0") if item]
+
+
+def _safe_regular_source(repo: Path, relpath: str) -> Path | None:
+    candidate = repo / relpath
+    try:
+        info = candidate.lstat()
+    except OSError:
+        return None
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        return None
+    try:
+        candidate.resolve(strict=True).relative_to(repo.resolve())
+    except (OSError, ValueError):
+        return None
+    return candidate
+
+
+def _read_regular_source(path: Path) -> str:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ExtractionError(f"source path is not a regular file: {path}")
+        with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as fh:
+            fd = -1
+            return fh.read()
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _source_batches(files: list[Path]) -> list[list[Path]]:
+    batches: list[list[Path]] = []
+    current: list[Path] = []
+    current_bytes = 0
+    for path in files:
+        size = path.stat().st_size
+        if current and (
+            len(current) >= _MAX_BATCH_FILES or current_bytes + size > _MAX_BATCH_BYTES
+        ):
+            batches.append(current)
+            current = []
+            current_bytes = 0
+        current.append(path)
+        current_bytes += size
+    if current:
+        batches.append(current)
+    return batches
 
 
 def parse_json_array(raw: str, required_keys: set[str]) -> list[dict]:

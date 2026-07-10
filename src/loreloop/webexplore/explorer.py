@@ -13,15 +13,14 @@ import os
 import re
 import urllib.error
 import urllib.request
-import xml.etree.ElementTree as ET
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-from ..paths import state_path
-from .browser import Browser, Observation, same_origin
+from ..paths import ensure_private_directory, ensure_state_root, secure_append_text, state_path
+from .browser import Browser, Observation, require_http_url, same_origin
 
 
 @dataclass(frozen=True)
@@ -44,13 +43,14 @@ class Explorer:
     ) -> None:
         self._browser = browser
         self._workdir = workdir
-        self._trace_dir = state_path(workdir, "explorations")
-        self._trace_dir.mkdir(parents=True, exist_ok=True)
+        ensure_state_root(workdir)
+        self._trace_dir = ensure_private_directory(state_path(workdir, "explorations"))
         self._max_pages = max_pages
         self._on_login_wall = on_login_wall
         self._discover_seeds = discover_seeds
 
     def explore(self, start_url: str) -> ExplorationResult:
+        require_http_url(start_url)
         ts = f"{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
         trace_path = self._trace_dir / f"explore-{ts}.jsonl"
         seeds = self._seed_urls(start_url) if self._discover_seeds else [start_url]
@@ -96,9 +96,7 @@ class Explorer:
                 continue
 
             if obs.looks_like_login:
-                obs = self._handle_login_wall(
-                    trace_path, obs, skipped, login_walls, login_resumed
-                )
+                obs = self._handle_login_wall(trace_path, obs, skipped, login_walls, login_resumed)
                 if obs is None:
                     continue
                 if not same_origin(obs.url, start_url):
@@ -182,8 +180,7 @@ class Explorer:
 
     def _trace(self, path: Path, event: str, **fields) -> None:
         record = {"ts": datetime.now(timezone.utc).isoformat(), "event": event, **fields}
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        secure_append_text(path, json.dumps(record, ensure_ascii=False) + "\n")
 
     def _seed_urls(self, start_url: str) -> list[str]:
         seeds = [start_url]
@@ -229,7 +226,8 @@ class Explorer:
         if not same_origin(url, allowed_origin):
             return None
         try:
-            with urllib.request.urlopen(url, timeout=0.75) as response:
+            opener = urllib.request.build_opener(_SameOriginRedirect(allowed_origin))
+            with opener.open(url, timeout=0.75) as response:
                 final_url = response.geturl()
                 if not same_origin(final_url, allowed_origin):
                     return None
@@ -267,7 +265,14 @@ def _iter_route_files(root: Path):
         base = Path(dirpath)
         for filename in filenames:
             path = base / filename
-            if path.suffix in _ROUTE_EXTENSIONS and path.stat().st_size <= 80_000:
+            if path.is_symlink() or path.suffix not in _ROUTE_EXTENSIONS:
+                continue
+            try:
+                path.resolve(strict=True).relative_to(root.resolve())
+                size = path.stat().st_size
+            except (OSError, ValueError):
+                continue
+            if size <= 80_000:
                 yield path
 
 
@@ -281,12 +286,27 @@ def _looks_like_route(route: str) -> bool:
 
 
 def _parse_sitemap_urls(data: str, base_url: str) -> list[str]:
-    try:
-        root = ET.fromstring(data)
-    except ET.ParseError:
-        return re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", data, flags=re.IGNORECASE)
-    urls = []
-    for elem in root.iter():
-        if elem.tag.rsplit("}", 1)[-1] == "loc" and elem.text:
-            urls.append(urljoin(base_url, elem.text.strip()))
-    return urls
+    # We only need <loc> text. A bounded regex avoids parsing untrusted XML,
+    # entity expansion and DTD handling entirely while supporting namespaces.
+    locations = re.findall(
+        r"<(?:[A-Za-z_][\w.-]*:)?loc\b[^>]*>\s*([^<\s]+)\s*</(?:[A-Za-z_][\w.-]*:)?loc>",
+        data,
+        flags=re.IGNORECASE,
+    )
+    return [urljoin(base_url, value) for value in locations]
+
+
+class _SameOriginRedirect(urllib.request.HTTPRedirectHandler):
+    def __init__(self, allowed_origin: str) -> None:
+        self._allowed_origin = allowed_origin
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not same_origin(newurl, self._allowed_origin):
+            raise urllib.error.HTTPError(
+                req.full_url,
+                code,
+                f"cross-origin redirect blocked: {newurl}",
+                headers,
+                fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)

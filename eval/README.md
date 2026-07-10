@@ -43,6 +43,10 @@ uv run python eval/scale.py --output /tmp/scale.json
 
 # Validate and aggregate real zero-context participant records
 uv run python eval/usability.py
+
+# Re-score every checked-in raw artifact, regenerate the summary, and enforce CI thresholds
+uv run python eval/validate_results.py --check-thresholds \
+  --output /tmp/loreloop-eval-summary.json
 ```
 
 ## Metrics
@@ -87,7 +91,8 @@ characters divided by four; vendor-billed tokens require vendor telemetry.
 ## Safety and limitations
 
 - Task transcripts are redacted and truncated before saving. Recorded public
-  baselines omit transcripts because agents may inspect local environment variables.
+  baselines retain only bounded, reviewed transcripts; never commit a fresh raw
+  run before checking it for credentials and private data.
 - The committed truth sets and coding tasks remain intentionally small. The
   multi-language matrix and 10k scale run widen coverage but do not establish
   industry-wide superiority across repositories or models.
@@ -98,6 +103,9 @@ characters divided by four; vendor-billed tokens require vendor telemetry.
 
 The recorded 2026-07-10 baseline is in
 [`eval/results/2026-07-10-summary.json`](results/2026-07-10-summary.json).
+That file is generated only from checked-in raw inputs. A historical Codex task
+comparison is intentionally absent because its raw task result file is not in
+the repository; the validator never reconstructs or invents missing runs.
 Additional raw results include the
 [`multi-language reverse matrix`](results/reverse-matrix-claude-2026-07-10.json)
 and [`scale benchmark`](results/scale-2026-07-10.json). The usability summary

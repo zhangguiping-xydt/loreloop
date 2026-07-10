@@ -11,7 +11,8 @@ sensitive.
   `claude -p "reply ok"` or `codex exec -` works outside LoreLoop.
 - Project/key directory not writable: use a writable checkout. Set
   `LORELOOP_KEY_DIR` to an owner-controlled directory outside the project when
-  the default home directory is unavailable.
+  the default home directory is unavailable. A key directory inside the project
+  is rejected even if writable.
 - Playwright is informational until web ingestion or verification is needed.
   Install with `python -m pip install 'loreloop[web]'` followed by
   `python -m playwright install chromium`.
@@ -27,7 +28,18 @@ from its links. The CLI reports whether the handover resumed and records
 `human_handover_completed`, `handover_abandoned`, or `handover_observe_failed`
 in the exploration trace.
 Write-like script steps are refused unless the reviewed command includes
-`--allow-writes`; password fields and destructive controls remain blocked.
+`--allow-writes`; JavaScript/fetch POSTs are covered by the same network policy,
+and password fields and destructive controls remain blocked. Use staging or a
+disposable application: a same-origin GET can still have side effects if the
+server violates HTTP semantics.
+
+## Provider or data-residency concern
+
+LoreLoop stores state locally but invokes the configured Claude Code or Codex
+CLI for extraction, expansion, delegation, and free-form judging. Those tools
+may send source snippets or page observations to an external provider. Review
+the provider/account policy before ingestion, prefer deterministic assertions,
+and use `run --no-expand` when query expansion is not needed.
 
 ## Evidence key or chain error
 
@@ -58,6 +70,8 @@ Use the exact run id printed by `loreloop run`. `loreloop report <run-id>` shows
 missing, failed, or broken-artifact checks. Harvest additionally requires every
 source repository captured by the run to have committed source changes; commit
 them first so returned knowledge can anchor to a real Git commit.
+Successful command evidence is bound to the repository state at execution time;
+if files or HEAD changed afterward, rerun the command check before harvest.
 If a crash occurred after the signed harvest event but before SQLite finished,
 rerun the same harvest command: LoreLoop restores only the signed, digest-matching
 minted rows and does not append a duplicate harvest event.

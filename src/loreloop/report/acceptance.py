@@ -25,6 +25,8 @@ from pathlib import Path
 
 from ..evidence.artifacts import ArtifactStore
 from ..evidence.chain import EvidenceChain, EvidenceRecord
+from ..evidence.repository_state import capture_repository_states
+from ..security import redact_sensitive
 
 CHECK_EVENTS = {"check_passed", "check_failed"}
 DELEGATION_EVENT = "delegation_completed"
@@ -107,9 +109,7 @@ def load_run(trace_path: Path) -> RunSummary:
                 f"invalid run trace {trace_path}: line {line_no} is not JSON"
             ) from exc
         if not isinstance(event, dict):
-            raise RunTraceError(
-                f"invalid run trace {trace_path}: line {line_no} is not an object"
-            )
+            raise RunTraceError(f"invalid run trace {trace_path}: line {line_no} is not an object")
         events.append(event)
 
     started = next((e for e in events if e.get("event") == "delegation_started"), None)
@@ -177,22 +177,22 @@ def evaluate_run(
 ) -> RunEvaluation:
     records = chain.verify()
     completions = [
-        r
-        for r in records
-        if r.event == DELEGATION_EVENT and r.payload.get("run_id") == run.run_id
+        r for r in records if r.event == DELEGATION_EVENT and r.payload.get("run_id") == run.run_id
     ]
     # Acceptance checks must postdate the completion record on the chain.
     # Run ids appear in the trace while the agent is still working, so a
     # check recorded before completion could only be checking work that did
     # not exist yet — pre-planted "evidence" for a run still in flight.
     after = completions[0].index if completions else -1
-    checks = [
+    raw_checks = [
         r
         for r in records
-        if r.event in CHECK_EVENTS
-        and r.payload.get("run_id") == run.run_id
-        and r.index > after
+        if r.event in CHECK_EVENTS and r.payload.get("run_id") == run.run_id and r.index > after
     ]
+    latest: dict[str, EvidenceRecord] = {}
+    for record in raw_checks:
+        latest[_check_identity(record)] = record
+    checks = sorted(latest.values(), key=lambda record: record.index)
     passed = [r for r in checks if r.event == "check_passed"]
     failed = [r for r in checks if r.event == "check_failed"]
     return RunEvaluation(
@@ -322,12 +322,22 @@ def _audit_artifacts(
             chain_url = payload.get("url")
             chain_snap = payload.get("page_snapshot")
             if chain_url is None or chain_snap is None:
-                broken.append((sha, "chain record carries an artifact but no url/page_snapshot "
-                                    "pin — the artifact cannot be tied to the verdict"))
+                broken.append(
+                    (
+                        sha,
+                        "chain record carries an artifact but no url/page_snapshot "
+                        "pin — the artifact cannot be tied to the verdict",
+                    )
+                )
             else:
                 if data.get("url") != chain_url:
-                    broken.append((sha, f"artifact url {data.get('url')!r} does not match "
-                                        f"the chain record ({chain_url!r})"))
+                    broken.append(
+                        (
+                            sha,
+                            f"artifact url {data.get('url')!r} does not match "
+                            f"the chain record ({chain_url!r})",
+                        )
+                    )
                 if data.get("snapshot_hash") != chain_snap:
                     broken.append((sha, "artifact snapshot hash does not match the chain record"))
         elif artifact_type == "command_evidence":
@@ -345,17 +355,21 @@ def _audit_artifacts(
         script_digest = payload.get("script_digest")
         if script_digest:
             if not sha:
-                broken.append((
-                    rec.chain_hash,
-                    "script check carries no final observation artifact",
-                ))
+                broken.append(
+                    (
+                        rec.chain_hash,
+                        "script check carries no final observation artifact",
+                    )
+                )
             _audit_script_artifact(rec, artifacts, broken)
             _audit_trace_artifact(rec, artifacts, broken)
         elif payload.get("script_artifact") or payload.get("trace_artifact"):
-            broken.append((
-                rec.chain_hash,
-                "chain record carries script/trace artifacts but no script_digest pin",
-            ))
+            broken.append(
+                (
+                    rec.chain_hash,
+                    "chain record carries script/trace artifacts but no script_digest pin",
+                )
+            )
     return broken
 
 
@@ -426,6 +440,7 @@ def record_check(
     human eyeballing the app is real acceptance) but carrying no machine
     evidence. It is labeled ``judge: operator`` so reports and harvest can
     tell it apart from browser-verified checks; harvest never mints from it."""
+    check = validate_check_text(check)
     payload: dict = {"run_id": run_id, "check": check, "judge": "operator"}
     if detail:
         payload["detail"] = detail
@@ -449,6 +464,7 @@ def record_command_check(
     """
     if not argv or any(not isinstance(part, str) or not part for part in argv):
         raise ValueError("command check requires a non-empty argv")
+    check = validate_check_text(check)
     if timeout <= 0:
         raise ValueError("command check timeout must be positive")
     started = datetime.now(timezone.utc)
@@ -470,6 +486,9 @@ def record_command_check(
         stdout = _timeout_text(exc.stdout)
         stderr = _timeout_text(exc.stderr)
     finished = datetime.now(timezone.utc)
+    stdout = redact_sensitive(stdout)
+    stderr = redact_sensitive(stderr)
+    repository_states = capture_repository_states(cwd)
     artifact, _ = artifacts.save_json(
         {
             "type": "command_evidence",
@@ -481,6 +500,7 @@ def record_command_check(
             "stderr": stderr[-100_000:],
             "started_at": started.isoformat(),
             "finished_at": finished.isoformat(),
+            "repository_states": repository_states,
         }
     )
     payload = {
@@ -492,6 +512,7 @@ def record_command_check(
         "command": argv,
         "exit_code": exit_code,
         "timed_out": timed_out,
+        "repository_states": repository_states,
     }
     if stderr:
         payload["detail"] = stderr[-500:]
@@ -503,3 +524,28 @@ def _timeout_text(value: str | bytes | None) -> str:
     if value is None:
         return ""
     return value.decode(errors="replace") if isinstance(value, bytes) else value
+
+
+def validate_check_text(check: str) -> str:
+    if not isinstance(check, str) or not check.strip():
+        raise ValueError("acceptance check must be non-empty")
+    if len(check) > 4_000:
+        raise ValueError("acceptance check must be at most 4000 characters")
+    if any(ord(ch) < 32 and ch not in "\t\n\r" for ch in check):
+        raise ValueError("acceptance check contains control characters")
+    return check.strip()
+
+
+def _check_identity(record: EvidenceRecord) -> str:
+    payload = record.payload
+    explicit = payload.get("check_id")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    material = {
+        "judge": payload.get("judge"),
+        "check": payload.get("check"),
+        "url": payload.get("url"),
+        "script_digest": payload.get("script_digest"),
+        "command": payload.get("command"),
+    }
+    return json.dumps(material, ensure_ascii=False, sort_keys=True)

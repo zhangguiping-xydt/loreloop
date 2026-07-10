@@ -22,9 +22,17 @@ def session(**changes):
 
 
 def test_usability_summary_reports_observed_outcomes_without_inference():
-    result = summarize_sessions([session(), session(participant_id="p2", completed=False,
-                                                     time_to_first_success_seconds=None,
-                                                     abandoned_step="verify")])
+    result = summarize_sessions(
+        [
+            session(),
+            session(
+                participant_id="p2",
+                completed=False,
+                time_to_first_success_seconds=None,
+                abandoned_step="verify",
+            ),
+        ]
+    )
 
     assert result["sessions"] == 2
     assert result["completion_rate"] == 0.5

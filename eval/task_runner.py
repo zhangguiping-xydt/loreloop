@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -29,22 +28,22 @@ for path in (ROOT, SRC):
         sys.path.insert(0, str(path))
 
 from eval.metrics import evaluate_task_runs
+from loreloop.agents import agent_environment
 from loreloop.delegate.context_pack import ContextPack, render
 from loreloop.knowledge.model import Channel, Curation, Entry, Kind, Source, Trust
+from loreloop.security import redact_sensitive
 
 TASK_ROOT = ROOT / "eval/tasks"
 AGENT_COMMANDS = {
     "codex": ("codex", "exec", "--sandbox", "workspace-write", "--ephemeral", "-"),
     "claude": (
-        "claude", "-p", "--permission-mode", "acceptEdits", "--no-session-persistence",
+        "claude",
+        "-p",
+        "--permission-mode",
+        "acceptEdits",
+        "--no-session-persistence",
     ),
 }
-_SECRET_ASSIGNMENT = re.compile(
-    r"(?im)^([A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)[A-Z0-9_]*)=([^\r\n]*)"
-)
-_SECRET_LABEL = re.compile(
-    r"(?im)\b(password|token|secret|api[_ -]?key)\s*[:=]\s*([^\s,;]+)"
-)
 _MAX_TRANSCRIPT_CHARS = 20_000
 
 
@@ -70,8 +69,7 @@ def run_task(
         prompt = _task_prompt(spec, variant, repo)
         started = time.monotonic()
         try:
-            agent_env = os.environ.copy()
-            agent_env["PYTHONDONTWRITEBYTECODE"] = "1"
+            agent_env = agent_environment()
             proc = subprocess.run(
                 AGENT_COMMANDS[agent],
                 input=prompt,
@@ -123,10 +121,7 @@ def run_task(
             text=True,
         ).stdout
         passed = (
-            not timed_out
-            and agent_exit == 0
-            and public.returncode == 0
-            and hidden.returncode == 0
+            not timed_out and agent_exit == 0 and public.returncode == 0 and hidden.returncode == 0
         )
         return {
             "task": spec["id"],
@@ -161,13 +156,8 @@ def _task_prompt(spec: dict[str, Any], variant: str, repo: Path | None = None) -
         ]
         context = render(ContextPack(strong=entries, reference=[])) + "\n\n"
     elif variant == "session_memory":
-        notes = "\n".join(
-            f"- {item['title']}: {item['content']}" for item in spec["knowledge"]
-        )
-        context = (
-            "# Prior session memory (unverified and ephemeral)\n\n"
-            f"{notes}\n\n"
-        )
+        notes = "\n".join(f"- {item['title']}: {item['content']}" for item in spec["knowledge"])
+        context = f"# Prior session memory (unverified and ephemeral)\n\n{notes}\n\n"
     elif variant == "codebase_index":
         if repo is None:
             raise ValueError("codebase_index variant requires the copied repository")
@@ -177,8 +167,8 @@ def _task_prompt(spec: dict[str, Any], variant: str, repo: Path | None = None) -
         + "# Task\n\n"
         + spec["task"]
         + "\n\nWork directly in this repository. Complete the implementation, run the public "
-          "tests, and leave the working tree with the solution applied. Do not inspect or print "
-          "environment variables, credentials, tokens, or unrelated files outside the repository."
+        "tests, and leave the working tree with the solution applied. Do not inspect or print "
+        "environment variables, credentials, tokens, or unrelated files outside the repository."
     )
 
 
@@ -212,14 +202,7 @@ def _text(value: str | bytes | None) -> str:
 
 
 def _redact_transcript(value: str) -> str:
-    redacted = _SECRET_ASSIGNMENT.sub(r"\1=<redacted>", value)
-    redacted = _SECRET_LABEL.sub(r"\1: <redacted>", redacted)
-    for name, secret in os.environ.items():
-        upper = name.upper()
-        if secret and len(secret) >= 6 and any(
-            marker in upper for marker in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
-        ):
-            redacted = redacted.replace(secret, "<redacted>")
+    redacted = redact_sensitive(value)
     if len(redacted) > _MAX_TRANSCRIPT_CHARS:
         redacted = "[transcript truncated]\n" + redacted[-_MAX_TRANSCRIPT_CHARS:]
     return redacted

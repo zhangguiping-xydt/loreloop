@@ -65,9 +65,7 @@ class ActionScript:
 
     @property
     def canonical_json(self) -> str:
-        return json.dumps(
-            self.to_json(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        )
+        return json.dumps(self.to_json(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
     @property
     def digest(self) -> str:
@@ -103,6 +101,7 @@ class ActionExecution:
     steps: list[StepTrace]
     final_observation: Observation | None = None
     reason: str | None = None
+    allow_writes: bool = False
 
     @property
     def succeeded(self) -> bool:
@@ -119,6 +118,7 @@ class ActionExecution:
             "status": self.status,
             "steps_completed": self.steps_completed,
             "steps": [step.to_json() for step in self.steps],
+            "allow_writes": self.allow_writes,
         }
         if self.reason:
             payload["reason"] = self.reason
@@ -160,9 +160,7 @@ def validate_script_origin(script: ActionScript, cli_base: str) -> None:
     if not _is_http_origin(cli_base):
         raise ActionScriptError("verify target must be an absolute http(s) URL")
     if not same_origin(script.base, cli_base):
-        raise ActionScriptError(
-            "action script base must be same-origin with the verify target"
-        )
+        raise ActionScriptError("action script base must be same-origin with the verify target")
 
 
 def script_locator(digest: str) -> str:
@@ -190,10 +188,15 @@ def execute_action_script(
             "blocked",
             [],
             reason="script base is not same-origin with execution target",
+            allow_writes=allow_writes,
         )
     page = getattr(browser, "page", None)
     if page is None:
         raise ActionFailed("browser does not expose a Playwright page")
+    configure_network = getattr(browser, "set_network_policy", None)
+    if callable(configure_network):
+        configure_network(script.base, allow_writes=allow_writes)
+    consume_blocked = getattr(browser, "consume_blocked_requests", None)
 
     trace: list[StepTrace] = []
     for index, step in enumerate(script.steps):
@@ -201,19 +204,37 @@ def execute_action_script(
         try:
             _perform_step(page, script, step, allow_writes=allow_writes, timeout_ms=timeout_ms)
             _ensure_same_origin(page, script.base)
+            blocked = consume_blocked() if callable(consume_blocked) else []
+            if blocked:
+                first = blocked[0]
+                raise ActionBlocked(
+                    f"blocked {first['method']} request ({first['reason']}): {first['url']}"
+                )
         except ActionBlocked as exc:
             trace.append(_trace_step(index, step, "blocked", exc, started, page))
-            return ActionExecution(script.digest, "blocked", trace, reason=str(exc))
+            return ActionExecution(
+                script.digest, "blocked", trace, reason=str(exc), allow_writes=allow_writes
+            )
         except Exception as exc:
             trace.append(_trace_step(index, step, "failed", exc, started, page))
-            return ActionExecution(script.digest, "failed", trace, reason=str(exc))
+            return ActionExecution(
+                script.digest, "failed", trace, reason=str(exc), allow_writes=allow_writes
+            )
         trace.append(_trace_step(index, step, "completed", "ok", started, page))
 
     try:
         final = browser.observe_current()
     except Exception as exc:
-        return ActionExecution(script.digest, "failed", trace, reason=str(exc))
-    return ActionExecution(script.digest, "completed", trace, final_observation=final)
+        return ActionExecution(
+            script.digest, "failed", trace, reason=str(exc), allow_writes=allow_writes
+        )
+    return ActionExecution(
+        script.digest,
+        "completed",
+        trace,
+        final_observation=final,
+        allow_writes=allow_writes,
+    )
 
 
 def _parse_step(raw: Any, index: int) -> ActionStep:
@@ -304,7 +325,9 @@ def _parse_wait(raw: Any, index: int) -> dict[str, Any]:
     return {key: value}
 
 
-def _perform_step(page, script: ActionScript, step: ActionStep, *, allow_writes: bool, timeout_ms: int) -> None:
+def _perform_step(
+    page, script: ActionScript, step: ActionStep, *, allow_writes: bool, timeout_ms: int
+) -> None:
     if step.op == "goto":
         target = urljoin(script.base, step.arg)
         if not same_origin(target, script.base):
@@ -333,7 +356,9 @@ def _perform_step(page, script: ActionScript, step: ActionStep, *, allow_writes:
         if meta["type"] == "password":
             raise ActionBlocked("refused to fill a password field")
         if not allow_writes and not _is_idempotent_control(meta):
-            raise ActionBlocked("refused to fill a non-search/filter control without --allow-writes")
+            raise ActionBlocked(
+                "refused to fill a non-search/filter control without --allow-writes"
+            )
         locator.fill(value, timeout=timeout_ms)
         if locator.input_value(timeout=timeout_ms) != value:
             raise ActionFailed("filled value did not round-trip")
@@ -343,7 +368,9 @@ def _perform_step(page, script: ActionScript, step: ActionStep, *, allow_writes:
         locator = _resolve_locator(page, _strip_action_value(step.arg, "option"))
         meta = _element_metadata(locator)
         if not allow_writes and not _is_idempotent_control(meta):
-            raise ActionBlocked("refused to select a non-search/filter control without --allow-writes")
+            raise ActionBlocked(
+                "refused to select a non-search/filter control without --allow-writes"
+            )
         try:
             locator.select_option(label=option, timeout=timeout_ms)
         except Exception:
@@ -469,7 +496,9 @@ def _ensure_same_origin(page, base: str) -> None:
         raise ActionBlocked(f"navigation left origin: {page.url}")
 
 
-def _trace_step(index: int, step: ActionStep, status: str, detail: object, started: float, page) -> StepTrace:
+def _trace_step(
+    index: int, step: ActionStep, status: str, detail: object, started: float, page
+) -> StepTrace:
     return StepTrace(
         index=index,
         action=step.to_json(),

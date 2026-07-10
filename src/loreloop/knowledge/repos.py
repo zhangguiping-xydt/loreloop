@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path, PurePosixPath
 
-from ..paths import state_path
+from ..paths import (
+    ensure_state_root,
+    reject_symlink,
+    secure_atomic_write_text,
+    state_path,
+    state_root,
+)
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
@@ -23,9 +28,11 @@ def validate_repo_name(name: str) -> str:
 
 
 def load_repos(workdir: Path) -> dict[str, Path]:
+    reject_symlink(state_root(workdir), label="state root")
     path = state_path(workdir, "repos.json")
     if not path.exists():
         return {}
+    reject_symlink(path, label="repository configuration")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -47,7 +54,9 @@ def load_repos(workdir: Path) -> dict[str, Path]:
         candidate = Path(raw_path).expanduser()
         resolved = (candidate if candidate.is_absolute() else workdir / candidate).resolve()
         if not resolved.is_dir() or not (resolved / ".git").exists():
-            raise RepoConfigError(f"invalid {path}: repository {name!r} is not a git root: {resolved}")
+            raise RepoConfigError(
+                f"invalid {path}: repository {name!r} is not a git root: {resolved}"
+            )
         repos[name] = resolved
     return repos
 
@@ -60,14 +69,11 @@ def save_repos(workdir: Path, repos: dict[str, Path]) -> None:
         if not resolved.is_dir() or not (resolved / ".git").exists():
             raise RepoConfigError(f"repository {name!r} is not a git root: {resolved}")
         normalized[name] = str(resolved)
-    path = state_path(workdir, "repos.json")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(
+    path = ensure_state_root(workdir) / "repos.json"
+    secure_atomic_write_text(
+        path,
         json.dumps({"version": 1, "repos": normalized}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
     )
-    os.replace(tmp, path)
 
 
 def resolve_repo(workdir: Path, name: str) -> Path:

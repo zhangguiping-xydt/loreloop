@@ -148,12 +148,12 @@ def evaluate_task_runs(runs: Iterable[Mapping[str, Any]]) -> dict[str, dict[str,
 
 def _matches(text: str, alternatives: Sequence[Sequence[str]]) -> bool:
     normalized = " ".join(_TOKEN.findall(text.casefold()))
-    return any(all(token.casefold() in normalized for token in alternative) for alternative in alternatives)
+    return any(
+        all(token.casefold() in normalized for token in alternative) for alternative in alternatives
+    )
 
 
-def _prediction_matches(
-    prediction: Mapping[str, Any], text: str, truth: Mapping[str, Any]
-) -> bool:
+def _prediction_matches(prediction: Mapping[str, Any], text: str, truth: Mapping[str, Any]) -> bool:
     if _matches(text, truth.get("match_all", [])):
         return True
     truth_source = truth.get("source")

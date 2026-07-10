@@ -4,7 +4,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from loreloop.agents import AgentError
+from loreloop.agents import (
+    AgentError,
+    delegation_runner,
+    inference_runner,
+)
 from loreloop.delegate.context_pack import render, select
 from loreloop.delegate.runner import DelegateRunner
 from loreloop.knowledge.model import Channel, Curation, Entry, Kind, Source, Trust
@@ -291,11 +295,15 @@ def test_expand_query_parses_terms_and_rejects_garbage():
 def test_expand_query_accepts_structured_output_and_caches_it(tmp_path):
     from loreloop.delegate.expand import expand_query
 
-    agent = FakeAgent(output=json.dumps({
-        "terms": ["upload", "限流"],
-        "phrases": ["rate limit"],
-        "identifiers": ["MAX_UPLOADS_PER_MINUTE"],
-    }))
+    agent = FakeAgent(
+        output=json.dumps(
+            {
+                "terms": ["upload", "限流"],
+                "phrases": ["rate limit"],
+                "identifiers": ["MAX_UPLOADS_PER_MINUTE"],
+            }
+        )
+    )
     cache = tmp_path / "query-expansion.json"
 
     first = expand_query(agent, "给上传接口加限流", cache_path=cache)
@@ -389,3 +397,57 @@ def test_delegate_traces_heads_for_all_declared_repositories(tmp_path):
         "backend": head_of(backend),
     }
     assert result.base_commits == event["base_commits"]
+
+
+def test_agent_runner_profiles_use_explicit_least_privilege_modes(tmp_path):
+    claude_inference = inference_runner("claude")
+    assert claude_inference.isolated
+    assert ("--tools", "") == claude_inference.command[2:4]
+    assert "dontAsk" in claude_inference.command
+    assert "--disable-slash-commands" in claude_inference.command
+    assert ("--setting-sources", "") == claude_inference.command[8:10]
+
+    codex_inference = inference_runner("codex")
+    assert codex_inference.isolated
+    assert ("--sandbox", "read-only") == codex_inference.command[2:4]
+    assert "--ignore-user-config" in codex_inference.command
+    assert "--ignore-rules" in codex_inference.command
+
+    claude_delegation = delegation_runner("claude", tmp_path)
+    assert not claude_delegation.isolated
+    assert "acceptEdits" in claude_delegation.command
+    assert "bypassPermissions" not in claude_delegation.command
+    assert claude_delegation.cwd == tmp_path.resolve()
+
+    codex_delegation = delegation_runner("codex", tmp_path)
+    assert ("--sandbox", "workspace-write") == codex_delegation.command[2:4]
+
+
+def test_agent_runner_strips_operator_capabilities_and_isolates_inference(
+    monkeypatch,
+):
+    from pathlib import Path
+
+    import loreloop.agents as agents
+
+    seen = {}
+
+    def fake_run(command, **kwargs):
+        seen["command"] = command
+        seen["cwd"] = kwargs["cwd"]
+        seen["env"] = kwargs["env"]
+        assert Path(kwargs["cwd"]).is_dir()
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setenv("LORELOOP_KEY_DIR", "/operator/keys")
+    monkeypatch.setenv("LORELOOP_KEY_PASSPHRASE", "secret")
+    monkeypatch.setenv("LORELOOP_REGISTRY", "/operator/registry.json")
+    monkeypatch.setattr(agents.subprocess, "run", fake_run)
+
+    assert inference_runner("codex").run("extract facts") == "ok"
+    assert seen["cwd"] is not None
+    assert seen["env"]["LORELOOP_AGENT_PROCESS"] == "1"
+    assert seen["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert "LORELOOP_KEY_DIR" not in seen["env"]
+    assert "LORELOOP_KEY_PASSPHRASE" not in seen["env"]
+    assert "LORELOOP_REGISTRY" not in seen["env"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from .model import (
     Verification,
 )
 from .repos import parse_code_locator
+from ..paths import ensure_private_directory, reject_symlink
 
 SCHEMA_VERSION = 1
 
@@ -92,13 +94,17 @@ _MIGRATIONS = {1: _migration_v1}
 class KnowledgeStore:
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = Path(db_path)
+        ensure_private_directory(self._db_path.parent)
+        reject_symlink(self._db_path, label="knowledge database")
         self._conn = sqlite3.connect(str(db_path))
+        os.chmod(self._db_path, 0o600)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._migrate()
 
     @classmethod
     def open_readonly(cls, db_path: str | Path) -> "KnowledgeStore":
+        reject_symlink(Path(db_path), label="knowledge database")
         path = Path(db_path).resolve()
         store = cls.__new__(cls)
         store._db_path = path
@@ -169,6 +175,83 @@ class KnowledgeStore:
             )
         return entry
 
+    def add_or_refresh(self, entry: Entry) -> tuple[Entry, bool]:
+        """Insert a new assertion or refresh an exact claim's source anchor.
+
+        Re-ingestion is provenance, not a trust act: the stable id and cached
+        trust state remain, while locator/snapshot/evidence move to the source
+        that was actually read. Chain replay will demote any old endorsement
+        until the operator explicitly re-approves the refreshed digest.
+        """
+        with self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            existing = self.find_duplicate(entry)
+            if existing is None:
+                self._conn.execute(
+                    """INSERT INTO entries (
+                        id, title, content, kind, channel, locator, snapshot_ref,
+                        source_symbol, source_line_start, source_line_end, source_excerpt,
+                        curation, verification, verified_at, verified_by, created_at, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        entry.id,
+                        entry.title,
+                        entry.content,
+                        entry.kind.value,
+                        entry.source.channel.value,
+                        entry.source.locator,
+                        entry.source.snapshot_ref,
+                        entry.source.symbol,
+                        entry.source.line_start,
+                        entry.source.line_end,
+                        entry.source.excerpt,
+                        entry.trust.curation.value,
+                        entry.trust.verification.value,
+                        _iso(entry.trust.verified_at),
+                        entry.trust.verified_by,
+                        _iso(entry.created_at),
+                        _iso(entry.updated_at),
+                    ),
+                )
+                return entry, False
+
+            if (
+                entry.title == existing.title
+                and entry.kind is existing.kind
+                and entry.source == existing.source
+            ):
+                return existing, False
+            refreshed = Entry(
+                id=existing.id,
+                title=entry.title,
+                content=entry.content,
+                kind=entry.kind,
+                source=entry.source,
+                trust=existing.trust,
+                created_at=existing.created_at,
+                updated_at=entry.updated_at,
+            )
+            self._conn.execute(
+                """UPDATE entries SET
+                    title = ?, kind = ?, locator = ?, snapshot_ref = ?,
+                    source_symbol = ?, source_line_start = ?, source_line_end = ?,
+                    source_excerpt = ?, updated_at = ?
+                   WHERE id = ?""",
+                (
+                    refreshed.title,
+                    refreshed.kind.value,
+                    refreshed.source.locator,
+                    refreshed.source.snapshot_ref,
+                    refreshed.source.symbol,
+                    refreshed.source.line_start,
+                    refreshed.source.line_end,
+                    refreshed.source.excerpt,
+                    _iso(refreshed.updated_at),
+                    refreshed.id,
+                ),
+            )
+            return refreshed, True
+
     def _migrate(self) -> None:
         """Apply ordered migrations with a pre-upgrade backup and rollback.
 
@@ -212,19 +295,23 @@ class KnowledgeStore:
         channel: Channel | None = None,
         curation: Curation | None = None,
     ) -> list[Entry]:
-        clauses, params = [], []
-        if kind:
-            clauses.append("kind = ?")
-            params.append(kind.value)
-        if channel:
-            clauses.append("channel = ?")
-            params.append(channel.value)
-        if curation:
-            clauses.append("curation = ?")
-            params.append(curation.value)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        kind_value = kind.value if kind else None
+        channel_value = channel.value if channel else None
+        curation_value = curation.value if curation else None
         rows = self._conn.execute(
-            f"SELECT * FROM entries {where} ORDER BY created_at", params
+            """SELECT * FROM entries
+               WHERE (? IS NULL OR kind = ?)
+                 AND (? IS NULL OR channel = ?)
+                 AND (? IS NULL OR curation = ?)
+               ORDER BY created_at""",
+            (
+                kind_value,
+                kind_value,
+                channel_value,
+                channel_value,
+                curation_value,
+                curation_value,
+            ),
         ).fetchall()
         return [_to_entry(r) for r in rows]
 
@@ -257,20 +344,29 @@ class KnowledgeStore:
         self._require(entry_id)
         if new is Verification.UNVERIFIED:
             raise InvalidTransition("cannot transition back to unverified")
-        sets = ["verification = ?", "verified_at = ?", "verified_by = ?", "updated_at = ?"]
-        params: list[str] = [new.value, _iso(now), verified_by, _iso(now)]
-        for column, value in (
-            ("snapshot_ref", snapshot_ref),
-            ("title", title),
-            ("kind", kind.value if kind else None),
-        ):
-            if value is not None:
-                sets.append(f"{column} = ?")
-                params.append(value)
+        timestamp = _iso(now)
+        kind_value = kind.value if kind else None
         with self._conn:
             self._conn.execute(
-                f"UPDATE entries SET {', '.join(sets)} WHERE id = ?",
-                (*params, entry_id),
+                """UPDATE entries
+                   SET verification = ?, verified_at = ?, verified_by = ?, updated_at = ?,
+                       snapshot_ref = CASE WHEN ? THEN ? ELSE snapshot_ref END,
+                       title = CASE WHEN ? THEN ? ELSE title END,
+                       kind = CASE WHEN ? THEN ? ELSE kind END
+                   WHERE id = ?""",
+                (
+                    new.value,
+                    timestamp,
+                    verified_by,
+                    timestamp,
+                    snapshot_ref is not None,
+                    snapshot_ref,
+                    title is not None,
+                    title,
+                    kind_value is not None,
+                    kind_value,
+                    entry_id,
+                ),
             )
         return self._require(entry_id)
 
@@ -310,8 +406,7 @@ class KnowledgeStore:
                 )
             else:
                 self._conn.execute(
-                    "UPDATE entries SET snapshot_ref = ?, locator = ?, updated_at = ?"
-                    " WHERE id = ?",
+                    "UPDATE entries SET snapshot_ref = ?, locator = ?, updated_at = ? WHERE id = ?",
                     (snapshot_ref, locator, _iso(now), entry_id),
                 )
         return self._require(entry_id)
@@ -384,12 +479,14 @@ def _has_user_schema(conn: sqlite3.Connection) -> bool:
 def _backup_once(conn: sqlite3.Connection, path: Path) -> None:
     if path.exists():
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(path.parent)
+    reject_symlink(path, label="schema backup")
     backup = sqlite3.connect(str(path))
     try:
         conn.backup(backup)
     finally:
         backup.close()
+    os.chmod(path, 0o600)
 
 
 def _locator_key(channel: Channel, locator: str) -> str | tuple[str, str]:

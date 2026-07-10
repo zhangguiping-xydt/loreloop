@@ -8,9 +8,9 @@ facts. LoreLoop makes that cycle explicit, local, and governable.
 
 Memory tools remember what your agent did *since you installed them*. LoreLoop
 extracts knowledge from what *already exists* — the codebase and the running
-app — no session history required. And where memory tools let the agent write
-its own memory, LoreLoop puts a trust gate on everything that enters the
-knowledge base: an agent cannot pollute the facts that steer its next run.
+app — no session history required. Where memory tools often let the agent write
+its own memory, LoreLoop makes the agent-writable database non-authoritative:
+facts steer later runs only when the separate evidence chain backs them.
 
 ## The problem
 
@@ -47,28 +47,34 @@ chain, whose signing key lives outside the project tree. Concretely:
 
 - An agent that edits the store to mark its own output "approved" gains
   nothing: strong status counts only when the chain endorses the entry's
-  *current content digest*.
+  *current content digest*. If a chain-backed row disappears or changes with
+  no recorded re-ingest provenance, delegation fails closed for operator review.
 - Knowledge whose anchored source has drifted (the file changed since
   capture) is demoted to reference at injection time, automatically.
 - Rejected or superseded entries stay retired even if the database is edited
   back — retirement is replayed from the chain too.
 
-The referee stays outside the player's process: acceptance assertions are
-written and entered by a human, verdicts come from `loreloop report` reading
-the evidence chain, and approve/reject/supersede are human acts. The
-companion skill (installed into Claude Code/Codex by `loreloop init`) only makes
-the agent a better citizen — it never verifies, never renders verdicts,
-never writes knowledge.
+LoreLoop keeps signing material outside the project and strips operator-only
+locations from the agent subprocess environment. Inference calls run in an
+isolated temporary directory with tools disabled or a read-only sandbox;
+delegation uses explicit non-bypass workspace permissions. This is a
+cooperative process boundary, not an OS sandbox against a malicious agent
+binary. Acceptance and curation remain operator CLI actions, and normal signing
+APIs reject LoreLoop-launched agent subprocesses.
 
 ## Status
 
-Early alpha. Interfaces will change. Local-first: everything runs on your
-machine, storage is SQLite, no accounts, no telemetry. One CLI is the whole
-user surface — no web dashboard, no server.
+Early alpha. Interfaces will change. Storage, evidence, and orchestration are
+local; there are no LoreLoop accounts or telemetry. **Local-first does not mean
+local inference:** code snippets, page observations, and prompts sent through
+Claude Code or Codex are processed under that provider's terms and settings.
+Use `--no-expand` and deterministic assertions to reduce model calls, and do
+not ingest material you are not authorized to send to the selected provider.
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.11–3.14
+- [uv](https://docs.astral.sh/uv/) for source-checkout installation and locked development
 - [Claude Code](https://code.claude.com) (`claude`) or Codex (`codex`) CLI on your PATH
 - Optional: Playwright for web exploration and browser-verified acceptance
 
@@ -80,14 +86,11 @@ uninstalled source tree.
 Source checkout (contributors and unreleased builds):
 
 ```bash
-git clone https://github.com/loreloop-ai/loreloop
+git clone https://github.com/zhangguiping-xydt/loreloop
 cd loreloop
-python -m venv .venv
-# POSIX: source .venv/bin/activate
-# Windows PowerShell: .venv\Scripts\Activate.ps1
-python -m pip install -e '.[web]'
-python -m playwright install chromium
-loreloop doctor
+uv sync --frozen --all-extras
+uv run --frozen playwright install chromium
+uv run --frozen loreloop doctor
 ```
 
 Published release (after the first PyPI release):
@@ -189,9 +192,12 @@ Notes:
   `fill`, `select`, and `wait`. Scripts are content-addressed; harvested
   acceptance entries use `script:<sha256>` locators, so an interactive state is
   anchored by the path that reaches it, not just by the final URL.
-- Script execution is fenced: same-origin only, password fields are never
-  filled, destructive clicks are blocked, and write-like form actions require
-  `--allow-writes`.
+- Script execution is fenced: HTTP(S) only, cross-origin requests and final
+  URLs are rejected, password fields are never filled, destructive clicks are
+  blocked, and same-origin non-GET requests require `--allow-writes`. This is
+  not a transactional browser sandbox: GET endpoints can still have side
+  effects in a poorly designed application, so use a disposable or staging
+  environment for scripted checks.
 - Every check saves the full observation as a content-addressed artifact in
   `.loreloop/evidence/artifacts/` and records its hash on the tamper-evident
   chain. Script checks additionally save the script and replay trace artifacts,
@@ -208,9 +214,11 @@ evidence without a shell:
 loreloop check <run-id> "unit tests pass" --command "python -m pytest -q"
 ```
 
-The command, exit code and bounded output are saved as a content-addressed
-artifact. Exit code zero is required to pass; successful command evidence can
-flow back as verified acceptance knowledge. Shell operators are rejected.
+The command, exit code, repository HEAD/working-tree digest, and bounded output
+are saved as a content-addressed artifact; stdout and stderr are redacted for
+common secret patterns first. Exit code zero is required to pass, and harvest
+rejects command evidence if the repository state has changed. Shell operators
+are rejected.
 
 ## Multi-repository and federation
 
@@ -243,8 +251,6 @@ Precision@K/Recall@K/MRR, and executable coding-task success. The recorded
 | Claude reverse | Precision 1.00, Recall 0.71; compound claims lose atomic credit |
 | Retrieval, plain BM25 | Hit@5 0.50, MRR 0.42 |
 | Retrieval, frozen expansion | Hit@5 1.00, MRR 1.00, 6 relevant / 10 returned |
-| Codex coding tasks, no knowledge | 0/3 hidden contracts passed |
-| Codex coding tasks, LoreLoop context | 3/3 hidden contracts passed |
 | Claude four-way tasks | no memory 0/3; code index 0/3; session memory 3/3; LoreLoop 3/3 |
 | Claude multi-language reverse matrix | Precision 0.82, Recall 0.90 across Python, TypeScript, mixed fixtures |
 | Retrieval scale, 10k entries / 5 projects | median 417 ms, P95 659 ms; Recall@5 1.00, MRR 1.00 on synthetic scale fixture |
@@ -252,7 +258,10 @@ Precision@K/Recall@K/MRR, and executable coding-task success. The recorded
 
 These are regression baselines, not broad claims of model superiority. The
 fixtures are deliberately small and all scoring rules, recorded predictions,
-diff outcomes and limitations are published under `eval/`. The 10k retrieval
+raw task runs and limitations are published under `eval/`. The release gate
+re-scores them with `python eval/validate_results.py --check-thresholds`; the
+summary deliberately omits a historical Codex task comparison because no raw
+Codex task result file is checked in. The 10k retrieval
 result is usable but not instant; larger corpora will need a persistent lexical
 index. No zero-context human completion rate is claimed yet—the protocol is
 published, and the report remains explicitly "awaiting real participants" until
@@ -261,6 +270,13 @@ real sessions are recorded.
 For the product thesis behind these metrics—what Reverse / Apply / Return
 actually proves today, where it does not, and the appropriate alpha release
 claim—see [Product thesis and evidence](docs/product-thesis-and-evidence.md).
+
+## Project policies
+
+See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md),
+[Governance](GOVERNANCE.md), [Support](SUPPORT.md), and
+[Releasing](RELEASING.md). Bugs and feature requests use structured issue
+templates; vulnerabilities belong in a private GitHub Security Advisory.
 
 ## License
 

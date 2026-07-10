@@ -224,17 +224,18 @@ options:
 
 $ loreloop knowledge --help
 usage: loreloop knowledge [-h]
-                          {list,search,import,export,approve,reject,supersede,verify,usage}
+                          {list,search,import,export,approve,reject,reopen,supersede,verify,usage}
                           ...
 
 positional arguments:
-  {list,search,import,export,approve,reject,supersede,verify,usage}
+  {list,search,import,export,approve,reject,reopen,supersede,verify,usage}
     list                list knowledge and trust state
     search              search local or federated knowledge
     import              copy a foreign entry into the local draft store
     export              export knowledge and effective trust as Markdown
     approve             approve one draft entry and endorse its content
     reject              reject one entry and retire it from injection
+    reopen              return a rejected entry to draft for renewed review
     supersede           retire an old entry in favor of a new entry
     verify              recheck web knowledge against live pages
     usage               show injection and accepted-run correlation
@@ -293,6 +294,15 @@ options:
 
 $ loreloop knowledge reject --help
 usage: loreloop knowledge reject [-h] ENTRY_ID
+
+positional arguments:
+  ENTRY_ID
+
+options:
+  -h, --help  show this help message and exit
+
+$ loreloop knowledge reopen --help
+usage: loreloop knowledge reopen [-h] ENTRY_ID
 
 positional arguments:
   ENTRY_ID

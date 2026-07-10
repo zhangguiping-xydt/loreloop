@@ -19,6 +19,7 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 class DemoError(RuntimeError):
@@ -101,10 +102,14 @@ def _free_port() -> int:
 
 
 def _wait_for(url: str) -> None:
+    parsed = urlsplit(url)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise DemoError(f"demo readiness URL must be local HTTP: {url}")
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=1):
+            # B310 is safe here because the scheme and loopback host are checked above.
+            with urllib.request.urlopen(url, timeout=1):  # nosec B310
                 return
         except OSError:
             time.sleep(0.1)
@@ -133,12 +138,14 @@ def run_demo(workspace: Path, *, agent: str, offline: bool) -> Path:
     previous_cwd = Path.cwd()
     previous_key_dir = os.environ.get("LORELOOP_KEY_DIR")
     previous_agent_factory = cli._agent
+    previous_inference_factory = cli._inference_agent
     browser_module = None
     previous_browser = None
     os.environ["LORELOOP_KEY_DIR"] = str(workspace / "keys")
     if offline:
         demo_agent = OfflineDemoAgent(project)
         cli._agent = lambda _name: demo_agent
+        cli._inference_agent = lambda _name: demo_agent
         import loreloop.webexplore.browser as browser_module
 
         previous_browser = browser_module.PlaywrightBrowser
@@ -188,6 +195,7 @@ def run_demo(workspace: Path, *, agent: str, offline: bool) -> Path:
         else:
             os.environ["LORELOOP_KEY_DIR"] = previous_key_dir
         cli._agent = previous_agent_factory
+        cli._inference_agent = previous_inference_factory
         if browser_module is not None and previous_browser is not None:
             browser_module.PlaywrightBrowser = previous_browser
 

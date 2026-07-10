@@ -1,4 +1,3 @@
-
 import pytest
 
 from loreloop.evidence.chain import EvidenceChain
@@ -188,12 +187,15 @@ def test_verify_script_anchored_entry_replays_script_artifact(env, tmp_path, mon
             "script": script.to_json(),
         }
     )[0]
-    chain.append("check_passed", {
-        "run_id": "seed",
-        "check": "seeded script",
-        "script_digest": script.digest,
-        "script_artifact": script_sha,
-    })
+    chain.append(
+        "check_passed",
+        {
+            "run_id": "seed",
+            "check": "seeded script",
+            "script_digest": script.digest,
+            "script_artifact": script_sha,
+        },
+    )
     entry = Entry(
         title="Upload limit",
         content="Uploads are limited to 50MB.",
@@ -217,8 +219,13 @@ def test_verify_script_anchored_entry_replays_script_artifact(env, tmp_path, mon
 
     monkeypatch.setattr(verify_mod, "execute_action_script", fake_execute)
     result = verify_entry(
-        FakeBrowser(), FakeRunner('{"passed": true, "reason": "Still true."}'),
-        chain, store, entry, "run-9", artifacts=artifacts,
+        FakeBrowser(),
+        FakeRunner('{"passed": true, "reason": "Still true."}'),
+        chain,
+        store,
+        entry,
+        "run-9",
+        artifacts=artifacts,
     )
 
     assert result.passed and result.drifted
@@ -245,12 +252,15 @@ def test_verify_script_anchored_entry_blocked_does_not_contradict(env, tmp_path,
             "script": script.to_json(),
         }
     )[0]
-    seed = chain.append("check_passed", {
-        "run_id": "seed",
-        "check": "seeded script",
-        "script_digest": script.digest,
-        "script_artifact": script_sha,
-    })
+    seed = chain.append(
+        "check_passed",
+        {
+            "run_id": "seed",
+            "check": "seeded script",
+            "script_digest": script.digest,
+            "script_artifact": script_sha,
+        },
+    )
     entry = Entry(
         title="Checkout state",
         content="Checkout shows a summary.",
@@ -268,7 +278,9 @@ def test_verify_script_anchored_entry_blocked_does_not_contradict(env, tmp_path,
 
     monkeypatch.setattr(verify_mod, "execute_action_script", fake_execute)
     with pytest.raises(ActionBlocked, match="blocked by safety rule"):
-        verify_entry(FakeBrowser(), FakeRunner("{}"), chain, store, entry, "run-9", artifacts=artifacts)
+        verify_entry(
+            FakeBrowser(), FakeRunner("{}"), chain, store, entry, "run-9", artifacts=artifacts
+        )
 
     assert store.get(entry.id).trust.verification is Verification.UNVERIFIED
     assert chain.verify() == [seed]
@@ -295,7 +307,9 @@ def test_verify_entry_chain_failure_leaves_store_untouched(env):
 def test_verify_entry_rejects_non_web_channel(env):
     store, chain = env
     entry = Entry(
-        title="t", content="c", kind=Kind.INTERFACE,
+        title="t",
+        content="c",
+        kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator="a.py@abc"),
     )
     store.add(entry)

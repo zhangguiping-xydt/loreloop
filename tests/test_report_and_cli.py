@@ -23,7 +23,12 @@ def write_trace(workdir, run_id="run-20260708-abc123", finished=True):
     runs = workdir / ".loreloop/runs"
     runs.mkdir(parents=True, exist_ok=True)
     events = [
-        {"ts": "t0", "event": "delegation_started", "task": "fix upload", "context_entries": ["e1"]},
+        {
+            "ts": "t0",
+            "event": "delegation_started",
+            "task": "fix upload",
+            "context_entries": ["e1"],
+        },
     ]
     if finished:
         events.append({"ts": "t1", "event": "delegation_finished", "output_chars": 10})
@@ -34,10 +39,15 @@ def write_trace(workdir, run_id="run-20260708-abc123", finished=True):
 
 def endorse_run(chain, run_id, task="fix upload", context=None, base_commit=None):
     """The chain record cmd_run appends — the acceptance authority."""
-    return chain.append("delegation_completed", {
-        "run_id": run_id, "task": task,
-        "context_entries": context or ["e1"], "base_commit": base_commit,
-    })
+    return chain.append(
+        "delegation_completed",
+        {
+            "run_id": run_id,
+            "task": task,
+            "context_entries": context or ["e1"],
+            "base_commit": base_commit,
+        },
+    )
 
 
 def test_report_accepted_when_all_checks_pass(workdir):
@@ -62,6 +72,31 @@ def test_report_not_accepted_on_failure_or_no_checks(workdir):
     report = render_report(run, chain)
     assert "Verdict: NOT ACCEPTED" in report
     assert "got 500" in report
+
+
+def test_latest_result_for_same_check_supersedes_an_earlier_failure(workdir):
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    endorse_run(chain, run.run_id)
+    record_check(chain, run.run_id, "upload works", passed=False, detail="got 500")
+    record_check(chain, run.run_id, "upload works", passed=True, detail="retry passed")
+
+    report = render_report(run, chain)
+
+    assert "Verdict: ACCEPTED" in report
+    assert "Checks (1 passed / 0 failed)" in report
+    assert "got 500" not in report
+
+
+def test_acceptance_check_text_rejects_empty_control_and_oversized_values(workdir):
+    chain = EvidenceChain.for_workdir(workdir)
+
+    for invalid in ("", "   ", "contains\x00nul", "x" * 4_001):
+        with pytest.raises(ValueError):
+            record_check(chain, "run-1", invalid, passed=True)
+
+    assert chain.verify() == []
 
 
 def test_report_rejects_forged_trace_without_chain_record(workdir):
@@ -128,23 +163,31 @@ def test_base_commits_reads_new_and_legacy_formats(workdir):
     legacy_trace = write_trace(workdir, run_id="run-legacy")
     legacy = load_run(legacy_trace)
     legacy_chain = EvidenceChain.for_workdir(workdir)
-    legacy_chain.append("delegation_completed", {
-        "run_id": legacy.run_id,
-        "task": legacy.task,
-        "context_entries": [],
-        "base_commit": "abc",
-    })
+    legacy_chain.append(
+        "delegation_completed",
+        {
+            "run_id": legacy.run_id,
+            "task": legacy.task,
+            "context_entries": [],
+            "base_commit": "abc",
+        },
+    )
     from loreloop.report.acceptance import evaluate_run
 
     assert evaluate_run(legacy, legacy_chain).base_commits == {".": "abc"}
 
     new_trace = workdir / ".loreloop/runs/run-new.jsonl"
-    new_trace.write_text(json.dumps({
-        "event": "delegation_started",
-        "task": "new",
-        "context_entries": [],
-        "base_commits": {".": "def", "backend": "123"},
-    }) + "\n")
+    new_trace.write_text(
+        json.dumps(
+            {
+                "event": "delegation_started",
+                "task": "new",
+                "context_entries": [],
+                "base_commits": {".": "def", "backend": "123"},
+            }
+        )
+        + "\n"
+    )
     assert load_run(new_trace).base_commits == {".": "def", "backend": "123"}
 
 
@@ -153,12 +196,17 @@ def test_load_run_rejects_invalid_repository_name_in_base_commits(workdir):
 
     trace = workdir / ".loreloop/runs/run-bad-repo.jsonl"
     trace.parent.mkdir(parents=True, exist_ok=True)
-    trace.write_text(json.dumps({
-        "event": "delegation_started",
-        "task": "bad",
-        "context_entries": [],
-        "base_commits": {"../escape": "abc"},
-    }) + "\n")
+    trace.write_text(
+        json.dumps(
+            {
+                "event": "delegation_started",
+                "task": "bad",
+                "context_entries": [],
+                "base_commits": {"../escape": "abc"},
+            }
+        )
+        + "\n"
+    )
 
     with pytest.raises(RunTraceError, match="base_commits"):
         load_run(trace)
@@ -210,16 +258,77 @@ def test_command_check_records_reauditable_deterministic_evidence(workdir):
     assert "Verdict: ACCEPTED" in render_report(run, chain, artifacts)
 
 
+def test_command_evidence_redacts_environment_and_labeled_secrets(workdir, monkeypatch):
+    from loreloop.evidence.artifacts import ArtifactStore
+
+    monkeypatch.setenv("LORELOOP_TEST_API_KEY", "super-secret-value")
+    monkeypatch.setenv("LORELOOP_SECOND_SECRET", "another-secret")
+    chain = EvidenceChain.for_workdir(workdir)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    rec = record_command_check(
+        chain,
+        artifacts,
+        "run-secret",
+        "redaction works",
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os,sys; print(os.environ['LORELOOP_TEST_API_KEY']); "
+                "print('token: ' + os.environ['LORELOOP_SECOND_SECRET'], file=sys.stderr)"
+            ),
+        ],
+        cwd=workdir,
+    )
+
+    serialized = json.dumps(artifacts.load(rec.payload["artifact"]))
+    assert "super-secret-value" not in serialized
+    assert "another-secret" not in serialized
+    assert "<redacted>" in serialized
+    assert "super-secret-value" not in json.dumps(rec.payload)
+
+
+def test_cli_ingest_rejects_dirty_source_before_inference(workdir, monkeypatch, capsys):
+    import subprocess
+
+    import loreloop.cli as cli
+
+    subprocess.run(["git", "init"], cwd=workdir, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=workdir, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=workdir, check=True)
+    (workdir / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "add", "app.py"], cwd=workdir, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=workdir, check=True)
+    (workdir / "app.py").write_text("value = 2\n")
+
+    monkeypatch.setattr(
+        cli,
+        "_inference_agent",
+        lambda _name: pytest.fail("dirty ingestion must stop before model inference"),
+    )
+
+    assert main(["ingest", "--from", "code", "."]) == 2
+    assert "uncommitted source files" in capsys.readouterr().err
+
+
 def test_cli_command_check_does_not_invoke_a_shell(workdir, capsys):
     trace = write_trace(workdir)
     run_id = trace.stem
     endorse_run(EvidenceChain.for_workdir(workdir), run_id)
     marker = workdir / "should-not-exist"
 
-    assert main([
-        "check", run_id, "command is isolated", "--command",
-        f'{sys.executable} -c "print(1)" ; touch {marker}',
-    ]) == 2
+    assert (
+        main(
+            [
+                "check",
+                run_id,
+                "command is isolated",
+                "--command",
+                f'{sys.executable} -c "print(1)" ; touch {marker}',
+            ]
+        )
+        == 2
+    )
 
     assert not marker.exists()
     assert "shell operators are not supported" in capsys.readouterr().err
@@ -245,15 +354,33 @@ def test_knowledge_usage_reports_injections_and_accepted_runs(workdir, capsys):
     with KnowledgeStore(db) as store:
         store.add(entry)
     chain = EvidenceChain.for_workdir(workdir)
-    chain.append("delegation_completed", {
-        "run_id": "run-a", "task": "a", "context_entries": [entry.id], "base_commits": {},
-    })
-    chain.append("delegation_completed", {
-        "run_id": "run-b", "task": "b", "context_entries": [entry.id], "base_commits": {},
-    })
-    chain.append("knowledge_harvested", {
-        "run_id": "run-b", "minted": {}, "reversed": {}, "review": [],
-    })
+    chain.append(
+        "delegation_completed",
+        {
+            "run_id": "run-a",
+            "task": "a",
+            "context_entries": [entry.id],
+            "base_commits": {},
+        },
+    )
+    chain.append(
+        "delegation_completed",
+        {
+            "run_id": "run-b",
+            "task": "b",
+            "context_entries": [entry.id],
+            "base_commits": {},
+        },
+    )
+    chain.append(
+        "knowledge_harvested",
+        {
+            "run_id": "run-b",
+            "minted": {},
+            "reversed": {},
+            "review": [],
+        },
+    )
 
     assert main(["knowledge", "usage"]) == 0
 
@@ -343,11 +470,14 @@ def test_cli_knowledge_curation_flow(workdir, capsys):
 
     records = EvidenceChain.for_workdir(workdir).verify()
     assert records[-1].event == "curation_changed"
-    assert records[-1].payload == {
+    assert records[-1].payload | {"entry": None} == {
         "entry_id": entry.id,
         "curation": "approved",
         "entry_digest": entry_digest(entry),
+        "entry": None,
     }
+    assert records[-1].payload["entry"]["content"] == entry.content
+    assert records[-1].payload["entry"]["source"]["locator"] == entry.source.locator
 
 
 def test_cli_knowledge_export_markdown(workdir, capsys):
@@ -397,7 +527,9 @@ def test_cli_invalid_curation_transition_exits_cleanly(workdir, capsys):
     db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     entry = Entry(
-        title="T", content="C", kind=Kind.INTERFACE,
+        title="T",
+        content="C",
+        kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator="api.py@abc"),
     )
     with KnowledgeStore(db) as store:
@@ -426,7 +558,12 @@ def test_cli_run_demotes_unendorsed_strong_entries(workdir, monkeypatch, capsys)
 
     import loreloop.cli as cli
     from loreloop.knowledge.model import (
-        Channel, Entry, Kind, Source, Trust, Verification,
+        Channel,
+        Entry,
+        Kind,
+        Source,
+        Trust,
+        Verification,
     )
     from loreloop.knowledge.store import KnowledgeStore
 
@@ -689,9 +826,10 @@ def test_cli_run_does_not_claim_drifted_chain_backed_entry_as_established(
     assert "source_changed_since_capture" in agent.prompts[0]
 
 
-def test_cli_run_demotes_entry_whose_content_changed_after_endorsement(workdir, monkeypatch, capsys):
-    # H2 end-to-end: approve, then rewrite the row's content by SQL. The
-    # endorsement is bound to the old digest, so cmd_run injects as reference.
+def test_cli_run_rejects_unexplained_content_change_after_endorsement(workdir, monkeypatch, capsys):
+    # H2 end-to-end: approve, then rewrite the row's content by SQL. A mere
+    # demotion would still expose attacker-controlled content as a reference;
+    # the fail-closed projection check must stop delegation entirely.
     import loreloop.cli as cli
     from loreloop.knowledge.model import Channel, Entry, Kind, Source
     from loreloop.knowledge.store import KnowledgeStore
@@ -726,12 +864,12 @@ def test_cli_run_demotes_entry_whose_content_changed_after_endorsement(workdir, 
 
     agent = FakeAgent()
     monkeypatch.setattr(cli, "_agent", lambda name: agent)
-    assert main(["run", "--no-expand", "fix the upload endpoint"]) == 0
+    assert main(["run", "--no-expand", "fix the upload endpoint"]) == 2
 
     err = capsys.readouterr().err
-    assert "without evidence-chain endorsement" in err
-    assert "Established facts" not in agent.prompts[0]
-    assert "Unverified references" in agent.prompts[0]
+    assert "unexplained content/source digest" in err
+    assert "Restore the SQLite projection" in err
+    assert agent.prompts == []
 
 
 def test_cli_run_ignores_deleted_supersede_link(workdir, monkeypatch, capsys):
@@ -750,12 +888,16 @@ def test_cli_run_ignores_deleted_supersede_link(workdir, monkeypatch, capsys):
             return "done"
 
     old = Entry(
-        title="Old upload contract", content="POST /upload returns 200.",
-        kind=Kind.INTERFACE, source=Source(channel=Channel.CODE, locator="api.py@abc"),
+        title="Old upload contract",
+        content="POST /upload returns 200.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@abc"),
     )
     new = Entry(
-        title="New upload contract", content="POST /upload returns 201.",
-        kind=Kind.INTERFACE, source=Source(channel=Channel.CODE, locator="api.py@def"),
+        title="New upload contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@def"),
     )
     db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
@@ -815,9 +957,7 @@ def test_cli_run_ignores_db_resurrection_of_rejected_entry(workdir, monkeypatch,
     with KnowledgeStore(db) as store:
         store.add(entry)
     chain = EvidenceChain.for_workdir(workdir)
-    chain.append(
-        "entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)}
-    )
+    chain.append("entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)})
     assert main(["knowledge", "reject", entry.id[:8]]) == 0
     capsys.readouterr()
 
@@ -837,9 +977,7 @@ def test_cli_run_ignores_db_resurrection_of_rejected_entry(workdir, monkeypatch,
 
     # the list view stays honest too
     assert main(["knowledge", "list"]) == 0
-    line = next(
-        li for li in capsys.readouterr().out.splitlines() if entry.id[:8] in li
-    )
+    line = next(li for li in capsys.readouterr().out.splitlines() if entry.id[:8] in li)
     assert "[rejected]" in line
     assert "[strong]" not in line
 
@@ -850,17 +988,13 @@ def test_cli_run_expands_query_and_degrades_on_bad_expansion(workdir, monkeypatc
     from loreloop.knowledge.store import KnowledgeStore
 
     class FakeAgent:
-        """First call is query expansion, second is the delegation."""
-
-        def __init__(self, expansion_output):
-            self.expansion_output = expansion_output
+        def __init__(self, output):
+            self.output = output
             self.prompts = []
 
         def run(self, prompt):
             self.prompts.append(prompt)
-            if len(self.prompts) == 1:
-                return self.expansion_output
-            return "done"
+            return self.output
 
     entry = Entry(
         title="Upload endpoint contract",
@@ -873,21 +1007,26 @@ def test_cli_run_expands_query_and_degrades_on_bad_expansion(workdir, monkeypatc
     with KnowledgeStore(db) as store:
         store.add(entry)
 
-    agent = FakeAgent('["upload", "endpoint", "限流"]')
-    monkeypatch.setattr(cli, "_agent", lambda name: agent)
+    inference = FakeAgent('["upload", "endpoint", "限流"]')
+    delegation = FakeAgent("done")
+    monkeypatch.setattr(cli, "_inference_agent", lambda name: inference)
+    monkeypatch.setattr(cli, "_agent", lambda name: delegation)
     assert main(["run", "给上传接口加限流"]) == 0
-    assert len(agent.prompts) == 2
-    assert "expanding a search query" in agent.prompts[0]
+    assert len(inference.prompts) == 1
+    assert len(delegation.prompts) == 1
+    assert "expanding a search query" in inference.prompts[0]
     # bridged via expansion terms; expansion text itself is not in the prompt
-    assert "POST /upload returns 201." in agent.prompts[1]
-    assert "expanding a search query" not in agent.prompts[1]
+    assert "POST /upload returns 201." in delegation.prompts[0]
+    assert "expanding a search query" not in delegation.prompts[0]
     capsys.readouterr()
 
-    bad = FakeAgent("not json at all")
-    monkeypatch.setattr(cli, "_agent", lambda name: bad)
+    bad_inference = FakeAgent("not json at all")
+    fallback_delegation = FakeAgent("done")
+    monkeypatch.setattr(cli, "_inference_agent", lambda name: bad_inference)
+    monkeypatch.setattr(cli, "_agent", lambda name: fallback_delegation)
     assert main(["run", "fix the upload endpoint"]) == 0
     assert "query expansion failed" in capsys.readouterr().err
-    assert "POST /upload returns 201." in bad.prompts[-1]
+    assert "POST /upload returns 201." in fallback_delegation.prompts[0]
 
 
 def test_cli_knowledge_list_flags_unendorsed_strong_as_ref(workdir, capsys):
@@ -898,17 +1037,24 @@ def test_cli_knowledge_list_flags_unendorsed_strong_as_ref(workdir, capsys):
     from datetime import datetime, timezone
 
     from loreloop.knowledge.model import (
-        Channel, Entry, Kind, Source, Trust, Verification,
+        Channel,
+        Entry,
+        Kind,
+        Source,
+        Trust,
+        Verification,
     )
     from loreloop.knowledge.store import KnowledgeStore
 
     laundered = Entry(
-        title="Laundered fact", content="Agent says this is verified.",
+        title="Laundered fact",
+        content="Agent says this is verified.",
         kind=Kind.BEHAVIOR,
         source=Source(channel=Channel.WEB, locator="http://app.local/x"),
         trust=Trust(
             verification=Verification.VERIFIED,
-            verified_at=datetime.now(timezone.utc), verified_by="forged",
+            verified_at=datetime.now(timezone.utc),
+            verified_by="forged",
         ),
     )
     db = workdir / ".loreloop/knowledge.db"
@@ -935,10 +1081,16 @@ def test_report_flags_missing_and_tampered_artifacts(workdir):
     artifacts = ArtifactStore.for_workdir(workdir)
     obs = Observation(url="http://a", title="T", text="ok")
     sha, path = artifacts.save_observation(obs)
-    chain.append("check_passed", {
-        "run_id": run.run_id, "check": "page ok", "artifact": sha,
-        "url": obs.url, "page_snapshot": obs.snapshot_hash,
-    })
+    chain.append(
+        "check_passed",
+        {
+            "run_id": run.run_id,
+            "check": "page ok",
+            "artifact": sha,
+            "url": obs.url,
+            "page_snapshot": obs.snapshot_hash,
+        },
+    )
 
     assert "Verdict: ACCEPTED" in render_report(run, chain, artifacts)
 
@@ -966,9 +1118,7 @@ def test_report_flags_artifact_without_url_snapshot_pin(workdir):
     endorse_run(chain, run.run_id)
     artifacts = ArtifactStore.for_workdir(workdir)
     sha, _ = artifacts.save_observation(Observation(url="http://a", title="T", text="ok"))
-    chain.append(
-        "check_passed", {"run_id": run.run_id, "check": "page ok", "artifact": sha}
-    )
+    chain.append("check_passed", {"run_id": run.run_id, "check": "page ok", "artifact": sha})
 
     report = render_report(run, chain, artifacts)
     assert "Verdict: NOT ACCEPTED" in report
@@ -986,20 +1136,32 @@ def test_report_flags_artifact_swapped_for_a_different_observation(workdir):
     artifacts = ArtifactStore.for_workdir(workdir)
     real = Observation(url="http://app.local/upload", title="Upload", text="Max 50MB.")
     sha, _ = artifacts.save_observation(real)
-    chain.append("check_passed", {
-        "run_id": run.run_id, "check": "page ok", "artifact": sha,
-        "url": real.url, "page_snapshot": real.snapshot_hash,
-    })
+    chain.append(
+        "check_passed",
+        {
+            "run_id": run.run_id,
+            "check": "page ok",
+            "artifact": sha,
+            "url": real.url,
+            "page_snapshot": real.snapshot_hash,
+        },
+    )
     assert "Verdict: ACCEPTED" in render_report(run, chain, artifacts)
 
     # swap: another hash-valid artifact of a DIFFERENT page replaces the ref
     other = Observation(url="http://evil.local/", title="Other", text="whatever")
     other_sha, _ = artifacts.save_observation(other)
     swapped = EvidenceChain.for_workdir(workdir)
-    swapped.append("check_passed", {
-        "run_id": run.run_id, "check": "swapped", "artifact": other_sha,
-        "url": real.url, "page_snapshot": real.snapshot_hash,
-    })
+    swapped.append(
+        "check_passed",
+        {
+            "run_id": run.run_id,
+            "check": "swapped",
+            "artifact": other_sha,
+            "url": real.url,
+            "page_snapshot": real.snapshot_hash,
+        },
+    )
     report = render_report(run, swapped, artifacts)
     assert "Verdict: NOT ACCEPTED" in report
     assert "does not match the chain record" in report
@@ -1038,16 +1200,19 @@ def test_report_audits_script_and_trace_artifacts(workdir):
             "final_snapshot": obs.snapshot_hash,
         }
     )
-    chain.append("check_passed", {
-        "run_id": run.run_id,
-        "check": "filtered products",
-        "artifact": obs_sha,
-        "url": obs.url,
-        "page_snapshot": obs.snapshot_hash,
-        "script_digest": script.digest,
-        "script_artifact": script_sha,
-        "trace_artifact": trace_sha,
-    })
+    chain.append(
+        "check_passed",
+        {
+            "run_id": run.run_id,
+            "check": "filtered products",
+            "artifact": obs_sha,
+            "url": obs.url,
+            "page_snapshot": obs.snapshot_hash,
+            "script_digest": script.digest,
+            "script_artifact": script_sha,
+            "trace_artifact": trace_sha,
+        },
+    )
     assert "Verdict: ACCEPTED" in render_report(run, chain, artifacts)
 
     trace_path.unlink()
@@ -1072,9 +1237,7 @@ def test_report_escapes_markdown_table_breakers(workdir):
     trace = write_trace(workdir)
     chain = EvidenceChain.for_workdir(workdir)
     run = load_run(trace)
-    record_check(
-        chain, run.run_id, "cell | breaker", passed=False, detail="line1\nline2 | x"
-    )
+    record_check(chain, run.run_id, "cell | breaker", passed=False, detail="line1\nline2 | x")
     report = render_report(run, chain)
     row = next(line for line in report.splitlines() if "cell" in line and line.startswith("|"))
     assert "cell \\| breaker" in row
@@ -1088,12 +1251,16 @@ def test_cli_supersede_links_and_hides_old_entry(workdir, capsys):
     db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     old = Entry(
-        title="Old upload contract", content="POST /upload returns 200.",
-        kind=Kind.INTERFACE, source=Source(channel=Channel.CODE, locator="api.py@abc"),
+        title="Old upload contract",
+        content="POST /upload returns 200.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@abc"),
     )
     new = Entry(
-        title="New upload contract", content="POST /upload returns 201.",
-        kind=Kind.INTERFACE, source=Source(channel=Channel.CODE, locator="api.py@def"),
+        title="New upload contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@def"),
     )
     with KnowledgeStore(db) as store:
         store.add(old)
@@ -1145,7 +1312,8 @@ def test_cli_list_stale_flags_drifted_code_anchors(workdir, capsys):
     ).stdout.strip()
 
     drifting = Entry(
-        title="Upload contract", content="POST /upload returns 201.",
+        title="Upload contract",
+        content="POST /upload returns 201.",
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
     )
@@ -1177,16 +1345,14 @@ def test_cli_verify_rejects_bad_script_before_browser(workdir, capsys):
     script = workdir / "actions.json"
     script.write_text(json.dumps({"version": 1, "base": "http://app.local", "steps": []}))
 
-    assert main([
-        "verify", "run-1", "http://app.local", "contains:ok", "--script", str(script)
-    ]) == 2
+    assert (
+        main(["verify", "run-1", "http://app.local", "contains:ok", "--script", str(script)]) == 2
+    )
     assert "invalid action script" in capsys.readouterr().err
 
 
 def test_cli_verify_rejects_allow_writes_without_script(workdir, capsys):
-    assert main([
-        "verify", "run-1", "http://app.local", "contains:ok", "--allow-writes"
-    ]) == 2
+    assert main(["verify", "run-1", "http://app.local", "contains:ok", "--allow-writes"]) == 2
     assert "--allow-writes requires --script" in capsys.readouterr().err
 
 
@@ -1201,10 +1367,23 @@ def test_cli_init_creates_evidence_key(workdir, monkeypatch, capsys):
     assert "evidence signing key" in capsys.readouterr().out
 
 
-def test_cli_init_reports_unwritable_key_location_without_traceback(
+def test_cli_init_rejects_in_project_key_location_without_traceback(workdir, monkeypatch, capsys):
+    blocked = workdir / "not-a-directory"
+    blocked.write_text("x")
+    monkeypatch.setenv("LORELOOP_KEY_DIR", str(blocked / "keys"))
+
+    assert main(["init", "--no-skill"]) == 2
+
+    err = capsys.readouterr().err
+    assert "must be outside the project tree" in err
+    assert "LORELOOP_KEY_DIR" in err
+    assert "Traceback" not in err
+
+
+def test_cli_init_reports_unwritable_external_key_location_without_traceback(
     workdir, monkeypatch, capsys
 ):
-    blocked = workdir / "not-a-directory"
+    blocked = workdir.parent / f"{workdir.name}-not-a-directory"
     blocked.write_text("x")
     monkeypatch.setenv("LORELOOP_KEY_DIR", str(blocked / "keys"))
 
@@ -1231,6 +1410,21 @@ def test_cli_doctor_reports_preflight_checks(workdir, monkeypatch, capsys):
     assert "ready" in out.lower()
 
 
+def test_cli_doctor_reports_invalid_key_boundary_as_failed_check(workdir, monkeypatch, capsys):
+    import shutil as _shutil
+
+    monkeypatch.setattr(_shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setenv("LORELOOP_KEY_DIR", str(workdir / ".operator-keys"))
+
+    assert main(["doctor"]) == 1
+
+    captured = capsys.readouterr()
+    assert "FAIL  evidence key directory" in captured.out
+    assert "must be outside the project tree" in captured.out
+    assert "NOT READY" in captured.out
+    assert captured.err == ""
+
+
 def test_cli_surfaces_legacy_key_error_cleanly(workdir, capsys):
     legacy = workdir / ".loreloop/evidence.key"
     legacy.parent.mkdir(parents=True)
@@ -1248,7 +1442,9 @@ def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys)
     import subprocess
 
     subprocess.run(["git", "init"], cwd=workdir, check=True, capture_output=True)
-    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
+    monkeypatch.setattr(
+        _shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None
+    )
 
     assert main(["init", "--skill"]) == 0
     out = capsys.readouterr().out
@@ -1270,7 +1466,9 @@ def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys)
 def test_cli_init_respects_no_skill_and_missing_agents(workdir, monkeypatch, capsys):
     import shutil as _shutil
 
-    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
+    monkeypatch.setattr(
+        _shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None
+    )
     assert main(["init", "--no-skill"]) == 0
     assert "skipped skill installation" in capsys.readouterr().out
     assert not (workdir / ".claude").exists()
@@ -1283,7 +1481,9 @@ def test_cli_init_respects_no_skill_and_missing_agents(workdir, monkeypatch, cap
 def test_cli_init_installs_codex_companion_skill(workdir, monkeypatch, capsys):
     import shutil as _shutil
 
-    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None)
+    monkeypatch.setattr(
+        _shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None
+    )
 
     assert main(["init", "--skill"]) == 0
 
@@ -1296,6 +1496,7 @@ def test_cli_init_installs_codex_companion_skill(workdir, monkeypatch, capsys):
 def test_cli_ingest_web_requires_playwright(workdir):
     try:
         import playwright  # noqa: F401
+
         pytest.skip("playwright installed; error path not reachable")
     except ImportError:
         pass

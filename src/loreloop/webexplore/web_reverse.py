@@ -54,9 +54,7 @@ class RawWebAssertion:
     url: str
 
 
-def extract_web_assertions(
-    runner: AgentRunner, pages: list[Observation]
-) -> list[RawWebAssertion]:
+def extract_web_assertions(runner: AgentRunner, pages: list[Observation]) -> list[RawWebAssertion]:
     valid_urls = {p.url for p in pages}
     payload = []
     for p in pages:

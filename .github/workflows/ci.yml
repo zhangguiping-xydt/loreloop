@@ -7,6 +7,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.9.30"
+
 jobs:
   test:
     name: ${{ matrix.os }} / Python ${{ matrix.python }}
@@ -14,41 +21,89 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.11", "3.12"]
+        include:
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.12"
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: ubuntu-latest
+            python: "3.14"
+          - os: macos-latest
+            python: "3.12"
+          - os: windows-latest
+            python: "3.12"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python }}
-          cache: pip
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e ".[dev]"
-      - run: python -m ruff check .
-      - run: python -m pytest -q
-      - run: python eval/run.py retrieval --output eval-retrieval.json
-      - run: python eval/scale.py --sizes 100 1000 --repetitions 1 --output eval-scale.json
-      - run: python eval/usability.py --output eval-usability.json
-      - run: loreloop demo --offline --workspace .first-run-smoke
-      - run: python -m pip wheel --no-deps . --wheel-dir dist
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: retrieval-${{ matrix.os }}-py${{ matrix.python }}
-          path: |
-            eval-retrieval.json
-            eval-scale.json
-            eval-usability.json
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+      - run: uv run --frozen pytest -q
 
-  browser:
-    name: Playwright smoke
+  quality:
+    name: Quality, coverage, evaluation, package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: "3.12"
-          cache: pip
-      - run: python -m pip install -e ".[dev,web]"
-      - run: python -m playwright install --with-deps chromium
-      - run: python -m pytest -q tests/test_smoke_playwright.py
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+      - run: uv run --frozen ruff format --check .
+      - run: uv run --frozen ruff check .
+      - run: uv run --frozen pytest --cov=loreloop --cov-report=term-missing --cov-fail-under=80
+      - run: uv run --frozen python eval/validate_results.py --check-thresholds
+      - run: uv run --frozen loreloop demo --offline --workspace .first-run-smoke
+      - run: uv build
+      - run: uv run --frozen twine check dist/*
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
+
+  security:
+    name: Static and dependency security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+      - run: uv run --frozen bandit -q -r src -ll
+      - run: uv export --quiet --frozen --extra web --no-emit-project --format requirements-txt --output-file audit-requirements.txt
+      - run: uv run --frozen pip-audit --requirement audit-requirements.txt
+
+  secrets:
+    name: Secret history scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  browser:
+    name: Playwright security smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --all-extras
+      - run: uv run --frozen playwright install --with-deps chromium
+      - run: uv run --frozen pytest -q tests/test_smoke_playwright.py

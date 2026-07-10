@@ -8,6 +8,7 @@ from loreloop.knowledge.code_reverse import (
     ExtractionError,
     RawAssertion,
     classify_assertions,
+    dirty_source_files,
     drifted_code_entry_ids,
     extract_assertions,
     reverse_code,
@@ -47,19 +48,75 @@ def test_scan_repo_filters_by_extension(repo):
     assert [f.name for f in files] == ["app.py"]
 
 
+def test_scan_repo_preserves_non_ascii_git_paths(repo):
+    source = repo / "上传策略.ts"
+    source.write_text("export const maxUploadMiB = 50;\n", encoding="utf-8")
+    subprocess.run(["git", "add", source.name], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "中文路径"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+    assert source in scan_repo(repo)
+
+
+def test_scan_repo_rejects_tracked_symlink_escape(repo):
+    outside = repo.parent / f"{repo.name}-outside.py"
+    outside.write_text("SECRET = 'outside repository'\n", encoding="utf-8")
+    link = repo / "escape.py"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are unavailable on this platform")
+    subprocess.run(["git", "add", "escape.py"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "link"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+    assert link not in scan_repo(repo)
+
+
+def test_dirty_source_files_includes_staged_unstaged_and_untracked(repo):
+    (repo / "app.py").write_text("def upload():\n    return 202\n")
+    (repo / "policy.yaml").write_text("max_upload: 50\n")
+    subprocess.run(["git", "add", "policy.yaml"], cwd=repo, check=True, capture_output=True)
+    (repo / "fresh.ts").write_text("export const enabled = true;\n")
+
+    assert dirty_source_files(repo) == ["app.py", "fresh.ts", "policy.yaml"]
+
+
+def test_reverse_code_splits_batches_by_total_source_bytes(repo):
+    files = []
+    for index in range(4):
+        path = repo / f"large_{index}.py"
+        path.write_text("x" * 50_000)
+        files.append(path)
+    runner = FakeRunner(["[]", "[]"])
+
+    assert reverse_code(runner, repo, files=files) == []
+    assert len(runner.prompts) == 2
+
+
 def test_reverse_code_produces_anchored_entries(repo):
     extract_out = json.dumps(
-        [{
-            "claim": "POST /upload returns 201.",
-            "title": "Upload status",
-            "file": "app.py",
-            "evidence": {
-                "line_start": 1,
-                "line_end": 2,
-                "symbol": "upload",
-                "excerpt": "def upload():\n    return 201",
-            },
-        }]
+        [
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload status",
+                "file": "app.py",
+                "evidence": {
+                    "line_start": 1,
+                    "line_end": 2,
+                    "symbol": "upload",
+                    "excerpt": "def upload():\n    return 201",
+                },
+            }
+        ]
     )
     classify_out = json.dumps([{"id": 0, "kind": "interface"}])
     runner = FakeRunner([extract_out, classify_out])
@@ -84,10 +141,12 @@ def test_reverse_code_produces_anchored_entries(repo):
 
 
 def test_reverse_code_prefixes_declared_repository(repo):
-    runner = FakeRunner([
-        json.dumps([{"claim": "The value is one.", "title": "Value", "file": "app.py"}]),
-        json.dumps([{"id": 0, "kind": "behavior"}]),
-    ])
+    runner = FakeRunner(
+        [
+            json.dumps([{"claim": "The value is one.", "title": "Value", "file": "app.py"}]),
+            json.dumps([{"id": 0, "kind": "behavior"}]),
+        ]
+    )
 
     entry = reverse_code(runner, repo, repo_name="backend")[0]
 
@@ -101,57 +160,73 @@ def test_extract_rejects_unknown_file(repo):
 
 
 def test_extract_rejects_evidence_lines_outside_file(repo):
-    out = json.dumps([{
-        "claim": "POST /upload returns 201.",
-        "title": "Upload status",
-        "file": "app.py",
-        "evidence": {"line_start": 9, "line_end": 10, "symbol": "upload"},
-    }])
+    out = json.dumps(
+        [
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload status",
+                "file": "app.py",
+                "evidence": {"line_start": 9, "line_end": 10, "symbol": "upload"},
+            }
+        ]
+    )
 
     with pytest.raises(ExtractionError, match="evidence line"):
         extract_assertions(FakeRunner([out]), repo, [repo / "app.py"])
 
 
 def test_extract_rejects_fabricated_evidence_excerpt(repo):
-    out = json.dumps([{
-        "claim": "POST /upload returns 201.",
-        "title": "Upload status",
-        "file": "app.py",
-        "evidence": {
-            "line_start": 1,
-            "line_end": 2,
-            "symbol": "upload",
-            "excerpt": "return 500",
-        },
-    }])
+    out = json.dumps(
+        [
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload status",
+                "file": "app.py",
+                "evidence": {
+                    "line_start": 1,
+                    "line_end": 2,
+                    "symbol": "upload",
+                    "excerpt": "return 500",
+                },
+            }
+        ]
+    )
 
     with pytest.raises(ExtractionError, match="excerpt does not match"):
         extract_assertions(FakeRunner([out]), repo, [repo / "app.py"])
 
 
 def test_reverse_retries_once_after_deterministic_evidence_rejection(repo):
-    bad = json.dumps([{
-        "claim": "POST /upload returns 201.",
-        "title": "Upload status",
-        "file": "app.py",
-        "evidence": {
-            "line_start": 1,
-            "line_end": 2,
-            "symbol": "upload",
-            "excerpt": "return 500",
-        },
-    }])
-    repaired = json.dumps([{
-        "claim": "POST /upload returns 201.",
-        "title": "Upload status",
-        "file": "app.py",
-        "evidence": {
-            "line_start": 1,
-            "line_end": 2,
-            "symbol": "upload",
-            "excerpt": "def upload():\n    return 201",
-        },
-    }])
+    bad = json.dumps(
+        [
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload status",
+                "file": "app.py",
+                "evidence": {
+                    "line_start": 1,
+                    "line_end": 2,
+                    "symbol": "upload",
+                    "excerpt": "return 500",
+                },
+            }
+        ]
+    )
+    repaired = json.dumps(
+        [
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload status",
+                "file": "app.py",
+                "evidence": {
+                    "line_start": 1,
+                    "line_end": 2,
+                    "symbol": "upload",
+                    "excerpt": "def upload():\n    return 201",
+                },
+            }
+        ]
+    )
     classified = json.dumps([{"id": 0, "kind": "interface"}])
     runner = FakeRunner([bad, repaired, classified])
 
@@ -182,7 +257,10 @@ def test_extract_rejects_non_json():
 
 
 def test_classify_rejects_count_mismatch():
-    assertions = [RawAssertion(claim="a", title="t", file="f"), RawAssertion(claim="b", title="t", file="f")]
+    assertions = [
+        RawAssertion(claim="a", title="t", file="f"),
+        RawAssertion(claim="b", title="t", file="f"),
+    ]
     out = json.dumps([{"id": 0, "kind": "behavior"}])
     with pytest.raises(ExtractionError, match="returned 1 items"):
         classify_assertions(FakeRunner([out]), assertions)
@@ -212,13 +290,17 @@ def test_drift_detection_flags_changed_files_only(repo):
     subprocess.run(["git", "add", "app.py"], cwd=repo, check=True, capture_output=True)
     subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "change"],
-        cwd=repo, check=True, capture_output=True,
+        cwd=repo,
+        check=True,
+        capture_output=True,
     )
 
     changed = code_entry("app.py", base)
     untouched = code_entry("notes.txt", base)
     web = Entry(
-        title="login page", content="Login redirects.", kind=Kind.BEHAVIOR,
+        title="login page",
+        content="Login redirects.",
+        kind=Kind.BEHAVIOR,
         source=Source(channel=Channel.WEB, locator="http://x/login", snapshot_ref="h1"),
     )
 
@@ -233,7 +315,9 @@ def test_drift_detection_treats_unknown_anchor_as_drifted(repo):
 def test_drift_detection_treats_missing_anchor_as_drifted(repo):
     # a code entry with no snapshot_ref can never prove freshness
     anchorless = Entry(
-        title="claim about app.py", content="app.py does things.", kind=Kind.BEHAVIOR,
+        title="claim about app.py",
+        content="app.py does things.",
+        kind=Kind.BEHAVIOR,
         source=Source(channel=Channel.CODE, locator="app.py"),
     )
     assert drifted_code_entry_ids(repo, [anchorless]) == {anchorless.id}

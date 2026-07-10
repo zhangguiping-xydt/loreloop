@@ -23,6 +23,7 @@ Reproduce retrieval locally without a model:
 uv run python eval/run.py retrieval
 uv run python eval/scale.py
 uv run python eval/usability.py
+uv run python eval/validate_results.py --check-thresholds
 ```
 
 Run fresh four-way coding-agent tasks (this invokes the selected local agent CLI):
@@ -36,3 +37,9 @@ uv run python eval/task_runner.py \
 Task success requires agent exit code 0, public tests passing, hidden contract
 tests passing, and no timeout. Hidden evaluators live outside the repository
 copied for the agent.
+
+`2026-07-10-summary.json` is generated from the checked-in reverse, matrix,
+scale, and Claude four-way task files. It deliberately omits any numeric claim
+whose raw result file is missing, including the historical Codex coding-task
+comparison. Human usability remains `awaiting real participants` until real
+session records are added.

@@ -58,8 +58,25 @@ class Browser(Protocol):
 
 
 def same_origin(a: str, b: str) -> bool:
-    pa, pb = urlparse(a), urlparse(b)
-    return (pa.scheme, pa.netloc) == (pb.scheme, pb.netloc)
+    return _origin(a) is not None and _origin(a) == _origin(b)
+
+
+def require_http_url(url: str) -> str:
+    if _origin(url) is None:
+        raise BrowserError(f"URL must be absolute HTTP(S), got: {url!r}")
+    return url
+
+
+def _origin(url: str) -> tuple[str, str, int] | None:
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    return scheme, parsed.hostname.rstrip(".").lower(), port or (443 if scheme == "https" else 80)
 
 
 class PlaywrightBrowser:
@@ -76,7 +93,15 @@ class PlaywrightBrowser:
         try:
             self._pw = sync_playwright().start()
             self._browser = self._pw.chromium.launch(headless=not headed)
-            self._page = self._browser.new_page()
+            self._context = self._browser.new_context(
+                accept_downloads=False,
+                service_workers="block",
+            )
+            self._allowed_origin: str | None = None
+            self._allow_writes = False
+            self._blocked_requests: list[dict[str, str]] = []
+            self._context.route("**/*", self._route_request)
+            self._page = self._context.new_page()
         except Exception as exc:
             if hasattr(self, "_pw"):
                 self._pw.stop()
@@ -91,12 +116,14 @@ class PlaywrightBrowser:
         return self._page
 
     def observe(self, url: str) -> Observation:
+        require_http_url(url)
+        self.set_network_policy(url, allow_writes=False)
         try:
-            response = self._page.goto(
-                url, timeout=self._timeout_ms, wait_until="domcontentloaded"
-            )
+            response = self._page.goto(url, timeout=self._timeout_ms, wait_until="domcontentloaded")
             if response is not None and response.status >= 400:
                 raise BrowserError(f"page returned HTTP {response.status}: {response.url}")
+            if not same_origin(self._page.url, url):
+                raise BrowserError(f"navigation left allowed origin: {self._page.url}")
             self._settle()
             return self.observe_current()
         except BrowserError:
@@ -105,6 +132,8 @@ class PlaywrightBrowser:
             raise BrowserError(f"cannot observe {url}: {exc}") from exc
 
     def observe_current(self) -> Observation:
+        if self._allowed_origin and not same_origin(self._page.url, self._allowed_origin):
+            raise BrowserError(f"page left allowed origin: {self._page.url}")
         title = self._page.title()
         text = self._page.inner_text("body", timeout=self._timeout_ms)[:20_000]
         links = self._page.evaluate(_LINKS_JS)
@@ -131,7 +160,9 @@ class PlaywrightBrowser:
             "nav,[role=navigation],header",
         )
         return Observation(
-            url=self._page.url, title=title, text=text,
+            url=self._page.url,
+            title=title,
+            text=text,
             links=[u for u in links if isinstance(u, str) and u.startswith("http")],
             forms=forms,
             headings=headings,
@@ -168,10 +199,45 @@ class PlaywrightBrowser:
 
     def wait_for_user(self, message: str) -> None:
         print(f"\n[LoreLoop] {message}")
-        input("[LoreLoop] press Enter when done... ")
+        previous = self._allow_writes
+        self._allow_writes = True
+        try:
+            input("[LoreLoop] press Enter when done... ")
+        finally:
+            self._allow_writes = previous
         self._settle()
 
+    def set_network_policy(self, base_url: str, *, allow_writes: bool = False) -> None:
+        require_http_url(base_url)
+        self._allowed_origin = base_url
+        self._allow_writes = allow_writes
+        self._blocked_requests.clear()
+
+    def consume_blocked_requests(self) -> list[dict[str, str]]:
+        blocked = list(self._blocked_requests)
+        self._blocked_requests.clear()
+        return blocked
+
+    def _route_request(self, route, request) -> None:
+        parsed = urlparse(request.url)
+        if parsed.scheme in {"data", "blob", "about"}:
+            route.continue_()
+            return
+        reason = None
+        if self._allowed_origin and not same_origin(request.url, self._allowed_origin):
+            reason = "cross-origin"
+        elif request.method.upper() not in {"GET", "HEAD", "OPTIONS"} and not self._allow_writes:
+            reason = "write-method"
+        if reason:
+            self._blocked_requests.append(
+                {"url": request.url, "method": request.method.upper(), "reason": reason}
+            )
+            route.abort("blockedbyclient")
+            return
+        route.continue_()
+
     def close(self) -> None:
+        self._context.close()
         self._browser.close()
         self._pw.stop()
 

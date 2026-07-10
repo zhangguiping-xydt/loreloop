@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a reproducible LoreLoop defect or security-boundary regression.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, private source code, or sensitive evidence artifacts.
+  - type: input
+    id: version
+    attributes:
+      label: LoreLoop version
+      placeholder: "0.1.0 or commit SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Linux, macOS, Windows]
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include commands, expected result, actual result, and sanitized output.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Sanitized `loreloop doctor` output
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed secrets, private source, and sensitive page content.
+          required: true
+        - label: I searched existing issues for the same problem.
+          required: true

@@ -10,23 +10,26 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .agents import CODEX_RUNNER, AgentError, AgentRunner
+from .agents import AgentError, AgentRunner, delegation_runner, inference_runner
 from .delegate.runner import DelegateRunner
 from .evidence.chain import ChainVerificationError, EvidenceChain
 from .federation.reader import ForeignEntry
 from .federation.registry import Project
-from .knowledge.code_reverse import reverse_code
+from .knowledge.code_reverse import dirty_source_files, reverse_code
 from .knowledge.endorsement import (
     SUPERSEDE_EVENT,
+    assert_trust_projection,
+    chain_contradicted_ids,
     chain_endorsed_strong_ids,
     chain_rejected_ids,
     chain_superseded_ids,
     curate,
+    record_reingested,
     unendorsed_strong_ids,
 )
 from .knowledge.model import Curation, Entry
 from .knowledge.store import KnowledgeStore
-from .paths import state_path, state_root
+from .paths import StatePathError, ensure_state_root, key_directory, state_path, state_root
 from .report.acceptance import RunTraceError, load_run, record_check, render_report
 
 # run ids are used to build filesystem paths; a strict shape rules out
@@ -113,13 +116,17 @@ def _workdir() -> Path:
 
 
 def _store(workdir: Path) -> KnowledgeStore:
+    ensure_state_root(workdir)
     db = state_path(workdir, "knowledge.db")
-    db.parent.mkdir(parents=True, exist_ok=True)
     return KnowledgeStore(db)
 
 
 def _agent(name: str) -> AgentRunner:
-    return CODEX_RUNNER if name == "codex" else AgentRunner()
+    return delegation_runner(name, _workdir())
+
+
+def _inference_agent(name: str) -> AgentRunner:
+    return inference_runner(name)
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -165,9 +172,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"detected coding agent(s): {', '.join(hosts)}")
 
     if args.skill is None:
-        answer = input(
-            f"install the loreloop companion skill for {', '.join(hosts)}? [Y/n] "
-        )
+        answer = input(f"install the loreloop companion skill for {', '.join(hosts)}? [Y/n] ")
         wanted = answer.strip().lower() in ("", "y", "yes")
     else:
         wanted = args.skill
@@ -200,24 +205,38 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     git = shutil.which("git")
     checks.append(("Git", "PASS" if git else "FAIL", git or "not found on PATH", bool(git)))
     agents = [name for name in ("claude", "codex") if shutil.which(name)]
-    checks.append((
-        "coding agent",
-        "PASS" if agents else "FAIL",
-        ", ".join(agents) if agents else "install claude or codex",
-        bool(agents),
-    ))
+    checks.append(
+        (
+            "coding agent",
+            "PASS" if agents else "FAIL",
+            ", ".join(agents) if agents else "install claude or codex",
+            bool(agents),
+        )
+    )
     writable, detail = _probe_writable_directory(workdir)
     checks.append(("project directory", "PASS" if writable else "FAIL", detail, writable))
-    key_dir = key_path_for(workdir).parent
-    key_writable, key_detail = _probe_writable_directory(key_dir, create=True)
-    checks.append((
-        "evidence key directory",
-        "PASS" if key_writable else "FAIL",
-        f"{key_dir} ({key_detail})",
-        key_writable,
-    ))
-    key_path = key_path_for(workdir)
-    if key_path.exists():
+    try:
+        key_path = key_path_for(workdir)
+    except StatePathError as exc:
+        key_path = None
+        key_dir = key_directory()
+        key_writable = False
+        key_detail = str(exc)
+    else:
+        key_dir = key_path.parent
+        key_writable, key_detail = _probe_writable_directory(key_dir, create=True)
+    checks.append(
+        (
+            "evidence key directory",
+            "PASS" if key_writable else "FAIL",
+            f"{key_dir} ({key_detail})",
+            key_writable,
+        )
+    )
+    if key_path is None:
+        key_ok = False
+        key_detail = "key path is unavailable until the directory boundary is fixed"
+    elif key_path.exists():
         try:
             key_size = len(key_path.read_bytes())
             key_ok = key_size == 32
@@ -231,9 +250,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks.append(("evidence key", "PASS" if key_ok else "FAIL", key_detail, key_ok))
     backend = lock_backend()
     lock_ok = backend != "unavailable"
-    checks.append((
-        "evidence lock", "PASS" if lock_ok else "FAIL", backend, lock_ok
-    ))
+    checks.append(("evidence lock", "PASS" if lock_ok else "FAIL", backend, lock_ok))
     try:
         import playwright  # noqa: F401
 
@@ -282,7 +299,14 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     workdir = _workdir()
     if args.source == "code":
         repo_name, repo = _resolve_ingest_repo(workdir, args.target)
-        entries = reverse_code(_agent(args.agent), repo, repo_name=repo_name)
+        dirty = dirty_source_files(repo)
+        if dirty:
+            raise CLIError(
+                "code source is not clean",
+                "uncommitted source files cannot be anchored to Git HEAD: " + ", ".join(dirty[:10]),
+                "commit or discard those source changes, then rerun `loreloop ingest`",
+            )
+        entries = reverse_code(_inference_agent(args.agent), repo, repo_name=repo_name)
     else:
         from .webexplore.browser import PlaywrightBrowser
         from .webexplore.explorer import Explorer
@@ -295,12 +319,17 @@ def cmd_ingest(args: argparse.Namespace) -> int:
                 browser, workdir, max_pages=args.max_pages, on_login_wall=on_login_wall
             )
             result = explorer.explore(args.target)
-            print(f"explored {len(result.pages)} pages "
-                  f"({len(result.skipped)} skipped), trace at {result.trace_path}",
-                  file=sys.stderr)
+            print(
+                f"explored {len(result.pages)} pages "
+                f"({len(result.skipped)} skipped), trace at {result.trace_path}",
+                file=sys.stderr,
+            )
             if result.login_walls and not args.headed:
-                print(f"skipped {len(result.login_walls)} login-walled page(s); "
-                      f"re-run with --headed to sign in yourself", file=sys.stderr)
+                print(
+                    f"skipped {len(result.login_walls)} login-walled page(s); "
+                    f"re-run with --headed to sign in yourself",
+                    file=sys.stderr,
+                )
             if result.login_resumed:
                 print(
                     f"resumed {len(result.login_resumed)} login handover(s) and continued "
@@ -310,17 +339,22 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             abandoned = len(result.login_walls) - len(result.login_resumed)
             if args.headed and abandoned:
                 print(
-                    f"could not resume {abandoned} login handover(s); inspect "
-                    f"{result.trace_path}",
+                    f"could not resume {abandoned} login handover(s); inspect {result.trace_path}",
                     file=sys.stderr,
                 )
-            entries = reverse_web(_agent(args.agent), result.pages)
+            entries = reverse_web(_inference_agent(args.agent), result.pages)
         finally:
             browser.close()
+    refreshed = 0
+    chain = EvidenceChain.for_workdir(workdir)
     with _store(workdir) as store:
         for entry in entries:
-            store.add(entry)
-    print(f"ingested {len(entries)} knowledge entries from {args.target}")
+            stored, was_refreshed = store.add_or_refresh(entry)
+            if was_refreshed:
+                record_reingested(chain, stored)
+                refreshed += 1
+    suffix = f" ({refreshed} source anchor(s) refreshed)" if refreshed else ""
+    print(f"ingested {len(entries)} knowledge entries from {args.target}{suffix}")
     return 0
 
 
@@ -341,8 +375,7 @@ def _resolve_ingest_repo(workdir: Path, target: str) -> tuple[str, Path]:
     if resolved == workdir.resolve():
         return ".", resolved
     raise RepoConfigError(
-        f"code source {resolved} is not a declared repository; "
-        "run `loreloop repo add <path>` first"
+        f"code source {resolved} is not a declared repository; run `loreloop repo add <path>` first"
     )
 
 
@@ -378,8 +411,10 @@ def cmd_repo(args: argparse.Namespace) -> int:
         rows = [(".", workdir.resolve()), *repos.items()]
         for name, repo in rows:
             reachable = repo.is_dir() and (repo / ".git").exists()
-            print(f"{name}\t{repo}\t{_git_head_short(repo) if reachable else '-'}\t"
-                  f"{'reachable' if reachable else 'unreachable'}")
+            print(
+                f"{name}\t{repo}\t{_git_head_short(repo) if reachable else '-'}\t"
+                f"{'reachable' if reachable else 'unreachable'}"
+            )
         return 0
     name = args.repo_name
     if name == ".":
@@ -395,8 +430,10 @@ def cmd_repo(args: argparse.Namespace) -> int:
                 count += repo_name == name
     repos.pop(name)
     save_repos(workdir, repos)
-    print(f"removed repository {name}; {count} anchored entr"
-          f"{'y' if count == 1 else 'ies'} will display as stale until it is declared again")
+    print(
+        f"removed repository {name}; {count} anchored entr"
+        f"{'y' if count == 1 else 'ies'} will display as stale until it is declared again"
+    )
     return 0
 
 
@@ -457,7 +494,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
         raise CLIError(
             "invalid expectation",
             str(exc),
-            "use `contains:<text>`, `not-contains:<text>`, or `llm:<claim>` and retry",
+            "use `contains:<text>`, `absent:<text>`, `title-contains:<text>`, "
+            "or a non-empty free-form claim",
         ) from exc
     except ActionScriptError as exc:
         raise CLIError(
@@ -473,13 +511,18 @@ def cmd_verify(args: argparse.Namespace) -> int:
     try:
         if script is None:
             result = verify_expectation(
-                browser, _agent(args.agent), chain, args.run_id, args.url, args.expectation,
+                browser,
+                _inference_agent(args.agent),
+                chain,
+                args.run_id,
+                args.url,
+                args.expectation,
                 artifacts=artifacts,
             )
         else:
             result = verify_script_expectation(
                 browser,
-                _agent(args.agent),
+                _inference_agent(args.agent),
                 chain,
                 args.run_id,
                 args.url,
@@ -493,8 +536,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     status = "PASS" if result.passed else "FAIL"
     print(f"{status}: {result.reason}")
     snapshot = result.snapshot[:16] if result.snapshot else "none"
-    print(f"evidence: chain hash {result.record.chain_hash[:16]}, "
-          f"page snapshot {snapshot}")
+    print(f"evidence: chain hash {result.record.chain_hash[:16]}, page snapshot {snapshot}")
     if not result.passed:
         print("Next: fix the observed behavior or expectation, then rerun this verification")
     return 0 if result.passed else 1
@@ -513,6 +555,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # chain-backed fact. Conversely, a chain-rejected or chain-superseded entry
     # stays retired even if SQLite is edited back to active.
     retired = chain_superseded_ids(records) | chain_rejected_ids(records)
+    assert_trust_projection(entries, records, retired_ids=retired)
     entries = [e for e in entries if e.id not in retired]
     # The DB sits in the agent-writable tree; its strong bits count only when
     # the chain endorses them FOR THE CURRENT CONTENT. Anything strong-in-DB
@@ -521,11 +564,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     endorsed = chain_endorsed_strong_ids(entries, records)
     unendorsed = unendorsed_strong_ids(entries, records)
     if unendorsed:
-        print(f"[LoreLoop] WARNING: {len(unendorsed)} entr{'y' if len(unendorsed) == 1 else 'ies'} "
-              f"claim strong trust in the store without evidence-chain endorsement "
-              f"of their current content — injected as reference only. "
-              f"Inspect with `loreloop knowledge list`:",
-              file=sys.stderr)
+        print(
+            f"[LoreLoop] WARNING: {len(unendorsed)} entr{'y' if len(unendorsed) == 1 else 'ies'} "
+            f"claim strong trust in the store without evidence-chain endorsement "
+            f"of their current content — injected as reference only. "
+            f"Inspect with `loreloop knowledge list`:",
+            file=sys.stderr,
+        )
         for e in entries:
             if e.id in unendorsed:
                 print(f"    {e.id[:8]}  {e.title}", file=sys.stderr)
@@ -536,13 +581,15 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         try:
             expansion = expand_query(
-                agent,
+                _inference_agent(args.agent),
                 args.task,
                 cache_path=state_path(workdir, "cache", "query-expansion.json"),
             )
         except (ExpansionError, AgentError) as exc:
-            print(f"[LoreLoop] query expansion failed ({exc}); retrieving with the "
-                  f"task text only", file=sys.stderr)
+            print(
+                f"[LoreLoop] query expansion failed ({exc}); retrieving with the task text only",
+                file=sys.stderr,
+            )
     runner = DelegateRunner(agent, workdir)
     related = (
         _select_related_entries(workdir, args.task, expansion, args.related_limit)
@@ -550,7 +597,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         else []
     )
     result = runner.run(
-        args.task, entries,
+        args.task,
+        entries,
         unendorsed_ids=unendorsed,
         endorsed_ids=endorsed,
         expansion=expansion,
@@ -558,10 +606,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     chain_only = [e for e in result.pack.strong if e.id in endorsed and not e.is_strong_evidence()]
     if chain_only:
-        print(f"[LoreLoop] note: {len(chain_only)} entr"
-              f"{'y is' if len(chain_only) == 1 else 'ies are'} chain-endorsed "
-              f"although the store cache says reference — injected as established fact.",
-              file=sys.stderr)
+        print(
+            f"[LoreLoop] note: {len(chain_only)} entr"
+            f"{'y is' if len(chain_only) == 1 else 'ies are'} chain-endorsed "
+            f"although the store cache says reference — injected as established fact.",
+            file=sys.stderr,
+        )
     # This chain record is the acceptance authority for the run: report and
     # harvest key off it, not off the agent-writable trace file.
     chain.append(
@@ -575,16 +625,22 @@ def cmd_run(args: argparse.Namespace) -> int:
         },
     )
     print(result.output)
-    print(f"\n[LoreLoop] run {result.run_id}: injected {len(result.pack.entry_ids)} entries, "
-          f"trace at {result.trace_path}", file=sys.stderr)
+    print(
+        f"\n[LoreLoop] run {result.run_id}: injected {len(result.pack.entry_ids)} entries, "
+        f"trace at {result.trace_path}",
+        file=sys.stderr,
+    )
     strong_web = [e for e in result.pack.strong if e.source.channel is Channel.WEB]
     if strong_web:
         # Known limitation, documented in SECURITY.md: injection trusts the
         # last verification; it does not re-open a browser per run.
-        print(f"[LoreLoop] note: {len(strong_web)} strong web entr"
-              f"{'y was' if len(strong_web) == 1 else 'ies were'} injected as-is; "
-              f"live pages may have changed since verification — "
-              f"re-check with `loreloop knowledge verify`", file=sys.stderr)
+        print(
+            f"[LoreLoop] note: {len(strong_web)} strong web entr"
+            f"{'y was' if len(strong_web) == 1 else 'ies were'} injected as-is; "
+            f"live pages may have changed since verification — "
+            f"re-check with `loreloop knowledge verify`",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -627,6 +683,16 @@ def _select_related_entries(
 
 
 def cmd_check(args: argparse.Namespace) -> int:
+    from .report.acceptance import validate_check_text
+
+    try:
+        args.check = validate_check_text(args.check)
+    except ValueError as exc:
+        raise CLIError(
+            "invalid acceptance check",
+            str(exc),
+            "provide a concise, non-empty assertion and retry",
+        ) from exc
     workdir = _workdir()
     chain = EvidenceChain.for_workdir(workdir)
     if args.command:
@@ -689,7 +755,8 @@ def cmd_report(args: argparse.Namespace) -> int:
     from .evidence.artifacts import ArtifactStore
 
     report = render_report(
-        load_run(trace), EvidenceChain.for_workdir(workdir),
+        load_run(trace),
+        EvidenceChain.for_workdir(workdir),
         artifacts=ArtifactStore.for_workdir(workdir),
     )
     print(report)
@@ -714,7 +781,7 @@ def cmd_harvest(args: argparse.Namespace) -> int:
     with _store(workdir) as store:
         try:
             result = harvest_run(
-                run, chain, store, _agent(args.agent), workdir, artifacts=artifacts
+                run, chain, store, _inference_agent(args.agent), workdir, artifacts=artifacts
             )
         except HarvestError as exc:
             raise CLIError(
@@ -727,28 +794,37 @@ def cmd_harvest(args: argparse.Namespace) -> int:
     print(f"  {len(result.minted)} verified acceptance assertions minted")
     print(f"  {len(result.reversed_entries)} draft entries reversed from changed code")
     if result.unauditable_checks:
-        print(f"  {len(result.unauditable_checks)} browser check(s) had no evidence "
-              f"artifact and were NOT minted:", file=sys.stderr)
+        print(
+            f"  {len(result.unauditable_checks)} browser check(s) had no evidence "
+            f"artifact and were NOT minted:",
+            file=sys.stderr,
+        )
         for check in result.unauditable_checks:
             print(f"    {check}", file=sys.stderr)
     if result.stale:
-        print(f"  {len(result.stale)} existing entries anchored before this run "
-              f"touch changed files — review with `loreloop knowledge list --stale`:")
+        print(
+            f"  {len(result.stale)} existing entries anchored before this run "
+            f"touch changed files — review with `loreloop knowledge list --stale`:"
+        )
         for entry in result.stale:
             print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})")
     if result.review:
-        print(f"  {len(result.review)} existing strong entries cover pages verified in "
-              f"this run — check they still hold, supersede if not:")
+        print(
+            f"  {len(result.review)} existing strong entries cover pages verified in "
+            f"this run — check they still hold, supersede if not:"
+        )
         for entry in result.review:
             print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})")
     if result.demoted:
-        print(f"  {len(result.demoted)} strong entr"
-              f"{'y was' if len(result.demoted) == 1 else 'ies were'} re-anchored and "
-              f"lost chain endorsement — they inject as reference until you "
-              f"re-approve (`loreloop knowledge approve`):", file=sys.stderr)
+        print(
+            f"  {len(result.demoted)} strong entr"
+            f"{'y was' if len(result.demoted) == 1 else 'ies were'} re-anchored and "
+            f"lost chain endorsement — they inject as reference until you "
+            f"re-approve (`loreloop knowledge approve`):",
+            file=sys.stderr,
+        )
         for entry in result.demoted:
-            print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})",
-                  file=sys.stderr)
+            print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})", file=sys.stderr)
     return 0
 
 
@@ -763,7 +839,7 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
             return _import_entry(args, store)
         elif args.action == "export":
             return _export_entries(args, workdir, store)
-        elif args.action in ("approve", "reject"):
+        elif args.action in ("approve", "reject", "reopen"):
             return _curate(args, workdir, store)
         elif args.action == "supersede":
             return _supersede(args, workdir, store)
@@ -804,8 +880,10 @@ def _knowledge_usage(workdir: Path, store: KnowledgeStore) -> int:
             f"{entry.id[:8]}  {injected[entry.id]:8d}  "
             f"{accepted.get(entry.id, 0):8d}  {entry.title}"
         )
-    print("\nAccepted means the run was later harvested after evidence-backed acceptance; "
-          "it is correlation, not proof that one entry caused success.")
+    print(
+        "\nAccepted means the run was later harvested after evidence-backed acceptance; "
+        "it is correlation, not proof that one entry caused success."
+    )
     return 0
 
 
@@ -839,7 +917,9 @@ def _search_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
         records = EvidenceChain.for_workdir(workdir).verify()
         local_entries = store.list()
         groups.append(
-            grade_local_entries(".", local_entries, records, _drifted_entries(workdir, local_entries))
+            grade_local_entries(
+                ".", local_entries, records, _drifted_entries(workdir, local_entries)
+            )
         )
     seen_paths: set[Path] = set()
     for project in selected:
@@ -865,9 +945,7 @@ def _search_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
             drifted_ids={item.entry.id for item in group if item.drifted_there},
             endorsed_ids={item.entry.id for item in group if item.strong_there},
         )
-        ranked.extend(
-            (item.adjusted_score, by_id[item.entry.id]) for item in group_ranked
-        )
+        ranked.extend((item.adjusted_score, by_id[item.entry.id]) for item in group_ranked)
     ranked.sort(key=lambda pair: (-pair[0], pair[1].project_id, pair[1].entry.id))
     for _, item in ranked[: args.limit]:
         print(
@@ -928,9 +1006,7 @@ def _import_entry(args: argparse.Namespace, store: KnowledgeStore) -> int:
     matches = [item for item in entries if item.entry.id.startswith(args.entry_id)]
     if len(matches) != 1:
         reason = "no entry matches" if not matches else f"{len(matches)} entries match"
-        raise RegistryError(
-            f"{reason} id prefix {args.entry_id!r} in project {project.project_id}"
-        )
+        raise RegistryError(f"{reason} id prefix {args.entry_id!r} in project {project.project_id}")
     foreign = matches[0]
     imported = store.add(
         Entry(
@@ -954,7 +1030,11 @@ def _curate(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> i
     target = _resolve_entry(store, args.entry_id)
     from .knowledge.store import InvalidTransition
 
-    new = Curation.APPROVED if args.action == "approve" else Curation.REJECTED
+    new = {
+        "approve": Curation.APPROVED,
+        "reject": Curation.REJECTED,
+        "reopen": Curation.DRAFT,
+    }[args.action]
     chain = EvidenceChain.for_workdir(workdir)
     try:
         entry = curate(store, chain, target.id, new, datetime.now(timezone.utc))
@@ -978,6 +1058,8 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
     records = EvidenceChain.for_workdir(workdir).verify()
     superseded = chain_superseded_ids(records)
     rejected = chain_rejected_ids(records)
+    contradicted = chain_contradicted_ids(records)
+    assert_trust_projection(entries, records, retired_ids=superseded | rejected)
     endorsed = chain_endorsed_strong_ids(entries, records)
     unendorsed = unendorsed_strong_ids(entries, records)
     drifted = _drifted_entries(workdir, entries)
@@ -987,7 +1069,7 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
             print("no stale entries: every code anchor matches the current tree")
             return 0
     for e in entries:
-        demoted = e.id in unendorsed or e.id in rejected
+        demoted = e.id in unendorsed or e.id in rejected or e.id in contradicted or e.id in drifted
         chain_backed = e.id in endorsed
         strong = "strong" if (e.is_strong_evidence() or chain_backed) and not demoted else "ref"
         flags = ""
@@ -997,6 +1079,8 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
             flags += "  [chain-backed: store cache says reference]"
         if e.id in rejected:
             flags += "  [rejected]"
+        if e.id in contradicted:
+            flags += "  [contradicted]"
         if e.id in superseded:
             flags += "  [superseded]"
         if e.id in drifted:
@@ -1010,6 +1094,8 @@ def _export_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
     records = EvidenceChain.for_workdir(workdir).verify()
     superseded = chain_superseded_ids(records)
     rejected = chain_rejected_ids(records)
+    contradicted = chain_contradicted_ids(records)
+    assert_trust_projection(entries, records, retired_ids=superseded | rejected)
     endorsed = chain_endorsed_strong_ids(entries, records)
     unendorsed = unendorsed_strong_ids(entries, records)
     drifted = _drifted_entries(workdir, entries)
@@ -1026,14 +1112,25 @@ def _export_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
     if not entries:
         lines.append("_No entries._")
     for entry in entries:
-        demoted = entry.id in unendorsed or entry.id in rejected
+        demoted = (
+            entry.id in unendorsed
+            or entry.id in rejected
+            or entry.id in contradicted
+            or entry.id in drifted
+        )
         chain_backed = entry.id in endorsed
-        strength = "strong" if (entry.is_strong_evidence() or chain_backed) and not demoted else "reference"
+        strength = (
+            "strong"
+            if (entry.is_strong_evidence() or chain_backed) and not demoted
+            else "reference"
+        )
         flags = []
         if entry.id in unendorsed:
             flags.append("unendorsed")
         if entry.id in rejected:
             flags.append("rejected")
+        if entry.id in contradicted:
+            flags.append("contradicted")
         if entry.id in superseded:
             flags.append("superseded")
         if entry.id in drifted:
@@ -1084,9 +1181,7 @@ def _supersede(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -
     old = _resolve_entry(store, args.old_entry_id)
     # Supersession silences an entry at injection time — a trust-affecting
     # act, so it is endorsed on the chain like curation. Chain first.
-    EvidenceChain.for_workdir(workdir).append(
-        SUPERSEDE_EVENT, {"new_id": new.id, "old_id": old.id}
-    )
+    EvidenceChain.for_workdir(workdir).append(SUPERSEDE_EVENT, {"new_id": new.id, "old_id": old.id})
     store.add_link(Link(from_id=new.id, to_id=old.id, link_type=LinkType.SUPERSEDES))
     print(f"superseded: {old.title}  ({old.id[:8]})")
     print(f"        by: {new.title}  ({new.id[:8]})")
@@ -1125,7 +1220,7 @@ def _verify_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
     chain = EvidenceChain.for_workdir(workdir)
     artifacts = ArtifactStore.for_workdir(workdir)
     run_id = f"verify-{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
-    agent = _agent(args.agent)
+    agent = _inference_agent(args.agent)
     browser = PlaywrightBrowser(headed=args.headed)
     contradicted = 0
     try:
@@ -1148,8 +1243,10 @@ def _verify_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
                 contradicted += 1
     finally:
         browser.close()
-    print(f"\n{len(web_entries) - contradicted} verified, {contradicted} contradicted "
-          f"(evidence run {run_id})")
+    print(
+        f"\n{len(web_entries) - contradicted} verified, {contradicted} contradicted "
+        f"(evidence run {run_id})"
+    )
     return 0 if contradicted == 0 else 1
 
 
@@ -1174,10 +1271,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_init = sub.add_parser("init", help="set up LoreLoop in this project")
     skill_group = p_init.add_mutually_exclusive_group()
-    skill_group.add_argument("--skill", dest="skill", action="store_true", default=None,
-                             help="install the companion skill without asking")
-    skill_group.add_argument("--no-skill", dest="skill", action="store_false",
-                             help="skip companion skill installation")
+    skill_group.add_argument(
+        "--skill",
+        dest="skill",
+        action="store_true",
+        default=None,
+        help="install the companion skill without asking",
+    )
+    skill_group.add_argument(
+        "--no-skill", dest="skill", action="store_false", help="skip companion skill installation"
+    )
     p_init.set_defaults(func=cmd_init)
 
     p_demo = sub.add_parser("demo", help="run the bundled five-minute knowledge loop")
@@ -1190,8 +1293,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--from", dest="source", choices=["code", "web"], required=True)
     p_ingest.add_argument("target")
     p_ingest.add_argument("--max-pages", type=int, default=20)
-    p_ingest.add_argument("--headed", action="store_true",
-                          help="show the browser window (needed for login handover)")
+    p_ingest.add_argument(
+        "--headed", action="store_true", help="show the browser window (needed for login handover)"
+    )
     _add_agent_option(p_ingest)
     p_ingest.set_defaults(func=cmd_ingest)
 
@@ -1240,8 +1344,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", help="delegate a task with injected knowledge")
     p_run.add_argument("task")
-    p_run.add_argument("--no-expand", action="store_true",
-                       help="skip LLM query expansion; retrieve with the task text only")
+    p_run.add_argument(
+        "--no-expand",
+        action="store_true",
+        help="skip LLM query expansion; retrieve with the task text only",
+    )
     p_run.add_argument("--with-related", action="store_true")
     p_run.add_argument("--related-limit", type=int, default=5)
     _add_agent_option(p_run)
@@ -1265,9 +1372,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("run_id", nargs="?")
     p_report.set_defaults(func=cmd_report)
 
-    p_harvest = sub.add_parser(
-        "harvest", help="flow knowledge back from an accepted run"
-    )
+    p_harvest = sub.add_parser("harvest", help="flow knowledge back from an accepted run")
     p_harvest.add_argument("run_id")
     _add_agent_option(p_harvest)
     p_harvest.set_defaults(func=cmd_harvest)
@@ -1313,6 +1418,7 @@ def build_parser() -> argparse.ArgumentParser:
     for action, help_text in (
         ("approve", "approve one draft entry and endorse its content"),
         ("reject", "reject one entry and retire it from injection"),
+        ("reopen", "return a rejected entry to draft for renewed review"),
     ):
         p_curate = knowledge_sub.add_parser(action, help=help_text)
         p_curate.add_argument("entry_id", metavar="ENTRY_ID")
@@ -1345,11 +1451,13 @@ def main(argv: list[str] | None = None) -> int:
     import sqlite3
     import subprocess
 
-    from .evidence.chain import KeyMaterialError, LegacyKeyError
+    from .evidence.chain import KeyMaterialError, LegacyKeyError, OperatorBoundaryError
     from .federation.registry import RegistryError
     from .knowledge.repos import RepoConfigError
     from .knowledge.code_reverse import ExtractionError
+    from .knowledge.endorsement import TrustProjectionError
     from .knowledge.store import SchemaVersionError
+    from .paths import StatePathError
     from .webexplore.browser import BrowserError, BrowserUnavailable
 
     try:
@@ -1372,13 +1480,16 @@ def main(argv: list[str] | None = None) -> int:
         ChainVerificationError,
         LegacyKeyError,
         KeyMaterialError,
+        OperatorBoundaryError,
         RegistryError,
         RepoConfigError,
         SchemaVersionError,
+        StatePathError,
         RunTraceError,
         InitializationError,
         AgentError,
         ExtractionError,
+        TrustProjectionError,
         BrowserError,
         BrowserUnavailable,
         sqlite3.Error,

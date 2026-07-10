@@ -30,6 +30,7 @@ from pathlib import Path
 from ..agents import AgentRunner
 from ..evidence.artifacts import ArtifactStore
 from ..evidence.chain import EvidenceChain, EvidenceRecord
+from ..evidence.repository_state import repository_states_match
 from ..report.acceptance import RunSummary, evaluate_run
 from .code_reverse import changed_files, changed_paths, dirty_source_files, repo_head, reverse_code
 from .endorsement import chain_superseded_ids, entry_digest, unendorsed_strong_ids
@@ -75,6 +76,15 @@ def harvest_run(
         raise HarvestError(
             f"run {run.run_id} is not ACCEPTED; only accepted runs feed the knowledge base"
         )
+    for check in evaluation.passed:
+        if check.payload.get("judge") != "command":
+            continue
+        matches, reason = repository_states_match(check.payload.get("repository_states"), workdir)
+        if not matches:
+            raise HarvestError(
+                f"command evidence for {check.payload.get('check')!r} is stale: {reason}; "
+                "rerun the command check against the current repository state"
+            )
     prior = next(
         (
             record
@@ -95,7 +105,9 @@ def harvest_run(
         try:
             repo = resolve_repo(workdir, name)
         except RepoConfigError as exc:
-            raise HarvestError(f"repository {name!r} from the run cannot be resolved: {exc}") from exc
+            raise HarvestError(
+                f"repository {name!r} from the run cannot be resolved: {exc}"
+            ) from exc
         if not repo.is_dir() or not (repo / ".git").exists():
             raise HarvestError(f"repository {name!r} from the run is not a git root: {repo}")
         repos[name] = repo
@@ -222,8 +234,7 @@ def _resume_harvest(
         raise HarvestError("recorded harvest recovery data does not match its signed digests")
 
     complete = all(
-        (stored := store.get(entry.id)) is not None
-        and entry_digest(stored) == expected[entry.id]
+        (stored := store.get(entry.id)) is not None and entry_digest(stored) == expected[entry.id]
         for entry in minted
     )
     if complete:
@@ -315,11 +326,7 @@ def _demoted_by_reanchor(
     no chain endorsement — the price of not letting LLM re-extraction move
     endorsements. ``records`` predate this harvest's own event, which is
     correct: that event grants no endorsement anyway."""
-    return [
-        e
-        for e in reversed_entries
-        if e.id in unendorsed_strong_ids(reversed_entries, records)
-    ]
+    return [e for e in reversed_entries if e.id in unendorsed_strong_ids(reversed_entries, records)]
 
 
 def _review_candidates(
@@ -420,9 +427,7 @@ def _persist_minted(store: KnowledgeStore, entry: Entry, run_id: str, now: datet
     )
 
 
-def _store_reanchored(
-    store: KnowledgeStore, entry: Entry, head: str, now: datetime
-) -> Entry:
+def _store_reanchored(store: KnowledgeStore, entry: Entry, head: str, now: datetime) -> Entry:
     """Store a re-reversed entry. If the identical claim already exists for
     the same file, re-anchor the existing entry to head instead of inserting:
     the claim was just re-derived verbatim from the current source, so leaving

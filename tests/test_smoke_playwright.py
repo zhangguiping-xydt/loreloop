@@ -7,7 +7,7 @@ the deterministic verify path — no LLM anywhere, so the test is hermetic.
 
 import threading
 from functools import partial
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlsplit
 
 import pytest
@@ -16,7 +16,7 @@ pytest.importorskip("playwright")
 
 from loreloop.evidence.artifacts import ArtifactStore  # noqa: E402
 from loreloop.evidence.chain import EvidenceChain  # noqa: E402
-from loreloop.webexplore.actions import parse_action_script  # noqa: E402
+from loreloop.webexplore.actions import execute_action_script, parse_action_script  # noqa: E402
 from loreloop.webexplore.browser import PlaywrightBrowser  # noqa: E402
 from loreloop.webexplore.verify import verify_expectation, verify_script_expectation  # noqa: E402
 
@@ -56,6 +56,38 @@ def browser():
     b.close()
 
 
+@pytest.fixture()
+def write_site():
+    posted = threading.Event()
+    page = b"""<!doctype html><html><body>
+    <button onclick="fetch('/write', {method: 'POST', body: 'x'})">Save</button>
+    </body></html>"""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+
+        def do_POST(self):  # noqa: N802
+            posted.set()
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}", posted
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=2)
+
+
 def test_observe_captures_title_text_forms_links(site, browser):
     obs = browser.observe(site)
     assert obs.title == "Upload Console"
@@ -82,7 +114,12 @@ def test_deterministic_verify_against_real_page(site, browser, tmp_path):
     artifacts = ArtifactStore.for_workdir(workdir)
 
     ok = verify_expectation(
-        browser, NoLLM(), chain, "run-smoke", site, "contains:Maximum file size is 50MB",
+        browser,
+        NoLLM(),
+        chain,
+        "run-smoke",
+        site,
+        "contains:Maximum file size is 50MB",
         artifacts=artifacts,
     )
     assert ok.passed
@@ -91,7 +128,12 @@ def test_deterministic_verify_against_real_page(site, browser, tmp_path):
     assert "Maximum file size" in loaded["text"]
 
     bad = verify_expectation(
-        browser, NoLLM(), chain, "run-smoke", site, "contains:no such text on page",
+        browser,
+        NoLLM(),
+        chain,
+        "run-smoke",
+        site,
+        "contains:no such text on page",
         artifacts=artifacts,
     )
     assert not bad.passed
@@ -118,11 +160,43 @@ def test_script_verify_against_real_page(site, browser, tmp_path):
     )
 
     result = verify_script_expectation(
-        browser, NoLLM(), chain, "run-smoke", base,
-        script, "contains:Filtered results: 1 item", artifacts=artifacts,
+        browser,
+        NoLLM(),
+        chain,
+        "run-smoke",
+        base,
+        script,
+        "contains:Filtered results: 1 item",
+        artifacts=artifacts,
     )
 
     assert result.passed
     rec = chain.verify()[0]
     assert rec.payload["script_digest"] == script.digest
     assert artifacts.load(rec.payload["trace_artifact"])["status"] == "completed"
+
+
+def test_real_browser_blocks_javascript_post_without_allow_writes(write_site, browser):
+    base, posted = write_site
+    script = parse_action_script(
+        {
+            "version": 1,
+            "base": base,
+            "steps": [
+                {"goto": "/"},
+                {"click": {"text": "Save", "role": "button"}},
+            ],
+        }
+    )
+
+    blocked = execute_action_script(browser, script, allow_writes=False)
+
+    assert blocked.status == "blocked"
+    assert "blocked POST request (write-method)" in blocked.reason
+    assert blocked.allow_writes is False
+    assert not posted.is_set()
+
+    allowed = execute_action_script(browser, script, allow_writes=True)
+    assert allowed.succeeded
+    assert allowed.allow_writes is True
+    assert posted.wait(2)

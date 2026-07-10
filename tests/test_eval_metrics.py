@@ -79,19 +79,23 @@ def test_reverse_metrics_surface_prompt_injection_hallucinations() -> None:
 
 def test_reverse_metrics_use_evidence_spans_across_output_languages() -> None:
     result = evaluate_reverse_predictions(
-        [{
-            "id": "auth",
-            "source": "auth.py",
-            "line_start": 9,
-            "line_end": 11,
-            "match_all": [["authenticated"]],
-            "allow_evidence_match": True,
-        }],
-        [{
-            "content": "上传操作要求用户已认证。",
-            "source": "auth.py@abc123",
-            "evidence": {"line_start": 9, "line_end": 11},
-        }],
+        [
+            {
+                "id": "auth",
+                "source": "auth.py",
+                "line_start": 9,
+                "line_end": 11,
+                "match_all": [["authenticated"]],
+                "allow_evidence_match": True,
+            }
+        ],
+        [
+            {
+                "content": "上传操作要求用户已认证。",
+                "source": "auth.py@abc123",
+                "evidence": {"line_start": 9, "line_end": 11},
+            }
+        ],
     )
 
     assert result["precision"] == 1.0

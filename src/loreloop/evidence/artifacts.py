@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from pathlib import Path
 
 from ..webexplore.browser import Observation
-from ..paths import state_path
+from ..paths import (
+    ensure_private_directory,
+    ensure_state_root,
+    reject_symlink,
+    secure_atomic_write_text,
+)
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -25,12 +29,13 @@ class ArtifactStore:
         self._root = root
         # Observations may capture post-login page content: owner-only, like
         # the evidence signing key.
-        self._root.mkdir(parents=True, exist_ok=True)
-        os.chmod(self._root, 0o700)
+        ensure_private_directory(self._root)
 
     @classmethod
     def for_workdir(cls, workdir: Path) -> "ArtifactStore":
-        return cls(state_path(workdir, "evidence", "artifacts"))
+        state = ensure_state_root(workdir)
+        evidence = ensure_private_directory(state / "evidence")
+        return cls(evidence / "artifacts")
 
     def save_observation(self, obs: Observation) -> tuple[str, Path]:
         payload = {
@@ -53,13 +58,13 @@ class ArtifactStore:
         data = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         sha = hashlib.sha256(data.encode()).hexdigest()
         path = self._root / f"{sha}.json"
+        reject_symlink(path, label="evidence artifact")
         if not path.exists():
             # Write-then-rename: a reader (or a crash) must never see a
             # half-written artifact under its final content-addressed name.
-            tmp = path.with_suffix(f".{os.getpid()}.tmp")
-            tmp.write_text(data, encoding="utf-8")
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, path)
+            secure_atomic_write_text(path, data)
+        else:
+            path.chmod(0o600)
         return sha, path
 
     def load(self, sha: str) -> dict:
@@ -68,6 +73,7 @@ class ArtifactStore:
         if not _SHA256.match(sha):
             raise ValueError(f"invalid artifact reference: {sha!r}")
         path = self._root / f"{sha}.json"
+        reject_symlink(path, label="evidence artifact")
         data = path.read_text(encoding="utf-8")
         actual = hashlib.sha256(data.encode()).hexdigest()
         if actual != sha:

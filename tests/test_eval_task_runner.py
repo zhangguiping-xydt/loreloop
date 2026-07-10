@@ -71,3 +71,18 @@ def test_task_result_redaction_removes_environment_secrets() -> None:
     assert "hunter2" not in redacted
     assert "OPENAI_API_KEY=<redacted>" in redacted
     assert "normal output" in redacted
+
+
+def test_task_runner_does_not_pass_operator_key_locations_to_agent(tmp_path, monkeypatch) -> None:
+    agent = tmp_path / "print_env.py"
+    agent.write_text(
+        "import os\nprint(os.environ.get('LORELOOP_KEY_DIR', '<missing>'))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LORELOOP_KEY_DIR", "/operator/private/keys")
+    monkeypatch.setitem(task_runner.AGENT_COMMANDS, "codex", (sys.executable, str(agent)))
+    spec = json.loads((task_runner.TASK_ROOT / "tasks.json").read_text(encoding="utf-8"))[0]
+
+    result = task_runner.run_task(spec, agent="codex", variant="no_memory", timeout=30)
+
+    assert result["agent_stdout"] == "<missing>\n"

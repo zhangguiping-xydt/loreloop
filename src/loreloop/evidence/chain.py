@@ -26,7 +26,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..paths import key_directory, state_root
+from ..paths import (
+    chmod_fd,
+    ensure_private_directory,
+    ensure_state_root,
+    reject_symlink,
+    require_key_directory_outside,
+    secure_atomic_write_text,
+    state_root,
+)
 
 try:  # POSIX
     import fcntl as _fcntl
@@ -54,6 +62,10 @@ class FederatedTrustUnavailable(Exception):
 
 class KeyMaterialError(Exception):
     pass
+
+
+class OperatorBoundaryError(Exception):
+    """A model subprocess attempted to use an operator signing capability."""
 
 
 class LegacyKeyError(Exception):
@@ -91,6 +103,7 @@ class EvidenceRecord:
 
 class EvidenceChain:
     def __init__(self, chain_path: Path, key_path: Path) -> None:
+        reject_symlink(chain_path, label="evidence chain")
         self._path = chain_path
         self._key = _load_or_create_key(key_path)
         # Head commitment lives NEXT TO THE KEY, outside the agent-writable
@@ -99,11 +112,11 @@ class EvidenceChain:
         # (index, chain_hash) outside the tree closes that hole — deleting the
         # trailing check_failed record now breaks verification.
         self._head_path = key_path.with_suffix(".head")
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(self._path.parent)
 
     @classmethod
     def for_workdir(cls, workdir: Path) -> "EvidenceChain":
-        base = state_root(workdir)
+        base = ensure_state_root(workdir)
         expected = key_path_for(workdir)
         legacy = base / "evidence.key"
         if legacy.exists() and not expected.exists():
@@ -129,6 +142,10 @@ class EvidenceChain:
         return chain._verify_records(chain._read())
 
     def append(self, event: str, payload: dict[str, Any]) -> EvidenceRecord:
+        if os.environ.get("LORELOOP_AGENT_PROCESS") == "1":
+            raise OperatorBoundaryError(
+                "agent subprocesses cannot append operator evidence or trust events"
+            )
         # Cross-process exclusive lock: read-then-append without it lets two
         # writers mint the same index and fork the chain.
         lock_path = self._path.with_suffix(".lock")
@@ -152,7 +169,11 @@ class EvidenceChain:
                 chain_hash=chain_hash,
                 signature=self._sign(chain_hash),
             )
-            with self._path.open("a", encoding="utf-8") as fh:
+            reject_symlink(self._path, label="evidence chain")
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(self._path, flags, 0o600)
+            chmod_fd(fd, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record.__dict__, ensure_ascii=False, sort_keys=True) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
@@ -205,12 +226,7 @@ class EvidenceChain:
         # the head commitment pointing at an older record, or the window
         # becomes a licensed truncation.
         head = {"index": record.index, "chain_hash": record.chain_hash}
-        tmp = self._head_path.with_suffix(".head.tmp")
-        with tmp.open("w", encoding="utf-8") as fh:
-            fh.write(json.dumps(head))
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, self._head_path)
+        secure_atomic_write_text(self._head_path, json.dumps(head))
         _fsync_directory(self._head_path.parent)
 
     def _check_head(self, records: list[EvidenceRecord]) -> None:
@@ -237,6 +253,7 @@ class EvidenceChain:
     def _read(self) -> list[EvidenceRecord]:
         if not self._path.exists():
             return []
+        reject_symlink(self._path, label="evidence chain")
         records = []
         for line_no, line in enumerate(
             self._path.read_text(encoding="utf-8").splitlines(), start=1
@@ -263,6 +280,7 @@ class EvidenceChain:
         return records
 
     def _read_head(self) -> dict[str, Any]:
+        reject_symlink(self._head_path, label="evidence head")
         try:
             head = json.loads(self._head_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -294,22 +312,31 @@ def _chain_hash(prev_hash: str, index: int, ts: str, event: str, payload: dict[s
 def key_path_for(workdir: Path) -> Path:
     """Per-project key file under the key dir, named by a hash of the
     project's absolute path so unrelated projects never share a key."""
-    key_dir = key_directory()
+    key_dir = require_key_directory_outside(workdir)
     digest = hashlib.sha256(str(workdir.resolve()).encode()).hexdigest()[:16]
     return key_dir / f"{digest}.key"
 
 
 def _load_or_create_key(key_path: Path) -> bytes:
+    reject_symlink(key_path, label="evidence key")
     if key_path.exists():
-        key = key_path.read_bytes()
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(key_path, flags)
+        try:
+            chmod_fd(fd, 0o600)
+            with os.fdopen(fd, "rb") as fh:
+                fd = -1
+                key = fh.read()
+        finally:
+            if fd >= 0:
+                os.close(fd)
         if len(key) != 32:
             raise KeyMaterialError(
                 f"evidence key {key_path} has {len(key)} bytes; expected exactly 32. "
                 "Restore the matching key backup or archive the old chain and start fresh."
             )
         return key
-    key_path.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(key_path.parent, 0o700)
+    ensure_private_directory(key_path.parent)
     key = secrets.token_bytes(32)
     try:
         fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -336,8 +363,12 @@ def lock_backend() -> str:
 
 @contextmanager
 def _exclusive_lock(path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+b") as lock:
+    ensure_private_directory(path.parent)
+    reject_symlink(path, label="evidence lock")
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    chmod_fd(fd, 0o600)
+    with os.fdopen(fd, "a+b") as lock:
         if _fcntl is not None:
             _fcntl.flock(lock.fileno(), _fcntl.LOCK_EX)
             try:

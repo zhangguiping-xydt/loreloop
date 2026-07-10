@@ -6,6 +6,7 @@ from loreloop.evidence.chain import (
     ChainVerificationError,
     EvidenceChain,
     LegacyKeyError,
+    OperatorBoundaryError,
     key_path_for,
 )
 
@@ -25,6 +26,15 @@ def test_append_and_verify_roundtrip(chain):
 
 
 def test_empty_chain_verifies(chain):
+    assert chain.verify() == []
+
+
+def test_agent_process_marker_refuses_operator_signing(chain, monkeypatch):
+    monkeypatch.setenv("LORELOOP_AGENT_PROCESS", "1")
+
+    with pytest.raises(OperatorBoundaryError, match="cannot append operator evidence"):
+        chain.append("check_passed", {"check": "forged by delegated process"})
+
     assert chain.verify() == []
 
 
@@ -200,7 +210,8 @@ def test_verify_heals_missing_head_commitment(chain, tmp_path):
 
     assert len(chain.verify()) == 1
     assert json.loads(head_path.read_text()) == {
-        "index": rec.index, "chain_hash": rec.chain_hash,
+        "index": rec.index,
+        "chain_hash": rec.chain_hash,
     }
 
 
@@ -215,7 +226,8 @@ def test_verify_heals_lagging_head_and_rearms_truncation_detection(chain, tmp_pa
 
     chain.verify()
     assert json.loads(head_path.read_text()) == {
-        "index": latest.index, "chain_hash": latest.chain_hash,
+        "index": latest.index,
+        "chain_hash": latest.chain_hash,
     }
     _rewrite(tmp_path, lambda ls: ls.pop())
     with pytest.raises(ChainVerificationError, match="truncated"):

@@ -6,11 +6,14 @@ contributions are the most useful kind right now.
 ## Setup
 
 ```bash
-git clone https://github.com/loreloop-ai/loreloop
+git clone https://github.com/zhangguiping-xydt/loreloop
 cd loreloop
-python -m venv .venv && source .venv/bin/activate
-pip install -e '.[dev]'          # add ,web for playwright-backed features
-pytest -q && ruff check .
+uv sync --frozen --all-extras
+uv run --frozen playwright install chromium
+uv run --frozen ruff format --check .
+uv run --frozen ruff check .
+uv run --frozen pytest --cov=loreloop --cov-fail-under=80
+uv run --frozen python eval/validate_results.py --check-thresholds
 ```
 
 The suite is hermetic: no network, no real LLM calls (agents are faked), no
@@ -46,6 +49,12 @@ will be declined:
 7. **Curation stays human.** LoreLoop lists, flags and links — it never
    auto-approves, auto-supersedes, or lets a model decide what a curator
    should.
+8. **Agent capability profiles are explicit.** Inference must remain isolated
+   and tool-free/read-only; delegation must remain non-bypass. The child marker
+   is cooperative defense in depth, not a claim of OS-level isolation.
+9. **Local-first is not local inference.** Changes that send additional source,
+   page, or evidence data to Claude/Codex must be documented as provider data
+   exposure and minimized where practical.
 
 ## Architecture: one engine, shells around it
 
@@ -82,6 +91,9 @@ cannot execute shell commands needs to integrate.
 ## Pull requests
 
 - Keep PRs single-purpose; tests for every behavior change.
-- `pytest -q` and `ruff check .` must pass.
+- Formatting, Ruff, full tests/coverage, Bandit, dependency audit, package
+  checks, and deterministic evaluation thresholds must pass.
 - Explain the *why* in the PR description, especially when touching the
   trust model or the evidence chain.
+- Do not commit credentials, private repositories, model transcripts, or
+  unredacted `.loreloop/evidence/` artifacts.

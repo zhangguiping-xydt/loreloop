@@ -1,117 +1,189 @@
 {
-  "date": "2026-07-10",
-  "status": "small public baseline; not an industry-wide benchmark",
-  "reverse": {
-    "dataset": "eval/datasets/reverse_truth.json",
-    "truths": 14,
-    "codex": {
-      "predictions": 14,
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1": 1.0,
-      "forbidden_hits": []
+  "coding_task_four_way": {
+    "agent": "claude",
+    "codebase_index": {
+      "passed": 0,
+      "runs": 3,
+      "success_rate": 0.0
     },
+    "loreloop": {
+      "passed": 3,
+      "runs": 3,
+      "success_rate": 1.0
+    },
+    "no_memory": {
+      "passed": 0,
+      "runs": 3,
+      "success_rate": 0.0
+    },
+    "runs_per_variant": 3,
+    "session_memory": {
+      "passed": 3,
+      "runs": 3,
+      "success_rate": 1.0
+    }
+  },
+  "date": "2026-07-10",
+  "omitted_claims": [
+    "No Codex coding-task comparison is summarized because no raw Codex task result file is checked in.",
+    "No human completion claim is made until real participant session files exist."
+  ],
+  "retrieval": {
+    "dataset": "eval/datasets/retrieval.json",
+    "expanded": {
+      "hit_rate_at_k": 1.0,
+      "k": 5,
+      "mean_returned": 1.6666666666666667,
+      "mrr": 1.0,
+      "precision_at_k": 0.19999999999999998,
+      "precision_over_returned": 0.6,
+      "queries": 6,
+      "recall_at_k": 1.0,
+      "relevant_retrieved": 6,
+      "retrieved": 10
+    },
+    "k": 5,
+    "plain": {
+      "hit_rate_at_k": 0.5,
+      "k": 5,
+      "mean_returned": 0.8333333333333334,
+      "mrr": 0.4166666666666667,
+      "precision_at_k": 0.10000000000000002,
+      "precision_over_returned": 0.6,
+      "queries": 6,
+      "recall_at_k": 0.5,
+      "relevant_retrieved": 3,
+      "retrieved": 5
+    },
+    "queries": 6
+  },
+  "reverse": {
     "claude": {
-      "predictions": 10,
-      "precision": 1.0,
-      "recall": 0.7142857142857143,
       "f1": 0.8333333333333333,
+      "false_negatives": 4,
+      "false_positives": 0,
       "forbidden_hits": [],
+      "matched_truth_ids": [
+        "authentication",
+        "case-insensitive-extension",
+        "file-types",
+        "owner-binding",
+        "rate-policy",
+        "rate-response",
+        "size-boundary",
+        "size-limit",
+        "success-response",
+        "uploader-role"
+      ],
       "missed_truth_ids": [
         "oversize-not-persisted",
         "rate-scope",
         "size-response",
         "type-response"
       ],
-      "note": "Three misses are atomicity penalties: one compound prediction covered two truths but receives credit for only one."
-    }
-  },
-  "retrieval": {
-    "dataset": "eval/datasets/retrieval.json",
-    "queries": 6,
-    "k": 5,
-    "plain": {
-      "hit_rate_at_k": 0.5,
-      "precision_at_k": 0.1,
-      "recall_at_k": 0.5,
-      "mrr": 0.4166666666666667,
-      "retrieved": 5,
-      "relevant_retrieved": 3,
-      "precision_over_returned": 0.6
+      "precision": 1.0,
+      "predictions": 10,
+      "recall": 0.7142857142857143,
+      "true_positives": 10,
+      "truths": 14
     },
-    "expanded": {
-      "hit_rate_at_k": 1.0,
-      "precision_at_k": 0.2,
-      "recall_at_k": 1.0,
-      "mrr": 1.0,
-      "retrieved": 10,
-      "relevant_retrieved": 6,
-      "precision_over_returned": 0.6
-    }
+    "codex": {
+      "f1": 1.0,
+      "false_negatives": 0,
+      "false_positives": 0,
+      "forbidden_hits": [],
+      "matched_truth_ids": [
+        "authentication",
+        "case-insensitive-extension",
+        "file-types",
+        "oversize-not-persisted",
+        "owner-binding",
+        "rate-policy",
+        "rate-response",
+        "rate-scope",
+        "size-boundary",
+        "size-limit",
+        "size-response",
+        "success-response",
+        "type-response",
+        "uploader-role"
+      ],
+      "missed_truth_ids": [],
+      "precision": 1.0,
+      "predictions": 14,
+      "recall": 1.0,
+      "true_positives": 14,
+      "truths": 14
+    },
+    "dataset": "eval/datasets/reverse_truth.json",
+    "truths": 14
   },
   "reverse_matrix": {
-    "agent": "Claude CLI",
+    "agent": "claude",
     "dataset": "eval/datasets/reverse_matrix/matrix.json",
-    "repositories": ["Python", "TypeScript", "Python + TypeScript"],
-    "truths": 10,
-    "predictions": 11,
-    "precision": 0.8181818181818182,
-    "recall": 0.9,
-    "f1": 0.8571428571428572,
     "duration_seconds": 133.848,
+    "f1": 0.8571428571428572,
+    "failed_cases": 0,
     "input_tokens_estimated": 5398,
     "output_tokens_estimated": 1829,
-    "note": "A single strict repair retry converted two initial excerpt-validation batch failures into valid, source-matching evidence. Token counts are characters/4 estimates."
+    "precision": 0.8181818181818182,
+    "predictions": 11,
+    "recall": 0.9,
+    "true_positives": 9,
+    "truths": 10
   },
   "scale": {
-    "dataset": "deterministic synthetic scale fixture across 5 logical projects",
-    "host": "Linux x86_64, Python 3.11.10",
-    "retrieval_10000": {
-      "median_latency_ms": 416.855,
-      "p95_latency_ms": 658.693,
-      "precision_at_5": 0.2,
-      "recall_at_5": 1.0,
-      "mrr": 1.0,
-      "prompt_tokens_estimated_median": 314
-    },
+    "dataset": "deterministic synthetic scale fixture; not a relevance-diversity benchmark",
     "evidence_10000": {
-      "verify_median_latency_ms": 237.504,
-      "no_change_harvest_median_latency_ms": 800.489
+      "no_change_harvest_latency_ms": {
+        "max": 909.141,
+        "median": 800.489
+      },
+      "note": "harvest includes chain verification, acceptance evaluation, and final append",
+      "records": 10000,
+      "verify_latency_ms": {
+        "max": 310.432,
+        "median": 237.504
+      }
+    },
+    "host": {
+      "platform": "Linux-4.19.112-2.el8.x86_64-x86_64-with-glibc2.28",
+      "processor": "x86_64",
+      "python": "3.11.10"
+    },
+    "retrieval_10000": {
+      "entries": 10000,
+      "k": 5,
+      "latency_ms": {
+        "max": 1006.103,
+        "median": 416.855,
+        "p95": 658.693
+      },
+      "mean_returned": 5.0,
+      "mrr": 1.0,
+      "precision_at_k": 0.20000000000000004,
+      "projects": 5,
+      "prompt_tokens_estimated": {
+        "max": 314,
+        "median": 314,
+        "method": "rendered context characters / 4; tokenizer-independent estimate"
+      },
+      "queries": 15,
+      "recall_at_k": 1.0
     }
   },
-  "coding_tasks": {
-    "agent": "Codex CLI 0.144.1",
-    "runs_per_variant": 3,
-    "no_knowledge": {
-      "passed": 0,
-      "success_rate": 0.0
-    },
-    "loreloop": {
-      "passed": 3,
-      "success_rate": 1.0
-    },
-    "runs": [
-      {"task": "upload-limit-policy", "variant": "no_knowledge", "passed": false, "duration_seconds": 157.542, "observed_change": "50 MiB", "hidden_contract": "37 MiB"},
-      {"task": "upload-limit-policy", "variant": "loreloop", "passed": true, "duration_seconds": 63.535, "observed_change": "37 MiB", "hidden_contract": "37 MiB"},
-      {"task": "upload-rate-policy", "variant": "no_knowledge", "passed": false, "duration_seconds": 100.422, "observed_change": "10 requests / 60 seconds", "hidden_contract": "7 requests / 45 seconds"},
-      {"task": "upload-rate-policy", "variant": "loreloop", "passed": true, "duration_seconds": 72.675, "observed_change": "7 requests / 45 seconds", "hidden_contract": "7 requests / 45 seconds"},
-      {"task": "customer-csv-contract", "variant": "no_knowledge", "passed": false, "duration_seconds": 111.573, "observed_change": "id,name,email", "hidden_contract": "customer_id,display_name,primary_email"},
-      {"task": "customer-csv-contract", "variant": "loreloop", "passed": true, "duration_seconds": 67.868, "observed_change": "customer_id,display_name,primary_email", "hidden_contract": "customer_id,display_name,primary_email"}
-    ]
+  "sources": {
+    "reverse_claude": "eval/results/reverse-claude-2026-07-10.json",
+    "reverse_codex": "eval/results/reverse-codex-2026-07-10.json",
+    "reverse_matrix": "eval/results/reverse-matrix-claude-2026-07-10.json",
+    "scale": "eval/results/scale-2026-07-10.json",
+    "tasks": "eval/results/task-baselines-claude-2026-07-10.json"
   },
-  "coding_task_four_way": {
-    "agent": "Claude CLI",
-    "runs_per_variant": 3,
-    "no_memory": {"passed": 0, "success_rate": 0.0},
-    "session_memory": {"passed": 3, "success_rate": 1.0},
-    "codebase_index": {"passed": 0, "success_rate": 0.0},
-    "loreloop": {"passed": 3, "success_rate": 1.0},
-    "interpretation": "The correct fact, whether ephemeral session memory or governed loreloop context, enabled success. Repository-only indexing did not reveal the external policy."
-  },
+  "status": "small public baseline; every numeric claim below has checked-in raw input",
   "usability": {
-    "status": "awaiting real participants",
-    "sessions": 0,
+    "note": "No human outcomes are inferred or simulated.",
     "protocol": "docs/usability-study.md",
-    "note": "No human completion rate is inferred from agents or deterministic smoke tests."
+    "sessions": 0,
+    "status": "awaiting real participants"
   }
 }

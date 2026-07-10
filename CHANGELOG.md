@@ -16,6 +16,12 @@
   rollback; Linux/macOS/Windows CI and evidence locking.
 - Reviewed help snapshots, unified recoverable errors, troubleshooting, and a
   zero-context usability protocol that refuses to invent participant results.
+- Raw-backed evaluation summary generation and release thresholds; unsupported
+  historical task claims are omitted when their raw result file is absent.
+- Pinned-action CI, coverage/build/Twine gates, Bandit, dependency and secret
+  scans, Dependabot, community templates, governance/support/release policies,
+  and a Trusted Publishing workflow with SPDX SBOM and provenance attestation.
+- `knowledge reopen` for an explicit rejected → draft review path.
 
 ### Changed
 
@@ -30,10 +36,23 @@
 - Chain-first harvests can resume DB materialization after an interruption,
   while completed harvests remain idempotently protected from duplication.
 - Federation verification performs no writes, including no foreign head repair.
+- Inference and delegation now use separate least-capability agent profiles;
+  the offline demo and tests exercise both without invoking a real model.
+- Command evidence binds repository HEAD/working-tree state, redacts output,
+  and the latest result for an identical check supersedes older attempts.
 
 ### Security
 
 - Trust-raising operations bind current entry digests to the out-of-tree HMAC
   chain. SQLite-only approvals, retirements, or content edits do not gain trust.
-- Browser discovery and redirects enforce same-origin; scripted writes require
-  explicit opt-in, while password and destructive actions remain blocked.
+- Missing or unexplained rewrites of chain-backed SQLite rows fail closed;
+  newer contradictions override older approvals until explicit reapproval.
+- Agent subprocesses do not inherit operator key/registry locations, and normal
+  signing APIs reject LoreLoop-launched agent processes.
+- Git ingestion rejects dirty source, tracked symlinks and non-regular files,
+  handles NUL-delimited non-ASCII paths, and enforces file/batch byte limits.
+- Browser discovery, redirects, requests, and final observations enforce
+  HTTP(S)/same-origin boundaries; JavaScript POSTs require explicit opt-in,
+  while password and destructive actions remain blocked.
+- State, key, chain, lock, database, trace, and artifact paths use restrictive
+  permissions and reject symlink substitution at their trust boundaries.

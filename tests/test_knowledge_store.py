@@ -36,7 +36,9 @@ def make_entry(**kw) -> Entry:
         title="Upload API contract",
         content="POST /upload accepts multipart, returns 201 with file id.",
         kind=Kind.INTERFACE,
-        source=Source(channel=Channel.CODE, locator="src/api/upload.py@abc123", snapshot_ref="abc123"),
+        source=Source(
+            channel=Channel.CODE, locator="src/api/upload.py@abc123", snapshot_ref="abc123"
+        ),
     )
     defaults.update(kw)
     return Entry(**defaults)
@@ -91,11 +93,19 @@ def test_opening_legacy_database_migrates_without_losing_entries(tmp_path):
     conn.execute(
         "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            legacy.id, legacy.title, legacy.content, legacy.kind.value,
-            legacy.source.channel.value, legacy.source.locator,
-            legacy.source.snapshot_ref, legacy.trust.curation.value,
-            legacy.trust.verification.value, None, None,
-            legacy.created_at.isoformat(), legacy.updated_at.isoformat(),
+            legacy.id,
+            legacy.title,
+            legacy.content,
+            legacy.kind.value,
+            legacy.source.channel.value,
+            legacy.source.locator,
+            legacy.source.snapshot_ref,
+            legacy.trust.curation.value,
+            legacy.trust.verification.value,
+            None,
+            None,
+            legacy.created_at.isoformat(),
+            legacy.updated_at.isoformat(),
         ),
     )
     conn.commit()
@@ -106,7 +116,12 @@ def test_opening_legacy_database_migrates_without_losing_entries(tmp_path):
         columns = {
             row[1] for row in migrated._conn.execute("PRAGMA table_info(entries)").fetchall()
         }
-        assert {"source_symbol", "source_line_start", "source_line_end", "source_excerpt"} <= columns
+        assert {
+            "source_symbol",
+            "source_line_start",
+            "source_line_end",
+            "source_excerpt",
+        } <= columns
         assert migrated._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
     backup = migration_backup_path(path, 0)
@@ -115,7 +130,10 @@ def test_opening_legacy_database_migrates_without_losing_entries(tmp_path):
         assert old.execute("PRAGMA user_version").fetchone()[0] == 0
         old_columns = {row[1] for row in old.execute("PRAGMA table_info(entries)").fetchall()}
         assert "source_excerpt" not in old_columns
-        assert old.execute("SELECT title FROM entries WHERE id = ?", (legacy.id,)).fetchone()[0] == legacy.title
+        assert (
+            old.execute("SELECT title FROM entries WHERE id = ?", (legacy.id,)).fetchone()[0]
+            == legacy.title
+        )
 
 
 def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
@@ -167,7 +185,9 @@ def test_list_filters(store):
         title="Login flow behavior",
         content="Login redirects to /dashboard on success.",
         kind=Kind.BEHAVIOR,
-        source=Source(channel=Channel.WEB, locator="http://localhost:3000/login", snapshot_ref="h1"),
+        source=Source(
+            channel=Channel.WEB, locator="http://localhost:3000/login", snapshot_ref="h1"
+        ),
     )
     store.add(a)
     store.add(b)
@@ -206,8 +226,13 @@ def test_set_verification_writes_companion_fields_in_one_statement(store):
         lambda sql: statements.append(sql) if sql.lstrip().startswith("UPDATE") else None
     )
     updated = store.set_verification(
-        e.id, Verification.VERIFIED, "run-42", NOW,
-        snapshot_ref="def456", title="Canonical title", kind=Kind.ACCEPTANCE,
+        e.id,
+        Verification.VERIFIED,
+        "run-42",
+        NOW,
+        snapshot_ref="def456",
+        title="Canonical title",
+        kind=Kind.ACCEPTANCE,
     )
     store._conn.set_trace_callback(None)
 
@@ -281,9 +306,7 @@ def test_add_keeps_same_claim_from_same_path_in_different_repositories(store):
 
 
 def test_add_dedupes_web_entries_by_full_locator(store):
-    a = make_entry(
-        source=Source(channel=Channel.WEB, locator="http://x/upload", snapshot_ref="h1")
-    )
+    a = make_entry(source=Source(channel=Channel.WEB, locator="http://x/upload", snapshot_ref="h1"))
     same_page = make_entry(
         source=Source(channel=Channel.WEB, locator="http://x/upload", snapshot_ref="h2")
     )
@@ -299,9 +322,7 @@ def test_add_dedupes_web_entries_by_full_locator(store):
 def test_reanchor_updates_locator_with_snapshot(store):
     e = make_entry()
     store.add(e)
-    updated = store.set_snapshot_ref(
-        e.id, "def456", NOW, locator="src/api/upload.py@def456"
-    )
+    updated = store.set_snapshot_ref(e.id, "def456", NOW, locator="src/api/upload.py@def456")
     assert updated.source.snapshot_ref == "def456"
     assert updated.source.locator == "src/api/upload.py@def456"
 

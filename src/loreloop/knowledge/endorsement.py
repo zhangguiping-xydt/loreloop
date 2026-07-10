@@ -33,6 +33,11 @@ from .store import InvalidTransition, KnowledgeStore
 
 CURATION_EVENT = "curation_changed"
 SUPERSEDE_EVENT = "entry_superseded"
+REINGEST_EVENT = "entry_reingested"
+
+
+class TrustProjectionError(RuntimeError):
+    """The agent-writable SQLite projection no longer matches chain authority."""
 
 
 def entry_digest(entry: Entry) -> str:
@@ -69,32 +74,36 @@ def endorsed_strong_digests(records: list[EvidenceRecord]) -> dict[str, set[str]
     status. An entry is chain-backed strong only if its CURRENT digest is in
     this set. Events without a digest grant no endorsement: an unbound
     endorsement is exactly the loophole this module exists to close."""
-    approved: dict[str, str] = {}
-    verified: dict[str, str] = {}
+    approved: dict[str, tuple[str, int]] = {}
+    verified: dict[str, tuple[str, int]] = {}
+    contradicted: dict[str, int] = {}
     for rec in records:
         payload = rec.payload
         if rec.event == CURATION_EVENT:
             entry_id = payload.get("entry_id")
             digest = payload.get("entry_digest")
             if payload.get("curation") == Curation.APPROVED.value and digest:
-                approved[entry_id] = digest
+                approved[entry_id] = (digest, rec.index)
             else:
                 approved.pop(entry_id, None)
         elif rec.event == "entry_verified":
             entry_id = payload.get("entry_id")
             digest = payload.get("entry_digest")
             if digest:
-                verified[entry_id] = digest
+                verified[entry_id] = (digest, rec.index)
             else:
                 verified.pop(entry_id, None)
         elif rec.event == "entry_contradicted":
-            verified.pop(payload.get("entry_id"), None)
+            entry_id = payload.get("entry_id")
+            verified.pop(entry_id, None)
+            if entry_id:
+                contradicted[entry_id] = rec.index
         elif rec.event == "knowledge_harvested":
             minted = payload.get("minted")
             if isinstance(minted, dict):
                 for entry_id, digest in minted.items():
                     if digest:
-                        verified[entry_id] = digest
+                        verified[entry_id] = (digest, rec.index)
             # The payload's "reversed" digests are deliberately NOT applied:
             # re-reversal is LLM extraction, and letting it move an existing
             # endorsement to the re-anchored row would launder trust — an
@@ -103,10 +112,12 @@ def endorsed_strong_digests(records: list[EvidenceRecord]) -> dict[str, set[str]
             # bit without any human act. A re-anchored strong entry stays
             # demoted until a human re-approves or re-verifies it.
     out: dict[str, set[str]] = {}
-    for entry_id, digest in approved.items():
-        out.setdefault(entry_id, set()).add(digest)
-    for entry_id, digest in verified.items():
-        out.setdefault(entry_id, set()).add(digest)
+    for entry_id, (digest, index) in approved.items():
+        if index > contradicted.get(entry_id, -1):
+            out.setdefault(entry_id, set()).add(digest)
+    for entry_id, (digest, index) in verified.items():
+        if index > contradicted.get(entry_id, -1):
+            out.setdefault(entry_id, set()).add(digest)
     return out
 
 
@@ -121,6 +132,89 @@ def unendorsed_strong_ids(entries: list[Entry], records: list[EvidenceRecord]) -
     carries no matching chain endorsement — demote these before injection."""
     endorsed_ids = chain_endorsed_strong_ids(entries, records)
     return {e.id for e in entries if e.is_strong_evidence() and e.id not in endorsed_ids}
+
+
+def chain_contradicted_ids(records: list[EvidenceRecord]) -> set[str]:
+    """Entries whose latest trust-relevant event is a contradiction.
+
+    A deliberate human re-approval after the contradiction is an explicit
+    override. An older approval never silently wins over newer machine evidence.
+    """
+    positive: dict[str, int] = {}
+    contradicted: dict[str, int] = {}
+    for rec in records:
+        payload = rec.payload
+        entry_id = payload.get("entry_id")
+        if rec.event == CURATION_EVENT and entry_id:
+            if payload.get("curation") == Curation.APPROVED.value and payload.get("entry_digest"):
+                positive[entry_id] = rec.index
+            else:
+                positive.pop(entry_id, None)
+        elif rec.event == "entry_verified" and entry_id and payload.get("entry_digest"):
+            positive[entry_id] = rec.index
+        elif rec.event == "entry_contradicted" and entry_id:
+            contradicted[entry_id] = rec.index
+        elif rec.event == "knowledge_harvested":
+            minted = payload.get("minted")
+            if isinstance(minted, dict):
+                for minted_id, digest in minted.items():
+                    if digest:
+                        positive[minted_id] = rec.index
+    return {
+        entry_id for entry_id, index in contradicted.items() if index > positive.get(entry_id, -1)
+    }
+
+
+def known_projection_digests(records: list[EvidenceRecord]) -> dict[str, set[str]]:
+    """Digests produced by explicit re-projection events without raising trust."""
+    known: dict[str, set[str]] = {}
+    for rec in records:
+        if rec.event == REINGEST_EVENT:
+            entry_id = rec.payload.get("entry_id")
+            digest = rec.payload.get("entry_digest")
+            if entry_id and digest:
+                known.setdefault(entry_id, set()).add(digest)
+        elif rec.event == "knowledge_harvested":
+            reversed_rows = rec.payload.get("reversed")
+            if isinstance(reversed_rows, dict):
+                for entry_id, digest in reversed_rows.items():
+                    if digest:
+                        known.setdefault(entry_id, set()).add(digest)
+    return known
+
+
+def assert_trust_projection(
+    entries: list[Entry],
+    records: list[EvidenceRecord],
+    *,
+    retired_ids: set[str] | frozenset[str] = frozenset(),
+) -> None:
+    """Fail closed when chain-backed strong facts disappear from SQLite.
+
+    A digest mismatch is allowed only when a chain-recorded re-ingest/harvest
+    explains the new projection; such rows remain demoted until re-endorsed.
+    """
+    by_id = {entry.id: entry for entry in entries}
+    endorsed = endorsed_strong_digests(records)
+    known = known_projection_digests(records)
+    problems = []
+    for entry_id, digests in endorsed.items():
+        if entry_id in retired_ids:
+            continue
+        entry = by_id.get(entry_id)
+        if entry is None:
+            problems.append(f"chain-backed entry {entry_id[:8]} is missing from knowledge.db")
+            continue
+        current = entry_digest(entry)
+        if current not in digests and current not in known.get(entry_id, set()):
+            problems.append(
+                f"chain-backed entry {entry_id[:8]} has an unexplained content/source digest"
+            )
+    if problems:
+        raise TrustProjectionError(
+            "; ".join(problems)
+            + ". Restore the SQLite projection from backup or re-ingest under operator review."
+        )
 
 
 def chain_superseded_ids(records: list[EvidenceRecord]) -> set[str]:
@@ -166,6 +260,40 @@ def curate(
         raise InvalidTransition(f"{entry.trust.curation.value} -> {new.value}")
     chain.append(
         CURATION_EVENT,
-        {"entry_id": entry_id, "curation": new.value, "entry_digest": entry_digest(entry)},
+        {
+            "entry_id": entry_id,
+            "curation": new.value,
+            "entry_digest": entry_digest(entry),
+            "entry": _entry_payload(entry),
+        },
     )
     return store.set_curation(entry_id, new, now)
+
+
+def record_reingested(chain: EvidenceChain, entry: Entry) -> EvidenceRecord:
+    return chain.append(
+        REINGEST_EVENT,
+        {
+            "entry_id": entry.id,
+            "entry_digest": entry_digest(entry),
+            "entry": _entry_payload(entry),
+        },
+    )
+
+
+def _entry_payload(entry: Entry) -> dict:
+    return {
+        "id": entry.id,
+        "title": entry.title,
+        "content": entry.content,
+        "kind": entry.kind.value,
+        "source": {
+            "channel": entry.source.channel.value,
+            "locator": entry.source.locator,
+            "snapshot_ref": entry.source.snapshot_ref,
+            "symbol": entry.source.symbol,
+            "line_start": entry.source.line_start,
+            "line_end": entry.source.line_end,
+            "excerpt": entry.source.excerpt,
+        },
+    }

@@ -14,7 +14,7 @@ from ..federation.reader import ForeignEntry
 from ..knowledge.code_reverse import drifted_code_entry_ids
 from ..knowledge.model import Entry
 from ..knowledge.repos import load_repos
-from ..paths import state_path
+from ..paths import ensure_private_directory, ensure_state_root, secure_append_text, state_path
 from .context_pack import ContextPack, render, select
 
 
@@ -46,8 +46,8 @@ class DelegateRunner:
     def __init__(self, agent: AgentRunner, workdir: Path) -> None:
         self._agent = agent
         self._workdir = workdir
-        self._runs_dir = state_path(workdir, "runs")
-        self._runs_dir.mkdir(parents=True, exist_ok=True)
+        ensure_state_root(workdir)
+        self._runs_dir = ensure_private_directory(state_path(workdir, "runs"))
 
     def run(
         self,
@@ -109,5 +109,4 @@ class DelegateRunner:
             "event": event,
             **fields,
         }
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        secure_append_text(path, json.dumps(record, ensure_ascii=False) + "\n")

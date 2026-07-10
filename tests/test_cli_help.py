@@ -30,6 +30,7 @@ PUBLIC_HELP_PATHS = [
     ("knowledge", "export"),
     ("knowledge", "approve"),
     ("knowledge", "reject"),
+    ("knowledge", "reopen"),
     ("knowledge", "supersede"),
     ("knowledge", "verify"),
     ("knowledge", "usage"),
@@ -37,9 +38,7 @@ PUBLIC_HELP_PATHS = [
 
 
 def _subparser(parser: argparse.ArgumentParser, token: str) -> argparse.ArgumentParser:
-    action = next(
-        item for item in parser._actions if isinstance(item, argparse._SubParsersAction)
-    )
+    action = next(item for item in parser._actions if isinstance(item, argparse._SubParsersAction))
     return action.choices[token]
 
 

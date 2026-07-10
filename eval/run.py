@@ -33,7 +33,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from eval.metrics import evaluate_rankings, evaluate_reverse_predictions
-from loreloop.agents import AgentError, AgentRunner
+from loreloop.agents import AgentError, AgentRunner, inference_runner
 from loreloop.delegate.context_pack import select
 from loreloop.knowledge.code_reverse import ExtractionError, reverse_code
 from loreloop.knowledge.model import Channel, Entry, Kind, Source
@@ -81,9 +81,7 @@ def run_retrieval(dataset_path: Path, k: int) -> dict[str, Any]:
         "benchmark": "retrieval",
         "dataset": str(dataset_path.relative_to(ROOT)),
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "metrics": {
-            name: evaluate_rankings(examples, k=k) for name, examples in variants.items()
-        },
+        "metrics": {name: evaluate_rankings(examples, k=k) for name, examples in variants.items()},
         "queries": details,
     }
 
@@ -133,7 +131,6 @@ class CountingRunner:
 
 
 def _run_reverse_agent(agent: str, fixture: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    command = AGENT_COMMANDS[agent]
     with tempfile.TemporaryDirectory(prefix="loreloop-reverse-eval-") as temp:
         repo = Path(temp) / "project"
         shutil.copytree(fixture, repo)
@@ -142,7 +139,7 @@ def _run_reverse_agent(agent: str, fixture: Path) -> tuple[list[dict[str, Any]],
         subprocess.run(["git", "config", "user.name", "loreloop eval"], cwd=repo, check=True)
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-qm", "evaluation fixture"], cwd=repo, check=True)
-        runner = CountingRunner(AgentRunner(command=command, timeout=600))
+        runner = CountingRunner(inference_runner(agent, timeout=600))
         started = time.perf_counter()
         entries = reverse_code(runner, repo)
         duration = time.perf_counter() - started
@@ -243,9 +240,7 @@ def run_reverse_matrix(
             "recall": recall,
             "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
             "failed_cases": sum(item["error"] is not None for item in cases),
-            "duration_seconds": round(
-                sum(item["cost"]["duration_seconds"] for item in cases), 3
-            ),
+            "duration_seconds": round(sum(item["cost"]["duration_seconds"] for item in cases), 3),
             "input_tokens_estimated": sum(
                 item["cost"]["input_tokens_estimated"] or 0 for item in cases
             ),
@@ -289,9 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
     matrix = sub.add_parser(
         "reverse-matrix", help="benchmark Python, TypeScript, and mixed repositories"
     )
-    matrix.add_argument(
-        "--matrix", type=Path, default=DATASETS / "reverse_matrix/matrix.json"
-    )
+    matrix.add_argument("--matrix", type=Path, default=DATASETS / "reverse_matrix/matrix.json")
     matrix_source = matrix.add_mutually_exclusive_group(required=True)
     matrix_source.add_argument("--agent", choices=sorted(AGENT_COMMANDS))
     matrix_source.add_argument("--predictions", type=Path)

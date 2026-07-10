@@ -48,14 +48,16 @@ under adversarial tests.
 Acceptance: a reader understands the problem, differentiation, trust model, and full workflow
 before installing.
 
-## 5. Performance benchmarks and real-project evidence
+## 5. Performance benchmarks and public-project evidence
 
-- [x] Benchmark reverse-engineering cost and quality on representative Python, TypeScript, and
-      mixed-language repositories.
+- [x] Benchmark reverse-engineering cost and quality on fixed Python, TypeScript, and
+      mixed-language fixtures.
 - [x] Measure retrieval Precision@K, Recall@K, latency, and prompt-token cost at 100, 1,000, and
       10,000 entries across multiple projects.
 - [x] Measure evidence-chain verification and harvest latency at increasing chain lengths.
 - [x] Compare task outcomes against no memory, session memory, and codebase-index baselines.
+- [ ] Reproduce the workflow on real public repositories and publish both successful and failed
+      cases without extrapolating fixture scores.
 
 Acceptance: published, reproducible data shows where LoreLoop helps, where it does not, and its
 operating limits.
@@ -75,3 +77,18 @@ until real people—not agents or simulated personas—complete the study.
 
 Acceptance: unfamiliar users complete the primary workflow reliably and describe the trust
 model correctly in their own words.
+
+## 7. Open-source release engineering
+
+- [x] Use a frozen `uv.lock`, tested Python range, coverage gate, package build and Twine checks.
+- [x] Run Bandit, dependency audit, Gitleaks, deterministic evaluation thresholds, and browser
+      security smoke tests in pinned-action CI.
+- [x] Add issue/PR templates, governance, support, conduct, security, and release documentation.
+- [x] Add a tag-driven Trusted Publishing workflow with SPDX SBOM and GitHub provenance.
+- [ ] Create/reserve the public GitHub repository and PyPI project, then configure the protected
+      `pypi` environment and matching Trusted Publisher.
+- [ ] Revoke the previously exposed Anthropic credential at the provider and verify no active
+      credential remains in Git history or external caches.
+
+Acceptance: local release artifacts and automation are auditable; external publishing is not
+considered complete until provider-side and hosting-side configuration is verified.
