@@ -258,6 +258,10 @@ index. No zero-context human completion rate is claimed yet—the protocol is
 published, and the report remains explicitly "awaiting real participants" until
 real sessions are recorded.
 
+For the product thesis behind these metrics—what Reverse / Apply / Return
+actually proves today, where it does not, and the appropriate alpha release
+claim—see [Product thesis and evidence](docs/product-thesis-and-evidence.md).
+
 ## License
 
 MIT
