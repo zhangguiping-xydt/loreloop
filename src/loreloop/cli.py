@@ -1,4 +1,4 @@
-"""knowhelm CLI: ingest / run / check / report / knowledge."""
+"""LoreLoop CLI: ingest / run / check / report / knowledge."""
 
 from __future__ import annotations
 
@@ -26,9 +26,8 @@ from .knowledge.endorsement import (
 )
 from .knowledge.model import Curation, Entry
 from .knowledge.store import KnowledgeStore
+from .paths import state_path, state_root
 from .report.acceptance import RunTraceError, load_run, record_check, render_report
-
-DB_PATH = ".knowhelm/knowledge.db"
 
 # run ids are used to build filesystem paths; a strict shape rules out
 # traversal like "../../etc/passwd" without any path canonicalization games.
@@ -104,9 +103,9 @@ def _run_trace(workdir: Path, run_id: str) -> Path | None:
         raise CLIError(
             "invalid run id",
             f"{run_id!r} contains unsupported characters or is too long",
-            "use the exact run id printed by `knowhelm run` or `knowhelm report`",
+            "use the exact run id printed by `loreloop run` or `loreloop report`",
         )
-    return workdir / f".knowhelm/runs/{run_id}.jsonl"
+    return state_path(workdir, "runs", f"{run_id}.jsonl")
 
 
 def _workdir() -> Path:
@@ -114,7 +113,7 @@ def _workdir() -> Path:
 
 
 def _store(workdir: Path) -> KnowledgeStore:
-    db = workdir / DB_PATH
+    db = state_path(workdir, "knowledge.db")
     db.parent.mkdir(parents=True, exist_ok=True)
     return KnowledgeStore(db)
 
@@ -139,23 +138,25 @@ def cmd_init(args: argparse.Namespace) -> int:
     if not key_ok:
         raise InitializationError(
             f"cannot initialize evidence key in {key_dir}: {key_problem}. "
-            "Set KNOWHELM_KEY_DIR to a writable directory outside the project tree."
+            "Set LORELOOP_KEY_DIR to a writable directory outside the project tree."
         )
     _store(workdir).close()
     EvidenceChain.for_workdir(workdir)
-    print(f"initialized .knowhelm/ (knowledge store, evidence chain) in {workdir}")
+    state_dir = state_root(workdir)
+    print(f"initialized {state_dir.name}/ (knowledge store, evidence chain) in {workdir}")
     print(f"evidence signing key: {key_path_for(workdir)} (outside the project tree)")
-    print("register this trust domain for federation with `knowhelm project add .`")
+    print("register this trust domain for federation with `loreloop project add .`")
 
     gitignore = workdir / ".gitignore"
     if (workdir / ".git").exists():
         lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
-        if ".knowhelm/" not in lines:
+        ignore_entry = f"{state_dir.name}/"
+        if ignore_entry not in lines:
             with gitignore.open("a", encoding="utf-8") as fh:
                 if lines and lines[-1].strip():
                     fh.write("\n")
-                fh.write(".knowhelm/\n")
-            print("added .knowhelm/ to .gitignore (evidence may embed page content)")
+                fh.write(f"{ignore_entry}\n")
+            print(f"added {ignore_entry} to .gitignore (evidence may embed page content)")
 
     hosts = [name for name in ("claude", "codex") if shutil.which(name)]
     if not hosts:
@@ -165,7 +166,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     if args.skill is None:
         answer = input(
-            f"install the knowhelm companion skill for {', '.join(hosts)}? [Y/n] "
+            f"install the loreloop companion skill for {', '.join(hosts)}? [Y/n] "
         )
         wanted = answer.strip().lower() in ("", "y", "yes")
     else:
@@ -182,7 +183,7 @@ def cmd_init(args: argparse.Namespace) -> int:
             path = install_codex_skill(workdir)
             print(f"installed companion skill for Codex: {path.relative_to(workdir)}")
     else:
-        print("skipped skill installation (re-run `knowhelm init --skill` to install)")
+        print("skipped skill installation (re-run `loreloop init --skill` to install)")
     return 0
 
 
@@ -238,20 +239,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
         playwright_detail = "installed"
     except ImportError:
-        playwright_detail = "optional; install knowhelm[web] for browser evidence"
+        playwright_detail = "optional; install loreloop[web] for browser evidence"
     checks.append(("Playwright", "INFO", playwright_detail, True))
 
     for name, status, detail, _ in checks:
         print(f"{status:4}  {name:24} {detail}")
     ready = all(ok for _, status, _, ok in checks if status != "INFO")
-    print("\nREADY: knowhelm preflight passed" if ready else "\nNOT READY: fix FAIL checks above")
+    print("\nREADY: loreloop preflight passed" if ready else "\nNOT READY: fix FAIL checks above")
     return 0 if ready else 1
 
 
 def cmd_demo(args: argparse.Namespace) -> int:
     from .demo import DemoError, run_demo
 
-    workspace = args.workspace or Path(tempfile.mkdtemp(prefix="knowhelm-demo-"))
+    workspace = args.workspace or Path(tempfile.mkdtemp(prefix="loreloop-demo-"))
     workspace.mkdir(parents=True, exist_ok=True)
     try:
         run_demo(workspace.resolve(), agent=args.agent, offline=args.offline)
@@ -270,7 +271,7 @@ def _probe_writable_directory(path: Path, *, create: bool = False) -> tuple[bool
             path.mkdir(parents=True, exist_ok=True)
         if not path.is_dir():
             return False, "path is not a directory"
-        with tempfile.NamedTemporaryFile(prefix=".knowhelm-write-", dir=path):
+        with tempfile.NamedTemporaryFile(prefix=".loreloop-write-", dir=path):
             pass
     except OSError as exc:
         return False, str(exc)
@@ -328,7 +329,7 @@ def _resolve_ingest_repo(workdir: Path, target: str) -> tuple[str, Path]:
         return ".", resolved
     raise RepoConfigError(
         f"code source {resolved} is not a declared repository; "
-        "run `knowhelm repo add <path>` first"
+        "run `loreloop repo add <path>` first"
     )
 
 
@@ -373,7 +374,7 @@ def cmd_repo(args: argparse.Namespace) -> int:
     if name not in repos:
         raise RepoConfigError(f"repository {name!r} is not declared")
     count = 0
-    db = workdir / DB_PATH
+    db = state_path(workdir, "knowledge.db")
     if db.exists():
         with KnowledgeStore.open_readonly(db) as store:
             for entry in store.list(channel=Channel.CODE):
@@ -410,7 +411,7 @@ def cmd_project(args: argparse.Namespace) -> int:
         return 0
     if args.action == "list":
         for project in list_projects():
-            available = (project.path / ".knowhelm/knowledge.db").is_file()
+            available = state_path(project.path, "knowledge.db").is_file()
             print(
                 f"{project.project_id}\t{project.name}\t{project.path}\t"
                 f"{'available' if available else 'unavailable'}"
@@ -449,7 +450,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         raise CLIError(
             "invalid action script",
             str(exc),
-            "fix the JSON script, then rerun `knowhelm verify --script ...`",
+            "fix the JSON script, then rerun `loreloop verify --script ...`",
         ) from exc
 
     workdir = _workdir()
@@ -507,10 +508,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     endorsed = chain_endorsed_strong_ids(entries, records)
     unendorsed = unendorsed_strong_ids(entries, records)
     if unendorsed:
-        print(f"[knowhelm] WARNING: {len(unendorsed)} entr{'y' if len(unendorsed) == 1 else 'ies'} "
+        print(f"[LoreLoop] WARNING: {len(unendorsed)} entr{'y' if len(unendorsed) == 1 else 'ies'} "
               f"claim strong trust in the store without evidence-chain endorsement "
               f"of their current content — injected as reference only. "
-              f"Inspect with `knowhelm knowledge list`:",
+              f"Inspect with `loreloop knowledge list`:",
               file=sys.stderr)
         for e in entries:
             if e.id in unendorsed:
@@ -524,10 +525,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             expansion = expand_query(
                 agent,
                 args.task,
-                cache_path=workdir / ".knowhelm/cache/query-expansion.json",
+                cache_path=state_path(workdir, "cache", "query-expansion.json"),
             )
         except (ExpansionError, AgentError) as exc:
-            print(f"[knowhelm] query expansion failed ({exc}); retrieving with the "
+            print(f"[LoreLoop] query expansion failed ({exc}); retrieving with the "
                   f"task text only", file=sys.stderr)
     runner = DelegateRunner(agent, workdir)
     related = (
@@ -544,7 +545,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     chain_only = [e for e in result.pack.strong if e.id in endorsed and not e.is_strong_evidence()]
     if chain_only:
-        print(f"[knowhelm] note: {len(chain_only)} entr"
+        print(f"[LoreLoop] note: {len(chain_only)} entr"
               f"{'y is' if len(chain_only) == 1 else 'ies are'} chain-endorsed "
               f"although the store cache says reference — injected as established fact.",
               file=sys.stderr)
@@ -561,16 +562,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         },
     )
     print(result.output)
-    print(f"\n[knowhelm] run {result.run_id}: injected {len(result.pack.entry_ids)} entries, "
+    print(f"\n[LoreLoop] run {result.run_id}: injected {len(result.pack.entry_ids)} entries, "
           f"trace at {result.trace_path}", file=sys.stderr)
     strong_web = [e for e in result.pack.strong if e.source.channel is Channel.WEB]
     if strong_web:
         # Known limitation, documented in SECURITY.md: injection trusts the
         # last verification; it does not re-open a browser per run.
-        print(f"[knowhelm] note: {len(strong_web)} strong web entr"
+        print(f"[LoreLoop] note: {len(strong_web)} strong web entr"
               f"{'y was' if len(strong_web) == 1 else 'ies were'} injected as-is; "
               f"live pages may have changed since verification — "
-              f"re-check with `knowhelm knowledge verify`", file=sys.stderr)
+              f"re-check with `loreloop knowledge verify`", file=sys.stderr)
     return 0
 
 
@@ -625,7 +626,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             raise CLIError(
                 "invalid check command",
                 str(exc),
-                "quote each argument correctly and rerun `knowhelm check --command ...`",
+                "quote each argument correctly and rerun `loreloop check --command ...`",
             ) from exc
         shell_tokens = {";", "|", "||", "&&", ">", ">>", "<", "2>", "2>>"}
         if any(part in shell_tokens for part in argv):
@@ -654,14 +655,14 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 def cmd_report(args: argparse.Namespace) -> int:
     workdir = _workdir()
-    runs_dir = workdir / ".knowhelm/runs"
+    runs_dir = state_path(workdir, "runs")
     if args.run_id:
         trace = _run_trace(workdir, args.run_id)
         if not trace.exists():
             raise CLIError(
                 "run trace not found",
                 f"no trace found for {args.run_id}",
-                "copy the exact id printed by `knowhelm run`, or omit RUN_ID to use the latest run",
+                "copy the exact id printed by `loreloop run`, or omit RUN_ID to use the latest run",
             )
     else:
         traces = sorted(runs_dir.glob("run-*.jsonl")) if runs_dir.exists() else []
@@ -669,7 +670,7 @@ def cmd_report(args: argparse.Namespace) -> int:
             raise CLIError(
                 "no runs found",
                 "this project has no delegation trace to report",
-                "run `knowhelm run <task>` first",
+                "run `loreloop run <task>` first",
             )
         trace = traces[-1]
     from .evidence.artifacts import ArtifactStore
@@ -692,7 +693,7 @@ def cmd_harvest(args: argparse.Namespace) -> int:
         raise CLIError(
             "run trace not found",
             f"no trace found for {args.run_id}",
-            "copy the exact id printed by `knowhelm run`, then retry harvest",
+            "copy the exact id printed by `loreloop run`, then retry harvest",
         )
     run = load_run(trace)
     chain = EvidenceChain.for_workdir(workdir)
@@ -706,7 +707,7 @@ def cmd_harvest(args: argparse.Namespace) -> int:
             raise CLIError(
                 "harvest refused",
                 str(exc),
-                "run `knowhelm report <run-id>`, satisfy every acceptance check, then retry",
+                "run `loreloop report <run-id>`, satisfy every acceptance check, then retry",
                 exit_code=1,
             ) from exc
     print(f"{'resumed' if result.resumed else 'harvested'} run {args.run_id}:")
@@ -719,7 +720,7 @@ def cmd_harvest(args: argparse.Namespace) -> int:
             print(f"    {check}", file=sys.stderr)
     if result.stale:
         print(f"  {len(result.stale)} existing entries anchored before this run "
-              f"touch changed files — review with `knowhelm knowledge list --stale`:")
+              f"touch changed files — review with `loreloop knowledge list --stale`:")
         for entry in result.stale:
             print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})")
     if result.review:
@@ -731,7 +732,7 @@ def cmd_harvest(args: argparse.Namespace) -> int:
         print(f"  {len(result.demoted)} strong entr"
               f"{'y was' if len(result.demoted) == 1 else 'ies were'} re-anchored and "
               f"lost chain endorsement — they inject as reference until you "
-              f"re-approve (`knowhelm knowledge approve`):", file=sys.stderr)
+              f"re-approve (`loreloop knowledge approve`):", file=sys.stderr)
         for entry in result.demoted:
             print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})",
                   file=sys.stderr)
@@ -948,7 +949,7 @@ def _curate(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> i
         raise CLIError(
             "invalid curation transition",
             str(exc),
-            "inspect the entry with `knowhelm knowledge list` and choose a valid next state",
+            "inspect the entry with `loreloop knowledge list` and choose a valid next state",
         ) from exc
     print(f"{args.action}{'d' if args.action.endswith('e') else 'ed'}: {entry.title}")
     return 0
@@ -1003,7 +1004,7 @@ def _export_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
         entries = [e for e in entries if e.id in drifted and e.id not in superseded]
 
     lines = [
-        "# knowhelm knowledge export",
+        "# loreloop knowledge export",
         "",
         f"- Generated: {datetime.now(timezone.utc).isoformat()}",
         f"- Entries: {len(entries)}",
@@ -1087,7 +1088,7 @@ def _resolve_entry(store: KnowledgeStore, prefix: str):
     raise CLIError(
         "knowledge entry not found",
         f"{reason} id prefix {prefix!r}",
-        "run `knowhelm knowledge list` and use a unique displayed id prefix",
+        "run `loreloop knowledge list` and use a unique displayed id prefix",
     )
 
 
@@ -1105,7 +1106,7 @@ def _verify_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
         raise CLIError(
             "no web knowledge to verify",
             "no web-channel entry matches the requested id prefix",
-            "run `knowhelm knowledge list`, then choose a web entry or ingest a web source",
+            "run `loreloop knowledge list`, then choose a web entry or ingest a web source",
         )
 
     chain = EvidenceChain.for_workdir(workdir)
@@ -1141,7 +1142,7 @@ def _verify_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
 
 def build_parser() -> argparse.ArgumentParser:
     parser = CLIArgumentParser(
-        prog="knowhelm",
+        prog="loreloop",
         description=(
             "Reverse-engineer project knowledge, apply it to coding-agent work, "
             "and return accepted outcomes to a tamper-evident knowledge loop."
@@ -1158,7 +1159,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor = sub.add_parser("doctor", help="check prerequisites and writable trust state")
     p_doctor.set_defaults(func=cmd_doctor)
 
-    p_init = sub.add_parser("init", help="set up knowhelm in this project")
+    p_init = sub.add_parser("init", help="set up LoreLoop in this project")
     skill_group = p_init.add_mutually_exclusive_group()
     skill_group.add_argument("--skill", dest="skill", action="store_true", default=None,
                              help="install the companion skill without asking")
@@ -1374,22 +1375,22 @@ def main(argv: list[str] | None = None) -> int:
     ) as exc:
         command = getattr(locals().get("args"), "command", None)
         hints = {
-            "init": "run `knowhelm doctor`, fix each FAIL check, then retry initialization",
-            "demo": "fix the reported prerequisite, then rerun `knowhelm demo --help`",
+            "init": "run `loreloop doctor`, fix each FAIL check, then retry initialization",
+            "demo": "fix the reported prerequisite, then rerun `loreloop demo --help`",
             "ingest": "check the source path/URL and agent setup, then retry ingestion",
-            "run": "run `knowhelm doctor`, resolve the reported agent or trust-state issue, then retry",
+            "run": "run `loreloop doctor`, resolve the reported agent or trust-state issue, then retry",
             "verify": "check Playwright, the URL, and the expectation, then retry verification",
-            "report": "use a run id printed by `knowhelm run`, then retry the report",
-            "harvest": "inspect `knowhelm report <run-id>` and resolve the reported blocker",
-            "repo": "run `knowhelm repo --help` and correct the repository declaration",
-            "project": "run `knowhelm project --help` and correct the registry operation",
-            "knowledge": "run `knowhelm knowledge --help` and retry the relevant knowledge action",
+            "report": "use a run id printed by `loreloop run`, then retry the report",
+            "harvest": "inspect `loreloop report <run-id>` and resolve the reported blocker",
+            "repo": "run `loreloop repo --help` and correct the repository declaration",
+            "project": "run `loreloop project --help` and correct the registry operation",
+            "knowledge": "run `loreloop knowledge --help` and retry the relevant knowledge action",
         }
         return _print_cli_error(
             CLIError(
-                f"{command or 'knowhelm'} failed",
+                f"{command or 'loreloop'} failed",
                 str(exc) or exc.__class__.__name__,
-                hints.get(command, "run `knowhelm doctor`, fix the reported reason, then retry"),
+                hints.get(command, "run `loreloop doctor`, fix the reported reason, then retry"),
             )
         )
 

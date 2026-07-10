@@ -1,6 +1,6 @@
 """Companion skill installation for host coding agents.
 
-The skill makes the host agent a better citizen in a knowhelm-governed
+The skill makes the host agent a better citizen in a LoreLoop-governed
 project. It teaches — it never verifies, never judges, never mints. The
 four invariants (human-written assertions, on-chain verdicts, human-driven
 harvest, read-only knowledge access for agents) are restated inside the
@@ -11,18 +11,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-CLAUDE_SKILL_RELPATH = ".claude/skills/knowhelm/SKILL.md"
-CODEX_SKILL_RELPATH = ".agents/skills/knowhelm/SKILL.md"
+CLAUDE_SKILL_RELPATH = ".claude/skills/loreloop/SKILL.md"
+CODEX_SKILL_RELPATH = ".agents/skills/loreloop/SKILL.md"
 
 CLAUDE_SKILL_MD = """\
 ---
-name: knowhelm
-description: Collaborate with knowhelm, the knowledge-governance and evidence-backed acceptance tool for this project. Use when a prompt contains a "Project knowledge (provided by knowhelm)" section, or when working in a repository with a .knowhelm directory.
+name: loreloop
+description: Collaborate with LoreLoop, the knowledge-governance and evidence-backed acceptance tool for this project. Use when a prompt contains a "Project knowledge (provided by LoreLoop)" section, or when working in a repository with a .loreloop directory.
 ---
 
-# Working in a knowhelm-governed project
+# Working in a LoreLoop-governed project
 
-knowhelm injects curated project knowledge into your prompt before a task
+LoreLoop injects curated project knowledge into your prompt before a task
 and verifies the result against a real browser afterwards. Evidence, not
 your own account, decides acceptance. Your part:
 
@@ -41,8 +41,8 @@ your own account, decides acceptance. Your part:
 
 You may run read-only knowledge commands at any time:
 
-    knowhelm knowledge list
-    knowhelm knowledge list --stale
+    loreloop knowledge list
+    loreloop knowledge list --stale
 
 ## Acceptance: draft, never certify
 
@@ -55,18 +55,18 @@ You may run read-only knowledge commands at any time:
       title-contains:<text>
 
 - You may re-run checks the operator already approved for fast feedback
-  while iterating (`knowhelm verify <run-id> <url> "<approved assertion>"`).
-- The verdict comes from the operator running `knowhelm report`, which
+  while iterating (`loreloop verify <run-id> <url> "<approved assertion>"`).
+- The verdict comes from the operator running `loreloop report`, which
   audits the tamper-evident evidence chain. Never present your own summary
   or your own verify runs as the acceptance verdict.
 - End your work by reminding the operator to run their verification.
 
 ## Never
 
-- Never run `knowhelm harvest` — minting knowledge is a human act.
-- Never run `knowhelm knowledge approve`, `reject`, or `supersede` —
+- Never run `loreloop harvest` — minting knowledge is a human act.
+- Never run `loreloop knowledge approve`, `reject`, or `supersede` —
   curation is a human act.
-- Never create, edit, or delete anything under `.knowhelm/`.
+- Never create, edit, or delete anything under `.loreloop/`.
 - Never invent, weaken, or reword an operator's acceptance assertion.
 """
 

@@ -3,7 +3,7 @@ import sqlite3
 
 import pytest
 
-from knowhelm.knowledge.model import (
+from loreloop.knowledge.model import (
     Channel,
     Curation,
     Entry,
@@ -14,7 +14,7 @@ from knowhelm.knowledge.model import (
     Trust,
     Verification,
 )
-from knowhelm.knowledge.store import (
+from loreloop.knowledge.store import (
     SCHEMA_VERSION,
     InvalidTransition,
     KnowledgeStore,
@@ -119,7 +119,7 @@ def test_opening_legacy_database_migrates_without_losing_entries(tmp_path):
 
 
 def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
-    import knowhelm.knowledge.store as store_module
+    import loreloop.knowledge.store as store_module
 
     path = tmp_path / "rollback.db"
     conn = sqlite3.connect(path)

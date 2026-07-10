@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E402
-"""Run knowhelm's public, reproducible core evaluations.
+"""Run loreloop's public, reproducible core evaluations.
 
 Examples:
     uv run python eval/run.py retrieval
@@ -33,10 +33,10 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from eval.metrics import evaluate_rankings, evaluate_reverse_predictions
-from knowhelm.agents import AgentError, AgentRunner
-from knowhelm.delegate.context_pack import select
-from knowhelm.knowledge.code_reverse import ExtractionError, reverse_code
-from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+from loreloop.agents import AgentError, AgentRunner
+from loreloop.delegate.context_pack import select
+from loreloop.knowledge.code_reverse import ExtractionError, reverse_code
+from loreloop.knowledge.model import Channel, Entry, Kind, Source
 
 DATASETS = ROOT / "eval/datasets"
 AGENT_COMMANDS = {
@@ -134,12 +134,12 @@ class CountingRunner:
 
 def _run_reverse_agent(agent: str, fixture: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     command = AGENT_COMMANDS[agent]
-    with tempfile.TemporaryDirectory(prefix="knowhelm-reverse-eval-") as temp:
+    with tempfile.TemporaryDirectory(prefix="loreloop-reverse-eval-") as temp:
         repo = Path(temp) / "project"
         shutil.copytree(fixture, repo)
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.email", "eval@knowhelm.local"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.name", "knowhelm eval"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "eval@loreloop.local"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "loreloop eval"], cwd=repo, check=True)
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-qm", "evaluation fixture"], cwd=repo, check=True)
         runner = CountingRunner(AgentRunner(command=command, timeout=600))

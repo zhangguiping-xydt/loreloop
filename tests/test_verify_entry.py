@@ -1,19 +1,19 @@
 
 import pytest
 
-from knowhelm.evidence.chain import EvidenceChain
-from knowhelm.knowledge.model import Channel, Entry, Kind, Source, Verification
-from knowhelm.knowledge.store import KnowledgeStore
-from knowhelm.webexplore import verify as verify_mod
-from knowhelm.webexplore.actions import (
+from loreloop.evidence.chain import EvidenceChain
+from loreloop.knowledge.model import Channel, Entry, Kind, Source, Verification
+from loreloop.knowledge.store import KnowledgeStore
+from loreloop.webexplore import verify as verify_mod
+from loreloop.webexplore.actions import (
     ActionBlocked,
     ActionExecution,
     StepTrace,
     parse_action_script,
     script_locator,
 )
-from knowhelm.webexplore.browser import Observation
-from knowhelm.webexplore.verify import verify_entry
+from loreloop.webexplore.browser import Observation
+from loreloop.webexplore.verify import verify_entry
 
 PAGE = Observation(
     url="http://app.local/upload",
@@ -128,7 +128,7 @@ def test_verify_entry_without_anchor_counts_as_drifted_and_gets_anchored(env):
 def test_verify_entry_endorses_digest_of_reanchored_row(env):
     # The chain endorsement must match the row the run leaves behind
     # (anchored to the verified page), or injection would demote it.
-    from knowhelm.knowledge.endorsement import entry_digest, unendorsed_strong_ids
+    from loreloop.knowledge.endorsement import entry_digest, unendorsed_strong_ids
 
     store, chain = env
     entry = make_web_entry("stale-hash-from-old-ingest")
@@ -159,7 +159,7 @@ def test_verify_entry_drift_fail_keeps_old_anchor(env):
 
 
 def test_verify_entry_saves_artifact(env, tmp_path):
-    from knowhelm.evidence.artifacts import ArtifactStore
+    from loreloop.evidence.artifacts import ArtifactStore
 
     store, chain = env
     entry = make_web_entry(PAGE.snapshot_hash)
@@ -174,7 +174,7 @@ def test_verify_entry_saves_artifact(env, tmp_path):
 
 
 def test_verify_script_anchored_entry_replays_script_artifact(env, tmp_path, monkeypatch):
-    from knowhelm.evidence.artifacts import ArtifactStore
+    from loreloop.evidence.artifacts import ArtifactStore
 
     store, chain = env
     artifacts = ArtifactStore.for_workdir(tmp_path)
@@ -231,7 +231,7 @@ def test_verify_script_anchored_entry_replays_script_artifact(env, tmp_path, mon
 
 
 def test_verify_script_anchored_entry_blocked_does_not_contradict(env, tmp_path, monkeypatch):
-    from knowhelm.evidence.artifacts import ArtifactStore
+    from loreloop.evidence.artifacts import ArtifactStore
 
     store, chain = env
     artifacts = ArtifactStore.for_workdir(tmp_path)

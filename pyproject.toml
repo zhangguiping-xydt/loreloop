@@ -3,13 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "knowhelm"
+name = "loreloop"
 version = "0.1.0"
 description = "Knowledge-governed cockpit for coding agents: reverse-engineer project knowledge, inject it into Claude Code / Codex runs, and verify results with tamper-evident evidence."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
-authors = [{ name = "starry-knowhelm contributors" }]
+authors = [{ name = "LoreLoop contributors" }]
 keywords = ["ai", "coding-agent", "knowledge", "claude-code", "codex", "evidence", "acceptance"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -26,16 +26,16 @@ web = ["playwright>=1.40"]
 dev = ["pytest>=8.0", "ruff>=0.4"]
 
 [project.scripts]
-knowhelm = "knowhelm.cli:main"
+loreloop = "loreloop.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/starry-knowhelm/starry-knowhelm"
-Repository = "https://github.com/starry-knowhelm/starry-knowhelm"
-Issues = "https://github.com/starry-knowhelm/starry-knowhelm/issues"
-Changelog = "https://github.com/starry-knowhelm/starry-knowhelm/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/loreloop-ai/loreloop"
+Repository = "https://github.com/loreloop-ai/loreloop"
+Issues = "https://github.com/loreloop-ai/loreloop/issues"
+Changelog = "https://github.com/loreloop-ai/loreloop/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/knowhelm"]
+packages = ["src/loreloop"]
 
 [tool.ruff]
 line-length = 100

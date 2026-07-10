@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 
-from knowhelm.cli import build_parser, main
+from loreloop.cli import build_parser, main
 
 
 PUBLIC_HELP_PATHS = [
@@ -50,7 +50,7 @@ def render_help_snapshot() -> str:
         parser = root
         for token in path:
             parser = _subparser(parser, token)
-        command = " ".join(("knowhelm", *path, "--help"))
+        command = " ".join(("loreloop", *path, "--help"))
         sections.append(f"$ {command}\n{parser.format_help().rstrip()}")
     return "\n\n".join(sections) + "\n"
 
@@ -79,7 +79,7 @@ def test_every_public_help_path_runs_through_cli(capsys):
     for path in PUBLIC_HELP_PATHS:
         assert main([*path, "--help"]) == 0
         shown = capsys.readouterr().out
-        assert shown.startswith("usage: knowhelm")
+        assert shown.startswith("usage: loreloop")
 
 
 def test_parse_failure_has_error_reason_and_next_action(capsys):

@@ -1,4 +1,4 @@
-"""Run the complete knowhelm loop against the bundled legacy application.
+"""Run the complete LoreLoop cycle against the bundled legacy application.
 
 Default mode uses the selected local coding-agent CLI and Playwright. ``--offline``
 uses deterministic adapters so CI can prove the same first-run plumbing on every
@@ -76,7 +76,7 @@ class OfflineBrowser:
         self.headed = headed
 
     def observe(self, url: str):
-        from knowhelm.webexplore.browser import Observation
+        from loreloop.webexplore.browser import Observation
 
         source = (self.project / "app.py").read_text(encoding="utf-8")
         limit = re.search(r"MAX_UPLOAD_MIB = (\d+)", source).group(1)
@@ -112,34 +112,34 @@ def _wait_for(url: str) -> None:
 
 
 def _step(cli_main, argv: list[str]) -> None:
-    print(f"\n$ knowhelm {' '.join(argv)}", flush=True)
+    print(f"\n$ loreloop {' '.join(argv)}", flush=True)
     status = cli_main(argv)
     if status != 0:
         raise DemoError(f"step failed with exit code {status}: {' '.join(argv)}")
 
 
 def run_demo(workspace: Path, *, agent: str, offline: bool) -> Path:
-    from knowhelm import cli
+    from loreloop import cli
 
     template = Path(__file__).with_name("example") / "legacy_upload"
     project = workspace / "legacy-upload"
     shutil.copytree(template, project)
     _git(project, "init")
-    _git(project, "config", "user.email", "demo@knowhelm.local")
-    _git(project, "config", "user.name", "knowhelm demo")
+    _git(project, "config", "user.email", "demo@loreloop.local")
+    _git(project, "config", "user.name", "LoreLoop demo")
     _git(project, "add", "-A")
     _git(project, "commit", "-m", "baseline legacy upload service")
 
     previous_cwd = Path.cwd()
-    previous_key_dir = os.environ.get("KNOWHELM_KEY_DIR")
+    previous_key_dir = os.environ.get("LORELOOP_KEY_DIR")
     previous_agent_factory = cli._agent
     browser_module = None
     previous_browser = None
-    os.environ["KNOWHELM_KEY_DIR"] = str(workspace / "keys")
+    os.environ["LORELOOP_KEY_DIR"] = str(workspace / "keys")
     if offline:
         demo_agent = OfflineDemoAgent(project)
         cli._agent = lambda _name: demo_agent
-        import knowhelm.webexplore.browser as browser_module
+        import loreloop.webexplore.browser as browser_module
 
         previous_browser = browser_module.PlaywrightBrowser
         browser_module.PlaywrightBrowser = lambda headed=False: OfflineBrowser(project, headed)
@@ -159,7 +159,7 @@ def run_demo(workspace: Path, *, agent: str, offline: bool) -> Path:
                 "Raise the legacy upload ceiling from 5 MiB to 8 MiB and update its contract test.",
             ],
         )
-        run_id = max((project / ".knowhelm/runs").glob("run-*.jsonl")).stem
+        run_id = max((project / ".loreloop/runs").glob("run-*.jsonl")).stem
         _git(project, "add", "-A")
         _git(project, "commit", "-m", "raise upload ceiling to 8 MiB")
 
@@ -184,9 +184,9 @@ def run_demo(workspace: Path, *, agent: str, offline: bool) -> Path:
             server.wait(timeout=5)
         os.chdir(previous_cwd)
         if previous_key_dir is None:
-            os.environ.pop("KNOWHELM_KEY_DIR", None)
+            os.environ.pop("LORELOOP_KEY_DIR", None)
         else:
-            os.environ["KNOWHELM_KEY_DIR"] = previous_key_dir
+            os.environ["LORELOOP_KEY_DIR"] = previous_key_dir
         cli._agent = previous_agent_factory
         if browser_module is not None and previous_browser is not None:
             browser_module.PlaywrightBrowser = previous_browser
@@ -198,7 +198,7 @@ def main() -> int:
     parser.add_argument("--offline", action="store_true", help="use deterministic CI adapters")
     parser.add_argument("--workspace", type=Path)
     args = parser.parse_args()
-    workspace = args.workspace or Path(tempfile.mkdtemp(prefix="knowhelm-demo-"))
+    workspace = args.workspace or Path(tempfile.mkdtemp(prefix="loreloop-demo-"))
     workspace.mkdir(parents=True, exist_ok=True)
     try:
         run_demo(workspace.resolve(), agent=args.agent, offline=args.offline)

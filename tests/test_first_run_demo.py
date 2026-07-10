@@ -9,7 +9,7 @@ def test_bundled_offline_demo_completes_full_first_run(tmp_path):
         [
             sys.executable,
             "-m",
-            "knowhelm.cli",
+            "loreloop.cli",
             "demo",
             "--offline",
             "--workspace",
@@ -24,4 +24,4 @@ def test_bundled_offline_demo_completes_full_first_run(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Verdict: ACCEPTED" in result.stdout
     assert "harvested run" in result.stdout
-    assert (tmp_path / "legacy-upload/.knowhelm/knowledge.db").is_file()
+    assert (tmp_path / "legacy-upload/.loreloop/knowledge.db").is_file()

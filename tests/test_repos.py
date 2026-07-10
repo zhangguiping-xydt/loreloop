@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from knowhelm.cli import main
-from knowhelm.knowledge.repos import (
+from loreloop.cli import main
+from loreloop.knowledge.repos import (
     RepoConfigError,
     format_code_locator,
     load_repos,
@@ -60,7 +60,7 @@ def test_code_locator_rejects_invalid_input(locator):
 def test_load_repos_is_strict_and_resolves_relative_paths(tmp_path):
     workdir = init_repo(tmp_path / "workdir")
     backend = init_repo(tmp_path / "backend")
-    config = workdir / ".knowhelm/repos.json"
+    config = workdir / ".loreloop/repos.json"
     config.parent.mkdir()
     config.write_text(json.dumps({"version": 1, "repos": {"backend": "../backend"}}))
 
@@ -77,7 +77,7 @@ def test_load_repos_rejects_non_git_paths(tmp_path):
     workdir = init_repo(tmp_path / "workdir")
     plain = tmp_path / "plain"
     plain.mkdir()
-    config = workdir / ".knowhelm/repos.json"
+    config = workdir / ".loreloop/repos.json"
     config.parent.mkdir()
     config.write_text(json.dumps({"version": 1, "repos": {"plain": str(plain)}}))
 

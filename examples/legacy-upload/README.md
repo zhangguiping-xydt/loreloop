@@ -1,9 +1,9 @@
 # Five-minute legacy upload loop
 
-From the knowhelm source checkout, run:
+From the LoreLoop source checkout, run:
 
 ```bash
-knowhelm demo --agent codex
+loreloop demo --agent codex
 ```
 
 The script creates an isolated Git repository and visibly executes the complete
@@ -15,7 +15,7 @@ For a credential-free plumbing check (the mode used on Linux, macOS, and Windows
 CI), run:
 
 ```bash
-knowhelm demo --offline
+loreloop demo --offline
 ```
 
 Offline mode is not an agent-quality benchmark. It replaces only the external

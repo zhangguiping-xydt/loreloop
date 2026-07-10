@@ -3,13 +3,13 @@ import subprocess
 
 import pytest
 
-from knowhelm.evidence.artifacts import ArtifactStore
-from knowhelm.evidence.chain import EvidenceChain
-from knowhelm.knowledge.harvest import HarvestError, harvest_run
-from knowhelm.knowledge.model import Channel, Curation, Entry, Kind, Source, Verification
-from knowhelm.knowledge.store import KnowledgeStore
-from knowhelm.report.acceptance import load_run
-from knowhelm.webexplore.browser import Observation
+from loreloop.evidence.artifacts import ArtifactStore
+from loreloop.evidence.chain import EvidenceChain
+from loreloop.knowledge.harvest import HarvestError, harvest_run
+from loreloop.knowledge.model import Channel, Curation, Entry, Kind, Source, Verification
+from loreloop.knowledge.store import KnowledgeStore
+from loreloop.report.acceptance import load_run
+from loreloop.webexplore.browser import Observation
 
 
 class FakeRunner:
@@ -44,7 +44,7 @@ def head_of(repo):
 
 
 def write_trace(workdir, run_id, base_commit, finished=True):
-    runs = workdir / ".knowhelm/runs"
+    runs = workdir / ".loreloop/runs"
     runs.mkdir(parents=True, exist_ok=True)
     base_field = (
         {"base_commits": base_commit}
@@ -96,8 +96,8 @@ def record_browser_check(
 @pytest.fixture()
 def env(tmp_path):
     repo = make_repo(tmp_path)
-    (tmp_path / ".knowhelm").mkdir()
-    store = KnowledgeStore(tmp_path / ".knowhelm/knowledge.db")
+    (tmp_path / ".loreloop").mkdir()
+    store = KnowledgeStore(tmp_path / ".loreloop/knowledge.db")
     chain = EvidenceChain.for_workdir(tmp_path)
     artifacts = ArtifactStore.for_workdir(tmp_path)
     yield repo, store, chain, artifacts
@@ -198,7 +198,7 @@ def test_harvest_mints_browser_checks_as_born_verified(env):
 
 
 def test_harvest_mints_script_checks_with_script_locator(env):
-    from knowhelm.webexplore.actions import parse_action_script
+    from loreloop.webexplore.actions import parse_action_script
 
     repo, store, chain, artifacts = env
     trace = start_run(repo, chain, "run-x", head_of(repo))
@@ -261,7 +261,7 @@ def test_harvest_skips_non_browser_checks(env):
 def test_harvest_mints_successful_command_checks_as_verified_evidence(env):
     import sys
 
-    from knowhelm.report.acceptance import record_command_check
+    from loreloop.report.acceptance import record_command_check
 
     repo, store, chain, artifacts = env
     trace = start_run(repo, chain, "run-command", head_of(repo))
@@ -508,7 +508,7 @@ def test_harvest_mint_forces_canonical_fields_on_reused_row(env):
     assert stored.title == "upload rejects files over 50MB"
     assert stored.kind is Kind.ACCEPTANCE
     # the chain digest matches the cleaned row, not the planted one
-    from knowhelm.knowledge.endorsement import entry_digest
+    from loreloop.knowledge.endorsement import entry_digest
 
     rec = next(r for r in chain.verify() if r.event == "knowledge_harvested")
     assert rec.payload["minted"][planted.id] == entry_digest(stored)
@@ -520,7 +520,7 @@ def test_harvest_reports_reanchored_strong_entries_as_demoted(env):
     # so, because the operator has to re-approve deliberately.
     from datetime import datetime, timezone
 
-    from knowhelm.knowledge.endorsement import curate, unendorsed_strong_ids
+    from loreloop.knowledge.endorsement import curate, unendorsed_strong_ids
 
     repo, store, chain, artifacts = env
     base = head_of(repo)
@@ -609,7 +609,7 @@ def test_harvest_lists_prior_strong_entries_on_minted_pages_for_review(env):
     repo, store, chain, artifacts = env
     from datetime import datetime, timezone
 
-    from knowhelm.knowledge.model import Trust
+    from loreloop.knowledge.model import Trust
 
     prior = Entry(
         title="Old upload page fact", content="Upload page allows 100MB files.",
@@ -662,7 +662,7 @@ def test_harvest_review_skips_the_assertion_it_just_reminted(env):
 def test_harvest_flags_semantically_similar_code_claims_for_review(env):
     from datetime import datetime, timezone
 
-    from knowhelm.knowledge.endorsement import curate
+    from loreloop.knowledge.endorsement import curate
 
     repo, store, chain, artifacts = env
     base = head_of(repo)
@@ -748,7 +748,7 @@ def test_harvest_reanchors_unchanged_claim_instead_of_duplicating(env):
 
 
 def test_harvest_refuses_when_any_member_repository_is_dirty(tmp_path):
-    from knowhelm.knowledge.repos import save_repos
+    from loreloop.knowledge.repos import save_repos
 
     workdir = tmp_path / "workdir"
     backend = tmp_path / "backend"
@@ -756,9 +756,9 @@ def test_harvest_refuses_when_any_member_repository_is_dirty(tmp_path):
     backend.mkdir()
     make_repo(workdir)
     make_repo(backend)
-    (workdir / ".knowhelm").mkdir()
+    (workdir / ".loreloop").mkdir()
     save_repos(workdir, {"backend": backend})
-    store = KnowledgeStore(workdir / ".knowhelm/knowledge.db")
+    store = KnowledgeStore(workdir / ".loreloop/knowledge.db")
     chain = EvidenceChain.for_workdir(workdir)
     artifacts = ArtifactStore.for_workdir(workdir)
     bases = {".": head_of(workdir), "backend": head_of(backend)}
@@ -776,7 +776,7 @@ def test_harvest_refuses_when_any_member_repository_is_dirty(tmp_path):
 
 
 def test_harvest_reverses_each_repository_with_its_own_locator(tmp_path):
-    from knowhelm.knowledge.repos import save_repos
+    from loreloop.knowledge.repos import save_repos
 
     workdir = tmp_path / "workdir"
     backend = tmp_path / "backend"
@@ -784,9 +784,9 @@ def test_harvest_reverses_each_repository_with_its_own_locator(tmp_path):
     backend.mkdir()
     make_repo(workdir)
     make_repo(backend)
-    (workdir / ".knowhelm").mkdir()
+    (workdir / ".loreloop").mkdir()
     save_repos(workdir, {"backend": backend})
-    store = KnowledgeStore(workdir / ".knowhelm/knowledge.db")
+    store = KnowledgeStore(workdir / ".loreloop/knowledge.db")
     chain = EvidenceChain.for_workdir(workdir)
     artifacts = ArtifactStore.for_workdir(workdir)
     bases = {".": head_of(workdir), "backend": head_of(backend)}

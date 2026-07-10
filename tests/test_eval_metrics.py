@@ -103,12 +103,12 @@ def test_task_metrics_group_success_by_variant() -> None:
         [
             {"variant": "no_knowledge", "passed": False},
             {"variant": "no_knowledge", "passed": True},
-            {"variant": "knowhelm", "passed": True},
-            {"variant": "knowhelm", "passed": True},
+            {"variant": "loreloop", "passed": True},
+            {"variant": "loreloop", "passed": True},
         ]
     )
 
     assert result == {
-        "knowhelm": {"runs": 2, "passed": 2, "success_rate": 1.0},
+        "loreloop": {"runs": 2, "passed": 2, "success_rate": 1.0},
         "no_knowledge": {"runs": 2, "passed": 1, "success_rate": 0.5},
     }

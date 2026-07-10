@@ -1,5 +1,5 @@
-$ knowhelm --help
-usage: knowhelm [-h] [--agent {claude,codex}]
+$ loreloop --help
+usage: loreloop [-h] [--agent {claude,codex}]
                 {doctor,init,demo,ingest,repo,project,verify,run,check,report,harvest,knowledge}
                 ...
 
@@ -9,7 +9,7 @@ accepted outcomes to a tamper-evident knowledge loop.
 positional arguments:
   {doctor,init,demo,ingest,repo,project,verify,run,check,report,harvest,knowledge}
     doctor              check prerequisites and writable trust state
-    init                set up knowhelm in this project
+    init                set up LoreLoop in this project
     demo                run the bundled five-minute knowledge loop
     ingest              reverse-engineer knowledge from a source
     repo                manage repositories in this trust domain
@@ -27,22 +27,22 @@ options:
                         coding-agent CLI used for extraction and delegated
                         work (default: claude)
 
-$ knowhelm doctor --help
-usage: knowhelm doctor [-h]
+$ loreloop doctor --help
+usage: loreloop doctor [-h]
 
 options:
   -h, --help  show this help message and exit
 
-$ knowhelm init --help
-usage: knowhelm init [-h] [--skill | --no-skill]
+$ loreloop init --help
+usage: loreloop init [-h] [--skill | --no-skill]
 
 options:
   -h, --help  show this help message and exit
   --skill     install the companion skill without asking
   --no-skill  skip companion skill installation
 
-$ knowhelm demo --help
-usage: knowhelm demo [-h] [--offline] [--workspace WORKSPACE]
+$ loreloop demo --help
+usage: loreloop demo [-h] [--offline] [--workspace WORKSPACE]
                      [--agent {claude,codex}]
 
 options:
@@ -53,8 +53,8 @@ options:
   --agent {claude,codex}
                         override the coding-agent CLI for this action
 
-$ knowhelm ingest --help
-usage: knowhelm ingest [-h] --from {code,web} [--max-pages MAX_PAGES]
+$ loreloop ingest --help
+usage: loreloop ingest [-h] --from {code,web} [--max-pages MAX_PAGES]
                        [--headed] [--agent {claude,codex}]
                        target
 
@@ -69,8 +69,8 @@ options:
   --agent {claude,codex}
                         override the coding-agent CLI for this action
 
-$ knowhelm repo --help
-usage: knowhelm repo [-h] {add,list,remove} ...
+$ loreloop repo --help
+usage: loreloop repo [-h] {add,list,remove} ...
 
 positional arguments:
   {add,list,remove}
@@ -81,8 +81,8 @@ positional arguments:
 options:
   -h, --help         show this help message and exit
 
-$ knowhelm repo add --help
-usage: knowhelm repo add [-h] [--name NAME] REPO_PATH
+$ loreloop repo add --help
+usage: loreloop repo add [-h] [--name NAME] REPO_PATH
 
 positional arguments:
   REPO_PATH    Git repository root
@@ -91,14 +91,14 @@ options:
   -h, --help   show this help message and exit
   --name NAME  repository name; defaults to the directory name
 
-$ knowhelm repo list --help
-usage: knowhelm repo list [-h]
+$ loreloop repo list --help
+usage: loreloop repo list [-h]
 
 options:
   -h, --help  show this help message and exit
 
-$ knowhelm repo remove --help
-usage: knowhelm repo remove [-h] REPO_NAME
+$ loreloop repo remove --help
+usage: loreloop repo remove [-h] REPO_NAME
 
 positional arguments:
   REPO_NAME   declared repository name
@@ -106,8 +106,8 @@ positional arguments:
 options:
   -h, --help  show this help message and exit
 
-$ knowhelm project --help
-usage: knowhelm project [-h] {add,list,remove} ...
+$ loreloop project --help
+usage: loreloop project [-h] {add,list,remove} ...
 
 positional arguments:
   {add,list,remove}
@@ -118,8 +118,8 @@ positional arguments:
 options:
   -h, --help         show this help message and exit
 
-$ knowhelm project add --help
-usage: knowhelm project add [-h] [--id PROJECT_ID] [--name NAME]
+$ loreloop project add --help
+usage: loreloop project add [-h] [--id PROJECT_ID] [--name NAME]
                             [--alias ALIAS] [--tag TAG]
                             PROJECT_PATH
 
@@ -133,14 +133,14 @@ options:
   --alias ALIAS
   --tag TAG
 
-$ knowhelm project list --help
-usage: knowhelm project list [-h]
+$ loreloop project list --help
+usage: loreloop project list [-h]
 
 options:
   -h, --help  show this help message and exit
 
-$ knowhelm project remove --help
-usage: knowhelm project remove [-h] PROJECT_ID
+$ loreloop project remove --help
+usage: loreloop project remove [-h] PROJECT_ID
 
 positional arguments:
   PROJECT_ID  registered project id
@@ -148,8 +148,8 @@ positional arguments:
 options:
   -h, --help  show this help message and exit
 
-$ knowhelm verify --help
-usage: knowhelm verify [-h] [--headed] [--script SCRIPT] [--allow-writes]
+$ loreloop verify --help
+usage: loreloop verify [-h] [--headed] [--script SCRIPT] [--allow-writes]
                        [--agent {claude,codex}]
                        run_id url expectation
 
@@ -167,8 +167,8 @@ options:
   --agent {claude,codex}
                         override the coding-agent CLI for this action
 
-$ knowhelm run --help
-usage: knowhelm run [-h] [--no-expand] [--with-related]
+$ loreloop run --help
+usage: loreloop run [-h] [--no-expand] [--with-related]
                     [--related-limit RELATED_LIMIT] [--agent {claude,codex}]
                     task
 
@@ -184,8 +184,8 @@ options:
   --agent {claude,codex}
                         override the coding-agent CLI for this action
 
-$ knowhelm check --help
-usage: knowhelm check [-h] (--pass | --fail | --command COMMAND)
+$ loreloop check --help
+usage: loreloop check [-h] (--pass | --fail | --command COMMAND)
                       [--detail DETAIL] [--timeout TIMEOUT]
                       run_id check
 
@@ -202,8 +202,8 @@ options:
   --detail DETAIL
   --timeout TIMEOUT
 
-$ knowhelm report --help
-usage: knowhelm report [-h] [run_id]
+$ loreloop report --help
+usage: loreloop report [-h] [run_id]
 
 positional arguments:
   run_id
@@ -211,8 +211,8 @@ positional arguments:
 options:
   -h, --help  show this help message and exit
 
-$ knowhelm harvest --help
-usage: knowhelm harvest [-h] [--agent {claude,codex}] run_id
+$ loreloop harvest --help
+usage: loreloop harvest [-h] [--agent {claude,codex}] run_id
 
 positional arguments:
   run_id
@@ -222,8 +222,8 @@ options:
   --agent {claude,codex}
                         override the coding-agent CLI for this action
 
-$ knowhelm knowledge --help
-usage: knowhelm knowledge [-h]
+$ loreloop knowledge --help
+usage: loreloop knowledge [-h]
                           {list,search,import,export,approve,reject,supersede,verify,usage}
                           ...
 
@@ -242,15 +242,15 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
 
-$ knowhelm knowledge list --help
-usage: knowhelm knowledge list [-h] [--stale]
+$ loreloop knowledge list --help
+usage: loreloop knowledge list [-h] [--stale]
 
 options:
   -h, --help  show this help message and exit
   --stale     only entries whose code anchor drifted
 
-$ knowhelm knowledge search --help
-usage: knowhelm knowledge search [-h] [--all | --project PROJECT] [--tag TAG]
+$ loreloop knowledge search --help
+usage: loreloop knowledge search [-h] [--all | --project PROJECT] [--tag TAG]
                                  [--limit LIMIT]
                                  QUERY
 
@@ -264,8 +264,8 @@ options:
   --tag TAG          filter selected projects by tag
   --limit LIMIT
 
-$ knowhelm knowledge import --help
-usage: knowhelm knowledge import [-h] PROJECT_ID ENTRY_ID
+$ loreloop knowledge import --help
+usage: loreloop knowledge import [-h] PROJECT_ID ENTRY_ID
 
 positional arguments:
   PROJECT_ID
@@ -274,16 +274,16 @@ positional arguments:
 options:
   -h, --help  show this help message and exit
 
-$ knowhelm knowledge export --help
-usage: knowhelm knowledge export [-h] [--stale] [--output OUTPUT]
+$ loreloop knowledge export --help
+usage: loreloop knowledge export [-h] [--stale] [--output OUTPUT]
 
 options:
   -h, --help       show this help message and exit
   --stale
   --output OUTPUT  write Markdown to this path
 
-$ knowhelm knowledge approve --help
-usage: knowhelm knowledge approve [-h] ENTRY_ID
+$ loreloop knowledge approve --help
+usage: loreloop knowledge approve [-h] ENTRY_ID
 
 positional arguments:
   ENTRY_ID
@@ -291,8 +291,8 @@ positional arguments:
 options:
   -h, --help  show this help message and exit
 
-$ knowhelm knowledge reject --help
-usage: knowhelm knowledge reject [-h] ENTRY_ID
+$ loreloop knowledge reject --help
+usage: loreloop knowledge reject [-h] ENTRY_ID
 
 positional arguments:
   ENTRY_ID
@@ -300,8 +300,8 @@ positional arguments:
 options:
   -h, --help  show this help message and exit
 
-$ knowhelm knowledge supersede --help
-usage: knowhelm knowledge supersede [-h] NEW_ENTRY_ID OLD_ENTRY_ID
+$ loreloop knowledge supersede --help
+usage: loreloop knowledge supersede [-h] NEW_ENTRY_ID OLD_ENTRY_ID
 
 positional arguments:
   NEW_ENTRY_ID
@@ -310,8 +310,8 @@ positional arguments:
 options:
   -h, --help    show this help message and exit
 
-$ knowhelm knowledge verify --help
-usage: knowhelm knowledge verify [-h] [--headed] [--agent {claude,codex}]
+$ loreloop knowledge verify --help
+usage: loreloop knowledge verify [-h] [--headed] [--agent {claude,codex}]
                                  [ENTRY_ID]
 
 positional arguments:
@@ -323,8 +323,8 @@ options:
   --agent {claude,codex}
                         override the coding-agent CLI for this action
 
-$ knowhelm knowledge usage --help
-usage: knowhelm knowledge usage [-h]
+$ loreloop knowledge usage --help
+usage: loreloop knowledge usage [-h]
 
 options:
   -h, --help  show this help message and exit

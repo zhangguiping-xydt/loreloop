@@ -2,9 +2,9 @@
 
 ## Threat model: honest workstation
 
-knowhelm is local-first and assumes an **honest workstation**: the machine
-running knowhelm, its filesystem, and its OS user are trusted. Within that
-boundary, knowhelm defends against:
+LoreLoop is local-first and assumes an **honest workstation**: the machine
+running LoreLoop, its filesystem, and its OS user are trusted. Within that
+boundary, LoreLoop defends against:
 
 - **Prompt injection from explored web pages and knowledge entries.** Page
   content and stored knowledge are untrusted input. Deterministic assertions
@@ -24,11 +24,11 @@ boundary, knowhelm defends against:
   every record carries a valid HMAC from the out-of-tree key, so re-pinning
   the signed tail endorses nothing an agent could have written. The
   residual window — records appended in the instant before such a crash
-  are unpinned until the next knowhelm command re-pins them — requires the
+  are unpinned until the next LoreLoop command re-pins them — requires the
   crash itself and closes at the very next verification. Observations are content-addressed artifacts (SHA-256-named,
   re-hashed on load and cross-checked against the url/snapshot pin recorded
   on the chain; an artifact-bearing check without that pin is itself an
-  integrity failure). Run traces under `.knowhelm/runs/` are display
+  integrity failure). Run traces under `.loreloop/runs/` are display
   material only: acceptance and harvest key off the chain-endorsed
   `delegation_completed` record (run id, task, context, base commit), so a
   forged `delegation_finished` line or an edited `base_commit` in the trace
@@ -43,7 +43,7 @@ boundary, knowhelm defends against:
   store sits inside the agent-writable tree, so its trust columns are not
   taken at face value: every approval, verification and supersession is also
   endorsed on the evidence chain, and each trust-raising event binds a
-  digest of the entry's content and source. Before injection, `knowhelm run`
+  digest of the entry's content and source. Before injection, `loreloop run`
   recomputes that digest from the current DB row — an entry whose strong bit
   has no chain endorsement, or whose content was rewritten after
   endorsement, is demoted to reference; a row whose current digest is
@@ -69,7 +69,7 @@ boundary, knowhelm defends against:
   verifications always anchor the entry to the
   observed page hash — an anchor-less entry counts as drifted, never as
   fresh.
-- **Accidental credential capture.** knowhelm never automates logins: at a
+- **Accidental credential capture.** LoreLoop never automates logins: at a
   login wall it either skips the page or hands the real browser window to
   the human. Observation artifacts may contain post-login page content, so
   they are written 0600 in a 0700 directory.
@@ -97,15 +97,15 @@ These statements are observable behavior, not aspirational documentation:
 On POSIX, newly created key/artifact directories and files use `0700`/`0600`.
 On Windows, Python's POSIX mode bits are not an ACL mechanism; confidentiality
 there relies on the current user's profile/directory ACL. A custom
-`KNOWHELM_KEY_DIR` remains the operator's security boundary and should not be
+`LORELOOP_KEY_DIR` remains the operator's security boundary and should not be
 shared with other accounts.
 
 ## Known limitations (deliberate trade-offs)
 
-- **Injection trusts the last verification.** `knowhelm run` does not
+- **Injection trusts the last verification.** `loreloop run` does not
   re-open a browser to re-check strong web entries before injecting them;
   live pages may have drifted since verification. Re-verification is an
-  explicit, human-initiated act (`knowhelm knowledge verify`) because a
+  explicit, human-initiated act (`loreloop knowledge verify`) because a
   silent per-run browser sweep would be slow, break offline use, and hit
   live systems as a side effect. `run` prints a reminder when strong web
   entries are injected.
@@ -114,21 +114,21 @@ shared with other accounts.
   structure — not links or the full DOM. Including navigation/ad noise
   would flag drift on every page load; the bound is the same one the judge
   actually reads, so what is hashed is what was judged.
-- **Operator-vouched checks carry no machine evidence.** `knowhelm check`
+- **Operator-vouched checks carry no machine evidence.** `loreloop check`
   records the operator's word (labeled `judge: operator` on the chain).
   Reports call these out, and harvest never mints knowledge from them.
 
 ## Key material
 
 The evidence chain HMAC key lives **outside the project tree**, in
-`~/.knowhelm/keys/` (one key per project, owner-only permissions; override
-with `KNOWHELM_KEY_DIR`). Coding agents routinely get write access to the
+`~/.loreloop/keys/` (one key per project, owner-only permissions; override
+with `LORELOOP_KEY_DIR`). Coding agents routinely get write access to the
 project directory, so the referee's stamp deliberately does not sit inside
-the player's sandbox: an agent that rewrites `.knowhelm/evidence.jsonl`
+the player's sandbox: an agent that rewrites `.loreloop/evidence.jsonl`
 cannot re-sign it. This raises the bar from "any process with workdir
 access" to "a process that reaches into the operator's home directory" —
 it is still not a defense against a local root attacker. Do not commit
-`.knowhelm/` to a public repository — evidence artifacts can embed page
+`.loreloop/` to a public repository — evidence artifacts can embed page
 content from your running application.
 
 ## Reporting a vulnerability

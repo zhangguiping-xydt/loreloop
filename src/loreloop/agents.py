@@ -1,6 +1,6 @@
 """Thin adapter over local agent CLIs (claude -p / codex exec).
 
-knowhelm never calls a model API directly: it reuses the coding-agent CLI the
+loreloop never calls a model API directly: it reuses the coding-agent CLI the
 user already has, so there is no API key configuration of its own.
 """
 

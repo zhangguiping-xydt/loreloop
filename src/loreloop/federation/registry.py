@@ -1,4 +1,4 @@
-"""User-level registry of knowhelm trust domains."""
+"""User-level registry of LoreLoop trust domains."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..knowledge.repos import RepoConfigError, load_repos, validate_repo_name
+from ..paths import registry_file, state_path
 
 
 class RegistryError(Exception):
@@ -26,8 +27,7 @@ class Project:
 
 
 def registry_path() -> Path:
-    configured = os.environ.get("KNOWHELM_REGISTRY")
-    return Path(configured).expanduser() if configured else Path.home() / ".knowhelm/projects.json"
+    return registry_file()
 
 
 def load_projects() -> dict[str, Project]:
@@ -92,8 +92,8 @@ def add_project(
     tags: list[str] | None = None,
 ) -> Project:
     resolved = project_path.expanduser().resolve()
-    if not (resolved / ".knowhelm/knowledge.db").is_file():
-        raise RegistryError(f"not a knowhelm trust domain: {resolved}")
+    if not state_path(resolved, "knowledge.db").is_file():
+        raise RegistryError(f"not a LoreLoop trust domain: {resolved}")
     raw_id = project_id or resolved.name
     try:
         normalized_id = validate_repo_name(raw_id)

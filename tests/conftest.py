@@ -3,12 +3,12 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_key_dir(tmp_path_factory, monkeypatch):
-    """Evidence keys live outside the project tree (~/.knowhelm/keys); tests
+    """Evidence keys live outside the project tree (~/.loreloop/keys); tests
     must never touch the real home directory."""
     monkeypatch.setenv(
-        "KNOWHELM_KEY_DIR", str(tmp_path_factory.mktemp("knowhelm-keys"))
+        "LORELOOP_KEY_DIR", str(tmp_path_factory.mktemp("loreloop-keys"))
     )
     monkeypatch.setenv(
-        "KNOWHELM_REGISTRY",
-        str(tmp_path_factory.mktemp("knowhelm-registry") / "projects.json"),
+        "LORELOOP_REGISTRY",
+        str(tmp_path_factory.mktemp("loreloop-registry") / "projects.json"),
     )

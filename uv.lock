@@ -98,7 +98,7 @@ wheels = [
 ]
 
 [[package]]
-name = "knowhelm"
+name = "loreloop"
 version = "0.1.0"
 source = { editable = "." }
 

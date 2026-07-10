@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from knowhelm.evidence.chain import (
+from loreloop.evidence.chain import (
     ChainVerificationError,
     EvidenceChain,
     LegacyKeyError,
@@ -29,7 +29,7 @@ def test_empty_chain_verifies(chain):
 
 
 def _rewrite(tmp_path, mutate):
-    path = tmp_path / ".knowhelm/evidence.jsonl"
+    path = tmp_path / ".loreloop/evidence.jsonl"
     lines = [json.loads(line) for line in path.read_text().splitlines()]
     mutate(lines)
     path.write_text("\n".join(json.dumps(rec, sort_keys=True) for rec in lines) + "\n")
@@ -61,7 +61,7 @@ def test_detects_forged_record_without_key(chain, tmp_path):
         "chain_hash": "0" * 64,
         "signature": "hmac-sha256:" + "0" * 64,
     }
-    path = tmp_path / ".knowhelm/evidence.jsonl"
+    path = tmp_path / ".loreloop/evidence.jsonl"
     with path.open("a") as fh:
         fh.write(json.dumps(forged, sort_keys=True) + "\n")
     with pytest.raises(ChainVerificationError, match="record 1"):
@@ -83,11 +83,11 @@ def test_key_lives_outside_the_project_tree(tmp_path):
     EvidenceChain.for_workdir(tmp_path)
     key_path = key_path_for(tmp_path)
     assert not key_path.is_relative_to(tmp_path)
-    assert not (tmp_path / ".knowhelm/evidence.key").exists()
+    assert not (tmp_path / ".loreloop/evidence.key").exists()
 
 
 def test_legacy_in_tree_key_refuses_instead_of_accusing_tampering(tmp_path):
-    legacy = tmp_path / ".knowhelm/evidence.key"
+    legacy = tmp_path / ".loreloop/evidence.key"
     legacy.parent.mkdir(parents=True)
     legacy.write_bytes(b"k" * 32)
     with pytest.raises(LegacyKeyError, match="legacy evidence key"):
@@ -96,9 +96,9 @@ def test_legacy_in_tree_key_refuses_instead_of_accusing_tampering(tmp_path):
 
 def test_operator_moved_legacy_key_keeps_old_chain_verifiable(tmp_path):
     # sign a chain the pre-relocation way: key inside the project tree
-    legacy = tmp_path / ".knowhelm/evidence.key"
+    legacy = tmp_path / ".loreloop/evidence.key"
     legacy.parent.mkdir(parents=True)
-    old = EvidenceChain(tmp_path / ".knowhelm/evidence.jsonl", legacy)
+    old = EvidenceChain(tmp_path / ".loreloop/evidence.jsonl", legacy)
     old.append("check_passed", {"check": "history"})
 
     # operator chooses continuity: mv <legacy> <expected>
@@ -148,7 +148,7 @@ def test_append_refuses_to_extend_edited_chain(chain, tmp_path):
 
 def test_detects_full_chain_replacement(chain, tmp_path):
     chain.append("check_failed", {"check": "inconvenient"})
-    (tmp_path / ".knowhelm/evidence.jsonl").unlink()
+    (tmp_path / ".loreloop/evidence.jsonl").unlink()
     fresh = EvidenceChain.for_workdir(tmp_path)
     with pytest.raises(ChainVerificationError):
         fresh.verify()
@@ -171,7 +171,7 @@ def test_malformed_head_is_a_verification_error(chain):
 
 
 def test_invalid_existing_key_length_is_refused(tmp_path):
-    from knowhelm.evidence.chain import KeyMaterialError
+    from loreloop.evidence.chain import KeyMaterialError
 
     key = key_path_for(tmp_path)
     key.parent.mkdir(parents=True, exist_ok=True)

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+from ..paths import state_path
 from .browser import Browser, Observation, same_origin
 
 
@@ -42,7 +43,7 @@ class Explorer:
     ) -> None:
         self._browser = browser
         self._workdir = workdir
-        self._trace_dir = workdir / ".knowhelm/explorations"
+        self._trace_dir = state_path(workdir, "explorations")
         self._trace_dir.mkdir(parents=True, exist_ok=True)
         self._max_pages = max_pages
         self._on_login_wall = on_login_wall
@@ -222,7 +223,7 @@ class Explorer:
 
 _ROUTE_RE = re.compile(r"""["'`](/[A-Za-z0-9._~!$&'()*+,;=:@/%-]{1,120})["'`]""")
 _ROUTE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".html"}
-_SKIP_DIRS = {".git", ".knowhelm", "node_modules", ".venv", "venv", "dist", "build"}
+_SKIP_DIRS = {".git", ".loreloop", "node_modules", ".venv", "venv", "dist", "build"}
 
 
 def _iter_route_files(root: Path):

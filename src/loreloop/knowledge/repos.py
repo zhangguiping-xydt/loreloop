@@ -1,4 +1,4 @@
-"""Declared git repositories that belong to one knowhelm trust domain."""
+"""Declared git repositories that belong to one LoreLoop trust domain."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import json
 import os
 import re
 from pathlib import Path, PurePosixPath
+
+from ..paths import state_path
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
@@ -21,7 +23,7 @@ def validate_repo_name(name: str) -> str:
 
 
 def load_repos(workdir: Path) -> dict[str, Path]:
-    path = workdir / ".knowhelm/repos.json"
+    path = state_path(workdir, "repos.json")
     if not path.exists():
         return {}
     try:
@@ -58,7 +60,7 @@ def save_repos(workdir: Path, repos: dict[str, Path]) -> None:
         if not resolved.is_dir() or not (resolved / ".git").exists():
             raise RepoConfigError(f"repository {name!r} is not a git root: {resolved}")
         normalized[name] = str(resolved)
-    path = workdir / ".knowhelm/repos.json"
+    path = state_path(workdir, "repos.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(

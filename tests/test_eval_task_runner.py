@@ -28,7 +28,7 @@ print("done")
     spec = next(item for item in specs if item["id"] == "upload-limit-policy")
 
     plain = task_runner.run_task(spec, agent="codex", variant="no_knowledge", timeout=30)
-    governed = task_runner.run_task(spec, agent="codex", variant="knowhelm", timeout=30)
+    governed = task_runner.run_task(spec, agent="codex", variant="loreloop", timeout=30)
 
     assert not plain["passed"]
     assert plain["public_test_exit_code"] == 0
@@ -41,7 +41,7 @@ def test_task_prompt_keeps_knowledge_out_of_no_context_variant() -> None:
     spec = json.loads((task_runner.TASK_ROOT / "tasks.json").read_text(encoding="utf-8"))[0]
 
     plain = task_runner._task_prompt(spec, "no_knowledge")
-    governed = task_runner._task_prompt(spec, "knowhelm")
+    governed = task_runner._task_prompt(spec, "loreloop")
 
     assert "37 MiB" not in plain
     assert "37 MiB" in governed

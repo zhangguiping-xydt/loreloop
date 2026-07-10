@@ -12,7 +12,7 @@ def session(**changes):
         "completed": True,
         "time_to_first_success_seconds": 240,
         "wrong_turns": ["ran init before doctor"],
-        "help_lookups": ["knowhelm init --help"],
+        "help_lookups": ["loreloop init --help"],
         "recovery_attempts": ["ran doctor"],
         "abandoned_step": None,
         "trust_model_explanation": "The chain, not SQLite, grants trust.",

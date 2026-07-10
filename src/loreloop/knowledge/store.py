@@ -181,7 +181,7 @@ class KnowledgeStore:
         if version > SCHEMA_VERSION:
             raise SchemaVersionError(
                 f"knowledge database schema {version} is newer than supported "
-                f"schema {SCHEMA_VERSION}; upgrade knowhelm or restore a compatible backup"
+                f"schema {SCHEMA_VERSION}; upgrade LoreLoop or restore a compatible backup"
             )
         if version == SCHEMA_VERSION:
             return

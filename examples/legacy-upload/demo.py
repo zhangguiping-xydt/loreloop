@@ -1,6 +1,6 @@
 """Source-checkout entry point for the packaged five-minute demo."""
 
-from knowhelm.demo import main
+from loreloop.demo import main
 
 
 if __name__ == "__main__":

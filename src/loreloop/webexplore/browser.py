@@ -63,14 +63,14 @@ def same_origin(a: str, b: str) -> bool:
 
 
 class PlaywrightBrowser:
-    """Playwright-backed browser. Requires ``pip install knowhelm[web]``."""
+    """Playwright-backed browser. Requires ``pip install loreloop[web]``."""
 
     def __init__(self, headed: bool = False, timeout_ms: int = 15000) -> None:
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
             raise BrowserUnavailable(
-                "playwright is not installed; run: pip install 'knowhelm[web]' "
+                "playwright is not installed; run: pip install 'loreloop[web]' "
                 "&& playwright install chromium"
             ) from exc
         try:
@@ -167,8 +167,8 @@ class PlaywrightBrowser:
         )
 
     def wait_for_user(self, message: str) -> None:
-        print(f"\n[knowhelm] {message}")
-        input("[knowhelm] press Enter when done... ")
+        print(f"\n[LoreLoop] {message}")
+        input("[LoreLoop] press Enter when done... ")
 
     def close(self) -> None:
         self._browser.close()

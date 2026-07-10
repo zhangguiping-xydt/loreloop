@@ -1,4 +1,4 @@
-"""Tiny legacy upload service used by the five-minute knowhelm walkthrough."""
+"""Tiny legacy upload service used by the five-minute LoreLoop walkthrough."""
 
 from __future__ import annotations
 

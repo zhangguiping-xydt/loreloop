@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from knowhelm.evidence.chain import EvidenceChain
-from knowhelm.knowledge.endorsement import (
+from loreloop.evidence.chain import EvidenceChain
+from loreloop.knowledge.endorsement import (
     chain_endorsed_strong_ids,
     chain_rejected_ids,
     chain_superseded_ids,
@@ -18,7 +18,7 @@ from knowhelm.knowledge.endorsement import (
     entry_digest,
     unendorsed_strong_ids,
 )
-from knowhelm.knowledge.model import (
+from loreloop.knowledge.model import (
     Channel,
     Curation,
     Entry,
@@ -27,7 +27,7 @@ from knowhelm.knowledge.model import (
     Trust,
     Verification,
 )
-from knowhelm.knowledge.store import InvalidTransition, KnowledgeStore
+from loreloop.knowledge.store import InvalidTransition, KnowledgeStore
 
 NOW = datetime(2026, 7, 9, tzinfo=timezone.utc)
 
@@ -87,8 +87,8 @@ def strong(entry):
 
 @pytest.fixture()
 def env(tmp_path):
-    (tmp_path / ".knowhelm").mkdir()
-    store = KnowledgeStore(tmp_path / ".knowhelm/knowledge.db")
+    (tmp_path / ".loreloop").mkdir()
+    store = KnowledgeStore(tmp_path / ".loreloop/knowledge.db")
     chain = EvidenceChain.for_workdir(tmp_path)
     yield store, chain
     store.close()

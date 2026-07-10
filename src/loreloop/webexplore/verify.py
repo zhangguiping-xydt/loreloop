@@ -10,7 +10,7 @@ Two verification modes, deterministic first:
   page are content to report on, never commands to follow.
 
 Every check saves the full observation as a content-addressed artifact under
-``.knowhelm/evidence/artifacts/`` and records its hash on the evidence chain,
+``.loreloop/evidence/artifacts/`` and records its hash on the evidence chain,
 so verdicts can be re-audited after the live page changes.
 """
 

@@ -3,9 +3,9 @@ import sys
 
 import pytest
 
-from knowhelm.cli import main
-from knowhelm.evidence.chain import EvidenceChain
-from knowhelm.report.acceptance import (
+from loreloop.cli import main
+from loreloop.evidence.chain import EvidenceChain
+from loreloop.report.acceptance import (
     load_run,
     record_check,
     record_command_check,
@@ -20,7 +20,7 @@ def workdir(tmp_path, monkeypatch):
 
 
 def write_trace(workdir, run_id="run-20260708-abc123", finished=True):
-    runs = workdir / ".knowhelm/runs"
+    runs = workdir / ".loreloop/runs"
     runs.mkdir(parents=True, exist_ok=True)
     events = [
         {"ts": "t0", "event": "delegation_started", "task": "fix upload", "context_entries": ["e1"]},
@@ -134,11 +134,11 @@ def test_base_commits_reads_new_and_legacy_formats(workdir):
         "context_entries": [],
         "base_commit": "abc",
     })
-    from knowhelm.report.acceptance import evaluate_run
+    from loreloop.report.acceptance import evaluate_run
 
     assert evaluate_run(legacy, legacy_chain).base_commits == {".": "abc"}
 
-    new_trace = workdir / ".knowhelm/runs/run-new.jsonl"
+    new_trace = workdir / ".loreloop/runs/run-new.jsonl"
     new_trace.write_text(json.dumps({
         "event": "delegation_started",
         "task": "new",
@@ -149,9 +149,9 @@ def test_base_commits_reads_new_and_legacy_formats(workdir):
 
 
 def test_load_run_rejects_invalid_repository_name_in_base_commits(workdir):
-    from knowhelm.report.acceptance import RunTraceError
+    from loreloop.report.acceptance import RunTraceError
 
-    trace = workdir / ".knowhelm/runs/run-bad-repo.jsonl"
+    trace = workdir / ".loreloop/runs/run-bad-repo.jsonl"
     trace.parent.mkdir(parents=True, exist_ok=True)
     trace.write_text(json.dumps({
         "event": "delegation_started",
@@ -184,7 +184,7 @@ def test_cli_check_and_report_flow(workdir, capsys):
 
 
 def test_command_check_records_reauditable_deterministic_evidence(workdir):
-    from knowhelm.evidence.artifacts import ArtifactStore
+    from loreloop.evidence.artifacts import ArtifactStore
 
     trace = write_trace(workdir)
     run = load_run(trace)
@@ -231,8 +231,8 @@ def test_cli_report_without_runs_errors(workdir, capsys):
 
 
 def test_knowledge_usage_reports_injections_and_accepted_runs(workdir, capsys):
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
     entry = Entry(
         title="Upload limit",
@@ -240,7 +240,7 @@ def test_knowledge_usage_reports_injections_and_accepted_runs(workdir, capsys):
         kind=Kind.CONSTRAINT,
         source=Source(channel=Channel.MANUAL, locator="manual:upload-limit"),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(entry)
@@ -278,7 +278,7 @@ def test_cli_report_broken_chain_exits_cleanly(workdir, capsys):
     endorse_run(chain, run.run_id)
     record_check(chain, run.run_id, "upload returns 201", passed=True)
 
-    path = workdir / ".knowhelm/evidence.jsonl"
+    path = workdir / ".loreloop/evidence.jsonl"
     lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     lines[0]["payload"]["task"] = "forged task"
     path.write_text("\n".join(json.dumps(line, sort_keys=True) for line in lines) + "\n")
@@ -290,7 +290,7 @@ def test_cli_report_broken_chain_exits_cleanly(workdir, capsys):
 
 
 def test_cli_report_bad_trace_json_exits_cleanly(workdir, capsys):
-    runs = workdir / ".knowhelm/runs"
+    runs = workdir / ".loreloop/runs"
     runs.mkdir(parents=True)
     (runs / "run-bad.jsonl").write_text("{not json\n", encoding="utf-8")
 
@@ -302,7 +302,7 @@ def test_cli_report_bad_trace_json_exits_cleanly(workdir, capsys):
 
 
 def test_cli_harvest_trace_without_started_exits_cleanly(workdir, capsys):
-    runs = workdir / ".knowhelm/runs"
+    runs = workdir / ".loreloop/runs"
     runs.mkdir(parents=True)
     (runs / "run-no-start.jsonl").write_text(
         json.dumps({"event": "delegation_finished"}) + "\n",
@@ -316,10 +316,10 @@ def test_cli_harvest_trace_without_started_exits_cleanly(workdir, capsys):
 
 
 def test_cli_knowledge_curation_flow(workdir, capsys):
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     entry = Entry(
         title="Upload contract",
@@ -339,7 +339,7 @@ def test_cli_knowledge_curation_flow(workdir, capsys):
 
     # the approval is endorsed on the evidence chain, not just the DB,
     # and bound to the entry's content digest
-    from knowhelm.knowledge.endorsement import entry_digest
+    from loreloop.knowledge.endorsement import entry_digest
 
     records = EvidenceChain.for_workdir(workdir).verify()
     assert records[-1].event == "curation_changed"
@@ -351,10 +351,10 @@ def test_cli_knowledge_curation_flow(workdir, capsys):
 
 
 def test_cli_knowledge_export_markdown(workdir, capsys):
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     entry = Entry(
         title="Upload contract",
@@ -367,22 +367,22 @@ def test_cli_knowledge_export_markdown(workdir, capsys):
 
     assert main(["knowledge", "export"]) == 0
     out = capsys.readouterr().out
-    assert "# knowhelm knowledge export" in out
+    assert "# loreloop knowledge export" in out
     assert "Upload contract" in out
     assert "POST /upload returns 201." in out
     assert "api.py@abc" in out
 
-    target = workdir / ".knowhelm/exports/knowledge.md"
+    target = workdir / ".loreloop/exports/knowledge.md"
     assert main(["knowledge", "export", "--output", str(target)]) == 0
     assert "exported 1 entries" in capsys.readouterr().out
     assert "Snapshot: `abc`" in target.read_text(encoding="utf-8")
 
 
 def test_cli_curation_rejects_missing_or_ambiguous_prefix(workdir, capsys):
-    from knowhelm.knowledge.store import KnowledgeStore
+    from loreloop.knowledge.store import KnowledgeStore
 
-    (workdir / ".knowhelm").mkdir()
-    KnowledgeStore(workdir / ".knowhelm/knowledge.db").close()
+    (workdir / ".loreloop").mkdir()
+    KnowledgeStore(workdir / ".loreloop/knowledge.db").close()
 
     assert main(["knowledge", "approve", "deadbeef"]) == 2
     assert "no entry matches" in capsys.readouterr().err
@@ -391,10 +391,10 @@ def test_cli_curation_rejects_missing_or_ambiguous_prefix(workdir, capsys):
 
 
 def test_cli_invalid_curation_transition_exits_cleanly(workdir, capsys):
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     entry = Entry(
         title="T", content="C", kind=Kind.INTERFACE,
@@ -424,11 +424,11 @@ def test_cli_report_and_harvest_reject_path_traversal_run_ids(workdir, capsys):
 def test_cli_run_demotes_unendorsed_strong_entries(workdir, monkeypatch, capsys):
     from datetime import datetime, timezone
 
-    import knowhelm.cli as cli
-    from knowhelm.knowledge.model import (
+    import loreloop.cli as cli
+    from loreloop.knowledge.model import (
         Channel, Entry, Kind, Source, Trust, Verification,
     )
-    from knowhelm.knowledge.store import KnowledgeStore
+    from loreloop.knowledge.store import KnowledgeStore
 
     class FakeAgent:
         def __init__(self):
@@ -446,7 +446,7 @@ def test_cli_run_demotes_unendorsed_strong_entries(workdir, monkeypatch, capsys)
         source=Source(channel=Channel.WEB, locator="http://app.local/upload"),
         trust=Trust(verification=Verification.VERIFIED, verified_at=now, verified_by="forged"),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(laundered)
@@ -464,9 +464,9 @@ def test_cli_run_demotes_unendorsed_strong_entries(workdir, monkeypatch, capsys)
 
 
 def test_cli_run_keeps_chain_endorsed_strong_entries(workdir, monkeypatch, capsys):
-    import knowhelm.cli as cli
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    import loreloop.cli as cli
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
     class FakeAgent:
         def __init__(self):
@@ -482,7 +482,7 @@ def test_cli_run_keeps_chain_endorsed_strong_entries(workdir, monkeypatch, capsy
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator="api.py@abc"),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(entry)
@@ -499,9 +499,9 @@ def test_cli_run_keeps_chain_endorsed_strong_entries(workdir, monkeypatch, capsy
 
 
 def test_cli_run_keeps_chain_approved_entry_after_db_curation_flip(workdir, monkeypatch, capsys):
-    import knowhelm.cli as cli
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    import loreloop.cli as cli
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
     class FakeAgent:
         def __init__(self):
@@ -517,7 +517,7 @@ def test_cli_run_keeps_chain_approved_entry_after_db_curation_flip(workdir, monk
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator="api.py@abc"),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(entry)
@@ -542,9 +542,9 @@ def test_cli_run_keeps_chain_approved_entry_after_db_curation_flip(workdir, monk
 
 
 def test_cli_run_keeps_chain_approved_entry_after_db_rejection(workdir, monkeypatch, capsys):
-    import knowhelm.cli as cli
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    import loreloop.cli as cli
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
     class FakeAgent:
         def __init__(self):
@@ -560,7 +560,7 @@ def test_cli_run_keeps_chain_approved_entry_after_db_rejection(workdir, monkeypa
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator="api.py@abc"),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(entry)
@@ -583,9 +583,9 @@ def test_cli_run_keeps_chain_approved_entry_after_db_rejection(workdir, monkeypa
 def test_cli_run_keeps_chain_approved_entry_after_db_only_supersede_link(
     workdir, monkeypatch, capsys
 ):
-    import knowhelm.cli as cli
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Link, LinkType, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    import loreloop.cli as cli
+    from loreloop.knowledge.model import Channel, Entry, Kind, Link, LinkType, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
     class FakeAgent:
         def __init__(self):
@@ -607,7 +607,7 @@ def test_cli_run_keeps_chain_approved_entry_after_db_only_supersede_link(
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator="api.py@def"),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(old)
@@ -632,9 +632,9 @@ def test_cli_run_does_not_claim_drifted_chain_backed_entry_as_established(
 ):
     import subprocess
 
-    import knowhelm.cli as cli
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    import loreloop.cli as cli
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
     class FakeAgent:
         def __init__(self):
@@ -663,7 +663,7 @@ def test_cli_run_does_not_claim_drifted_chain_backed_entry_as_established(
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(entry)
@@ -692,9 +692,9 @@ def test_cli_run_does_not_claim_drifted_chain_backed_entry_as_established(
 def test_cli_run_demotes_entry_whose_content_changed_after_endorsement(workdir, monkeypatch, capsys):
     # H2 end-to-end: approve, then rewrite the row's content by SQL. The
     # endorsement is bound to the old digest, so cmd_run injects as reference.
-    import knowhelm.cli as cli
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    import loreloop.cli as cli
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
     class FakeAgent:
         def __init__(self):
@@ -710,7 +710,7 @@ def test_cli_run_demotes_entry_whose_content_changed_after_endorsement(workdir, 
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator="api.py@abc"),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(entry)
@@ -737,9 +737,9 @@ def test_cli_run_demotes_entry_whose_content_changed_after_endorsement(workdir, 
 def test_cli_run_ignores_deleted_supersede_link(workdir, monkeypatch, capsys):
     # H3 attack: after the curator supersedes an old strong entry, the agent
     # deletes the links row. The chain replay must keep it out of injection.
-    import knowhelm.cli as cli
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    import loreloop.cli as cli
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
     class FakeAgent:
         def __init__(self):
@@ -757,7 +757,7 @@ def test_cli_run_ignores_deleted_supersede_link(workdir, monkeypatch, capsys):
         title="New upload contract", content="POST /upload returns 201.",
         kind=Kind.INTERFACE, source=Source(channel=Channel.CODE, locator="api.py@def"),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(old)
@@ -791,10 +791,10 @@ def test_cli_run_ignores_db_resurrection_of_rejected_entry(workdir, monkeypatch,
     # re-inject it as strong — the chain-rejected replay must keep it out.
     from datetime import datetime, timezone
 
-    import knowhelm.cli as cli
-    from knowhelm.knowledge.endorsement import entry_digest
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    import loreloop.cli as cli
+    from loreloop.knowledge.endorsement import entry_digest
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
     class FakeAgent:
         def __init__(self):
@@ -810,7 +810,7 @@ def test_cli_run_ignores_db_resurrection_of_rejected_entry(workdir, monkeypatch,
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.WEB, locator="http://app.local/upload"),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(entry)
@@ -845,9 +845,9 @@ def test_cli_run_ignores_db_resurrection_of_rejected_entry(workdir, monkeypatch,
 
 
 def test_cli_run_expands_query_and_degrades_on_bad_expansion(workdir, monkeypatch, capsys):
-    import knowhelm.cli as cli
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    import loreloop.cli as cli
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
     class FakeAgent:
         """First call is query expansion, second is the delegation."""
@@ -868,7 +868,7 @@ def test_cli_run_expands_query_and_degrades_on_bad_expansion(workdir, monkeypatc
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator="api.py@abc"),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(entry)
@@ -897,10 +897,10 @@ def test_cli_knowledge_list_flags_unendorsed_strong_as_ref(workdir, capsys):
     # injection.
     from datetime import datetime, timezone
 
-    from knowhelm.knowledge.model import (
+    from loreloop.knowledge.model import (
         Channel, Entry, Kind, Source, Trust, Verification,
     )
-    from knowhelm.knowledge.store import KnowledgeStore
+    from loreloop.knowledge.store import KnowledgeStore
 
     laundered = Entry(
         title="Laundered fact", content="Agent says this is verified.",
@@ -911,7 +911,7 @@ def test_cli_knowledge_list_flags_unendorsed_strong_as_ref(workdir, capsys):
             verified_at=datetime.now(timezone.utc), verified_by="forged",
         ),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(laundered)
@@ -925,8 +925,8 @@ def test_cli_knowledge_list_flags_unendorsed_strong_as_ref(workdir, capsys):
 
 
 def test_report_flags_missing_and_tampered_artifacts(workdir):
-    from knowhelm.evidence.artifacts import ArtifactStore
-    from knowhelm.webexplore.browser import Observation
+    from loreloop.evidence.artifacts import ArtifactStore
+    from loreloop.webexplore.browser import Observation
 
     trace = write_trace(workdir)
     chain = EvidenceChain.for_workdir(workdir)
@@ -957,8 +957,8 @@ def test_report_flags_artifact_without_url_snapshot_pin(workdir):
     # M2: an artifact the chain cannot tie to a page proves nothing — a
     # signed check carrying an artifact but no url/page_snapshot pin would
     # let any hash-valid observation back an ACCEPTED verdict.
-    from knowhelm.evidence.artifacts import ArtifactStore
-    from knowhelm.webexplore.browser import Observation
+    from loreloop.evidence.artifacts import ArtifactStore
+    from loreloop.webexplore.browser import Observation
 
     trace = write_trace(workdir)
     chain = EvidenceChain.for_workdir(workdir)
@@ -976,8 +976,8 @@ def test_report_flags_artifact_without_url_snapshot_pin(workdir):
 
 
 def test_report_flags_artifact_swapped_for_a_different_observation(workdir):
-    from knowhelm.evidence.artifacts import ArtifactStore
-    from knowhelm.webexplore.browser import Observation
+    from loreloop.evidence.artifacts import ArtifactStore
+    from loreloop.webexplore.browser import Observation
 
     trace = write_trace(workdir)
     chain = EvidenceChain.for_workdir(workdir)
@@ -1006,9 +1006,9 @@ def test_report_flags_artifact_swapped_for_a_different_observation(workdir):
 
 
 def test_report_audits_script_and_trace_artifacts(workdir):
-    from knowhelm.evidence.artifacts import ArtifactStore
-    from knowhelm.webexplore.actions import parse_action_script
-    from knowhelm.webexplore.browser import Observation
+    from loreloop.evidence.artifacts import ArtifactStore
+    from loreloop.webexplore.actions import parse_action_script
+    from loreloop.webexplore.browser import Observation
 
     trace = write_trace(workdir)
     chain = EvidenceChain.for_workdir(workdir)
@@ -1082,10 +1082,10 @@ def test_report_escapes_markdown_table_breakers(workdir):
 
 
 def test_cli_supersede_links_and_hides_old_entry(workdir, capsys):
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     old = Entry(
         title="Old upload contract", content="POST /upload returns 200.",
@@ -1116,10 +1116,10 @@ def test_cli_supersede_links_and_hides_old_entry(workdir, capsys):
 
 
 def test_cli_supersede_rejects_ambiguous_or_missing_prefix(workdir, capsys):
-    from knowhelm.knowledge.store import KnowledgeStore
+    from loreloop.knowledge.store import KnowledgeStore
 
-    (workdir / ".knowhelm").mkdir()
-    KnowledgeStore(workdir / ".knowhelm/knowledge.db").close()
+    (workdir / ".loreloop").mkdir()
+    KnowledgeStore(workdir / ".loreloop/knowledge.db").close()
     assert main(["knowledge", "supersede", "deadbeef", "cafebabe"]) == 2
     assert "no entry matches" in capsys.readouterr().err
     assert main(["knowledge", "supersede", "deadbeef"]) == 2
@@ -1128,8 +1128,8 @@ def test_cli_supersede_rejects_ambiguous_or_missing_prefix(workdir, capsys):
 def test_cli_list_stale_flags_drifted_code_anchors(workdir, capsys):
     import subprocess
 
-    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-    from knowhelm.knowledge.store import KnowledgeStore
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
 
     def git(*args):
         subprocess.run(["git", *args], cwd=workdir, check=True, capture_output=True)
@@ -1149,7 +1149,7 @@ def test_cli_list_stale_flags_drifted_code_anchors(workdir, capsys):
         kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
     )
-    db = workdir / ".knowhelm/knowledge.db"
+    db = workdir / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True)
     with KnowledgeStore(db) as store:
         store.add(drifting)
@@ -1193,7 +1193,7 @@ def test_cli_verify_rejects_allow_writes_without_script(workdir, capsys):
 def test_cli_init_creates_evidence_key(workdir, monkeypatch, capsys):
     import shutil as _shutil
 
-    from knowhelm.evidence.chain import key_path_for
+    from loreloop.evidence.chain import key_path_for
 
     monkeypatch.setattr(_shutil, "which", lambda name: None)
     assert main(["init"]) == 0
@@ -1206,13 +1206,13 @@ def test_cli_init_reports_unwritable_key_location_without_traceback(
 ):
     blocked = workdir / "not-a-directory"
     blocked.write_text("x")
-    monkeypatch.setenv("KNOWHELM_KEY_DIR", str(blocked / "keys"))
+    monkeypatch.setenv("LORELOOP_KEY_DIR", str(blocked / "keys"))
 
     assert main(["init", "--no-skill"]) == 2
 
     err = capsys.readouterr().err
     assert "cannot initialize evidence key" in err
-    assert "KNOWHELM_KEY_DIR" in err
+    assert "LORELOOP_KEY_DIR" in err
     assert "Traceback" not in err
 
 
@@ -1232,7 +1232,7 @@ def test_cli_doctor_reports_preflight_checks(workdir, monkeypatch, capsys):
 
 
 def test_cli_surfaces_legacy_key_error_cleanly(workdir, capsys):
-    legacy = workdir / ".knowhelm/evidence.key"
+    legacy = workdir / ".loreloop/evidence.key"
     legacy.parent.mkdir(parents=True)
     legacy.write_bytes(b"k" * 32)
     write_trace(workdir)
@@ -1252,19 +1252,19 @@ def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys)
 
     assert main(["init", "--skill"]) == 0
     out = capsys.readouterr().out
-    assert "initialized .knowhelm/" in out
-    assert (workdir / ".knowhelm/knowledge.db").exists()
-    assert ".knowhelm/" in (workdir / ".gitignore").read_text()
+    assert "initialized .loreloop/" in out
+    assert (workdir / ".loreloop/knowledge.db").exists()
+    assert ".loreloop/" in (workdir / ".gitignore").read_text()
 
-    skill = workdir / ".claude/skills/knowhelm/SKILL.md"
+    skill = workdir / ".claude/skills/loreloop/SKILL.md"
     assert skill.exists()
     text = skill.read_text()
-    assert "Never run `knowhelm harvest`" in text
-    assert "name: knowhelm" in text
+    assert "Never run `loreloop harvest`" in text
+    assert "name: loreloop" in text
 
     # idempotent: second run must not duplicate the gitignore line
     assert main(["init", "--skill"]) == 0
-    assert (workdir / ".gitignore").read_text().count(".knowhelm/") == 1
+    assert (workdir / ".gitignore").read_text().count(".loreloop/") == 1
 
 
 def test_cli_init_respects_no_skill_and_missing_agents(workdir, monkeypatch, capsys):
@@ -1287,9 +1287,9 @@ def test_cli_init_installs_codex_companion_skill(workdir, monkeypatch, capsys):
 
     assert main(["init", "--skill"]) == 0
 
-    skill = workdir / ".agents/skills/knowhelm/SKILL.md"
+    skill = workdir / ".agents/skills/loreloop/SKILL.md"
     assert skill.exists()
-    assert "Never run `knowhelm harvest`" in skill.read_text(encoding="utf-8")
+    assert "Never run `loreloop harvest`" in skill.read_text(encoding="utf-8")
     assert "installed companion skill for Codex" in capsys.readouterr().out
 
 

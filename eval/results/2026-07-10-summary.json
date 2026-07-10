@@ -86,17 +86,17 @@
       "passed": 0,
       "success_rate": 0.0
     },
-    "knowhelm": {
+    "loreloop": {
       "passed": 3,
       "success_rate": 1.0
     },
     "runs": [
       {"task": "upload-limit-policy", "variant": "no_knowledge", "passed": false, "duration_seconds": 157.542, "observed_change": "50 MiB", "hidden_contract": "37 MiB"},
-      {"task": "upload-limit-policy", "variant": "knowhelm", "passed": true, "duration_seconds": 63.535, "observed_change": "37 MiB", "hidden_contract": "37 MiB"},
+      {"task": "upload-limit-policy", "variant": "loreloop", "passed": true, "duration_seconds": 63.535, "observed_change": "37 MiB", "hidden_contract": "37 MiB"},
       {"task": "upload-rate-policy", "variant": "no_knowledge", "passed": false, "duration_seconds": 100.422, "observed_change": "10 requests / 60 seconds", "hidden_contract": "7 requests / 45 seconds"},
-      {"task": "upload-rate-policy", "variant": "knowhelm", "passed": true, "duration_seconds": 72.675, "observed_change": "7 requests / 45 seconds", "hidden_contract": "7 requests / 45 seconds"},
+      {"task": "upload-rate-policy", "variant": "loreloop", "passed": true, "duration_seconds": 72.675, "observed_change": "7 requests / 45 seconds", "hidden_contract": "7 requests / 45 seconds"},
       {"task": "customer-csv-contract", "variant": "no_knowledge", "passed": false, "duration_seconds": 111.573, "observed_change": "id,name,email", "hidden_contract": "customer_id,display_name,primary_email"},
-      {"task": "customer-csv-contract", "variant": "knowhelm", "passed": true, "duration_seconds": 67.868, "observed_change": "customer_id,display_name,primary_email", "hidden_contract": "customer_id,display_name,primary_email"}
+      {"task": "customer-csv-contract", "variant": "loreloop", "passed": true, "duration_seconds": 67.868, "observed_change": "customer_id,display_name,primary_email", "hidden_contract": "customer_id,display_name,primary_email"}
     ]
   },
   "coding_task_four_way": {
@@ -105,8 +105,8 @@
     "no_memory": {"passed": 0, "success_rate": 0.0},
     "session_memory": {"passed": 3, "success_rate": 1.0},
     "codebase_index": {"passed": 0, "success_rate": 0.0},
-    "knowhelm": {"passed": 3, "success_rate": 1.0},
-    "interpretation": "The correct fact, whether ephemeral session memory or governed knowhelm context, enabled success. Repository-only indexing did not reveal the external policy."
+    "loreloop": {"passed": 3, "success_rate": 1.0},
+    "interpretation": "The correct fact, whether ephemeral session memory or governed loreloop context, enabled success. Repository-only indexing did not reveal the external policy."
   },
   "usability": {
     "status": "awaiting real participants",

@@ -1,2 +1,2 @@
-"""Reproducible evaluation harness for knowhelm's core claims."""
+"""Reproducible evaluation harness for loreloop's core claims."""
 

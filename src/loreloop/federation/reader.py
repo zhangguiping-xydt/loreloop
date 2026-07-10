@@ -18,6 +18,7 @@ from ..knowledge.endorsement import chain_rejected_ids, chain_superseded_ids, en
 from ..knowledge.model import Channel, Curation, Entry
 from ..knowledge.repos import RepoConfigError, load_repos
 from ..knowledge.store import KnowledgeStore
+from ..paths import state_path
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,7 @@ def read_project(
     project_id: str, path: Path
 ) -> tuple[list[ForeignEntry], list[FederationWarning]]:
     workdir = path.resolve()
-    db = workdir / ".knowhelm/knowledge.db"
+    db = state_path(workdir, "knowledge.db")
     if not workdir.is_dir():
         return [], [FederationWarning(project_id, f"project path is unavailable: {workdir}")]
     if not db.is_file():

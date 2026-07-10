@@ -23,7 +23,7 @@ from undocumented prerequisites.
 - [x] Add `--help` snapshots and end-to-end tests for all public commands.
 - [x] Make interrupted and failed commands leave no ambiguous or partially trusted state.
 
-Acceptance: a first-time user can discover every workflow from `knowhelm --help` and recover
+Acceptance: a first-time user can discover every workflow from `loreloop --help` and recover
 from common failures without reading source code.
 
 ## 3. Release-blocking correctness and safety
@@ -57,7 +57,7 @@ before installing.
 - [x] Measure evidence-chain verification and harvest latency at increasing chain lengths.
 - [x] Compare task outcomes against no memory, session memory, and codebase-index baselines.
 
-Acceptance: published, reproducible data shows where knowhelm helps, where it does not, and its
+Acceptance: published, reproducible data shows where LoreLoop helps, where it does not, and its
 operating limits.
 
 ## 6. Zero-context usability study

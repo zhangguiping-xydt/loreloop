@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from knowhelm.cli import main
-from knowhelm.evidence.chain import EvidenceChain, key_path_for
-from knowhelm.federation.reader import read_project
-from knowhelm.federation.registry import RegistryError, add_project, load_projects
-from knowhelm.knowledge.endorsement import curate, entry_digest
-from knowhelm.knowledge.model import Channel, Curation, Entry, Kind, Source, Trust
-from knowhelm.knowledge.store import KnowledgeStore
+from loreloop.cli import main
+from loreloop.evidence.chain import EvidenceChain, key_path_for
+from loreloop.federation.reader import read_project
+from loreloop.federation.registry import RegistryError, add_project, load_projects
+from loreloop.knowledge.endorsement import curate, entry_digest
+from loreloop.knowledge.model import Channel, Curation, Entry, Kind, Source, Trust
+from loreloop.knowledge.store import KnowledgeStore
 
 
 def git_repo(path: Path) -> Path:
@@ -30,7 +30,7 @@ def git_repo(path: Path) -> Path:
 
 
 def add_entry(project: Path, entry: Entry) -> None:
-    db = project / ".knowhelm/knowledge.db"
+    db = project / ".loreloop/knowledge.db"
     db.parent.mkdir(parents=True, exist_ok=True)
     with KnowledgeStore(db) as store:
         store.add(entry)
@@ -59,7 +59,7 @@ def test_registry_adds_and_strictly_loads_projects(tmp_path):
 
     assert load_projects() == {"hr-fund": added}
 
-    registry = Path(__import__("os").environ["KNOWHELM_REGISTRY"])
+    registry = Path(__import__("os").environ["LORELOOP_REGISTRY"])
     registry.write_text(json.dumps({"version": 1, "projects": {"../bad": {}}}))
     with pytest.raises(RegistryError):
         load_projects()
@@ -67,7 +67,7 @@ def test_registry_adds_and_strictly_loads_projects(tmp_path):
 
 def test_registry_rejects_paths_without_knowledge_store(tmp_path):
     project = git_repo(tmp_path / "plain")
-    with pytest.raises(RegistryError, match="not a knowhelm trust domain"):
+    with pytest.raises(RegistryError, match="not a LoreLoop trust domain"):
         add_project(project)
 
 
@@ -128,7 +128,7 @@ def test_rejected_foreign_entries_are_not_returned(tmp_path):
     entry = manual_entry()
     add_entry(project, entry)
     chain = EvidenceChain.for_workdir(project)
-    with KnowledgeStore(project / ".knowhelm/knowledge.db") as store:
+    with KnowledgeStore(project / ".loreloop/knowledge.db") as store:
         curate(store, chain, entry.id, Curation.REJECTED, datetime.now(timezone.utc))
 
     entries, warnings = read_project("foreign", project)
@@ -145,7 +145,7 @@ def test_search_selects_project_by_alias_and_reports_foreign_trust(
     entry = manual_entry()
     add_entry(foreign, entry)
     chain = EvidenceChain.for_workdir(foreign)
-    with KnowledgeStore(foreign / ".knowhelm/knowledge.db") as store:
+    with KnowledgeStore(foreign / ".loreloop/knowledge.db") as store:
         curate(store, chain, entry.id, Curation.APPROVED, datetime.now(timezone.utc))
     add_project(
         foreign,
@@ -185,14 +185,14 @@ def test_import_is_always_born_draft_with_foreign_digest_provenance(
     source = manual_entry()
     add_entry(foreign, source)
     chain = EvidenceChain.for_workdir(foreign)
-    with KnowledgeStore(foreign / ".knowhelm/knowledge.db") as store:
+    with KnowledgeStore(foreign / ".loreloop/knowledge.db") as store:
         curate(store, chain, source.id, Curation.APPROVED, datetime.now(timezone.utc))
     add_project(foreign, project_id="hr-fund")
     monkeypatch.chdir(current)
 
     assert main(["knowledge", "import", "hr-fund", source.id[:8]]) == 0
 
-    with KnowledgeStore(current / ".knowhelm/knowledge.db") as store:
+    with KnowledgeStore(current / ".loreloop/knowledge.db") as store:
         imported = store.list()[0]
     assert imported.id != source.id
     assert imported.source.channel is Channel.MANUAL
@@ -205,7 +205,7 @@ def test_import_is_always_born_draft_with_foreign_digest_provenance(
 
 def test_cli_reports_corrupt_registry_without_traceback(tmp_path, monkeypatch, capsys):
     current = git_repo(tmp_path / "current")
-    registry = Path(__import__("os").environ["KNOWHELM_REGISTRY"])
+    registry = Path(__import__("os").environ["LORELOOP_REGISTRY"])
     registry.parent.mkdir(parents=True, exist_ok=True)
     registry.write_text("not json")
     monkeypatch.chdir(current)
@@ -217,8 +217,8 @@ def test_cli_reports_corrupt_registry_without_traceback(tmp_path, monkeypatch, c
 
 
 def test_related_projects_are_ranked_by_shared_repository_paths(tmp_path):
-    from knowhelm.federation.registry import related_projects
-    from knowhelm.knowledge.repos import save_repos
+    from loreloop.federation.registry import related_projects
+    from loreloop.knowledge.repos import save_repos
 
     current = git_repo(tmp_path / "current")
     shared = git_repo(tmp_path / "shared")
@@ -237,8 +237,8 @@ def test_related_projects_are_ranked_by_shared_repository_paths(tmp_path):
 def test_run_with_related_applies_overlap_order_budget_and_records_ids(
     tmp_path, monkeypatch, capsys
 ):
-    import knowhelm.cli as cli
-    from knowhelm.knowledge.repos import save_repos
+    import loreloop.cli as cli
+    from loreloop.knowledge.repos import save_repos
 
     class FakeAgent:
         def __init__(self):
@@ -278,7 +278,7 @@ def test_run_with_related_applies_overlap_order_budget_and_records_ids(
     assert "Related project references" in agent.prompts[0]
     assert "Shared upload policy" in agent.prompts[0]
     assert "Unrelated upload policy" not in agent.prompts[0]
-    trace = next((current / ".knowhelm/runs").glob("*.jsonl"))
+    trace = next((current / ".loreloop/runs").glob("*.jsonl"))
     started = json.loads(trace.read_text().splitlines()[0])
     expected = [f"related#{close.id}"]
     assert started["related_entries"] == expected

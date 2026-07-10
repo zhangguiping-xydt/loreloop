@@ -3,22 +3,22 @@ import re
 
 import pytest
 
-from knowhelm.evidence.artifacts import ArtifactStore
-from knowhelm.evidence.chain import EvidenceChain
-from knowhelm.knowledge.code_reverse import ExtractionError
-from knowhelm.knowledge.model import Channel, Kind
-from knowhelm.webexplore import verify as verify_mod
-from knowhelm.webexplore.actions import (
+from loreloop.evidence.artifacts import ArtifactStore
+from loreloop.evidence.chain import EvidenceChain
+from loreloop.knowledge.code_reverse import ExtractionError
+from loreloop.knowledge.model import Channel, Kind
+from loreloop.webexplore import verify as verify_mod
+from loreloop.webexplore.actions import (
     ActionExecution,
     ActionScriptError,
     StepTrace,
     parse_action_script,
     script_locator,
 )
-from knowhelm.webexplore.browser import Observation, same_origin
-from knowhelm.webexplore.explorer import Explorer
-from knowhelm.webexplore.verify import deterministic_check, verify_expectation
-from knowhelm.webexplore.web_reverse import extract_web_assertions, reverse_web
+from loreloop.webexplore.browser import Observation, same_origin
+from loreloop.webexplore.explorer import Explorer
+from loreloop.webexplore.verify import deterministic_check, verify_expectation
+from loreloop.webexplore.web_reverse import extract_web_assertions, reverse_web
 
 HOME = Observation(
     url="http://app.local",
@@ -255,7 +255,7 @@ def test_deterministic_check_prefixes():
 
 
 def test_deterministic_check_rejects_empty_needle():
-    from knowhelm.webexplore.verify import MalformedExpectation
+    from loreloop.webexplore.verify import MalformedExpectation
 
     for expectation in ("contains:", "contains:   ", "absent:", "title-contains:"):
         with pytest.raises(MalformedExpectation, match="empty assertion"):
@@ -263,7 +263,7 @@ def test_deterministic_check_rejects_empty_needle():
 
 
 def test_empty_needle_never_reaches_the_chain(tmp_path):
-    from knowhelm.webexplore.verify import MalformedExpectation
+    from loreloop.webexplore.verify import MalformedExpectation
 
     browser = FakeBrowser({"http://app.local/upload": UPLOAD})
     chain = EvidenceChain.for_workdir(tmp_path)

@@ -4,9 +4,9 @@ Append-only JSONL where each record commits to its predecessor via a hash
 chain, and each chain hash is HMAC-signed with a local secret. Verification
 recomputes the whole chain; any edit, deletion, or reordering breaks it.
 
-The secret lives OUTSIDE the project tree, in ``~/.knowhelm/keys/`` (one key
+The secret lives OUTSIDE the project tree, in ``~/.loreloop/keys/`` (one key
 per project directory, created on first use; override the location with
-``KNOWHELM_KEY_DIR``). Coding agents get write access to the project
+``LORELOOP_KEY_DIR``). Coding agents get write access to the project
 directory as a matter of course — the referee's stamp must not sit inside
 the player's sandbox. This protects against silent tampering by tools or
 accidents, not against an attacker who owns the machine and the key — the
@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from ..paths import key_directory, state_root
 
 try:  # POSIX
     import fcntl as _fcntl
@@ -72,7 +74,7 @@ class LegacyKeyError(Exception):
             f"    (note: that key lived inside the project tree, so the old "
             f"chain only ever had in-tree integrity)\n"
             f"  or start fresh:  delete {legacy} and archive the old "
-            f".knowhelm/evidence.jsonl"
+            f"{legacy.parent / 'evidence.jsonl'}"
         )
 
 
@@ -101,7 +103,7 @@ class EvidenceChain:
 
     @classmethod
     def for_workdir(cls, workdir: Path) -> "EvidenceChain":
-        base = workdir / ".knowhelm"
+        base = state_root(workdir)
         expected = key_path_for(workdir)
         legacy = base / "evidence.key"
         if legacy.exists() and not expected.exists():
@@ -110,7 +112,7 @@ class EvidenceChain:
 
     @classmethod
     def verify_readonly(cls, workdir: Path) -> list[EvidenceRecord]:
-        base = workdir / ".knowhelm"
+        base = state_root(workdir)
         key_path = key_path_for(workdir)
         if not key_path.is_file():
             raise FederatedTrustUnavailable(f"evidence key is unavailable for {workdir}")
@@ -292,8 +294,7 @@ def _chain_hash(prev_hash: str, index: int, ts: str, event: str, payload: dict[s
 def key_path_for(workdir: Path) -> Path:
     """Per-project key file under the key dir, named by a hash of the
     project's absolute path so unrelated projects never share a key."""
-    env = os.environ.get("KNOWHELM_KEY_DIR")
-    key_dir = Path(env) if env else Path.home() / ".knowhelm/keys"
+    key_dir = key_directory()
     digest = hashlib.sha256(str(workdir.resolve()).encode()).hexdigest()[:16]
     return key_dir / f"{digest}.key"
 

@@ -14,11 +14,11 @@ import pytest
 
 pytest.importorskip("playwright")
 
-from knowhelm.evidence.artifacts import ArtifactStore  # noqa: E402
-from knowhelm.evidence.chain import EvidenceChain  # noqa: E402
-from knowhelm.webexplore.actions import parse_action_script  # noqa: E402
-from knowhelm.webexplore.browser import PlaywrightBrowser  # noqa: E402
-from knowhelm.webexplore.verify import verify_expectation, verify_script_expectation  # noqa: E402
+from loreloop.evidence.artifacts import ArtifactStore  # noqa: E402
+from loreloop.evidence.chain import EvidenceChain  # noqa: E402
+from loreloop.webexplore.actions import parse_action_script  # noqa: E402
+from loreloop.webexplore.browser import PlaywrightBrowser  # noqa: E402
+from loreloop.webexplore.verify import verify_expectation, verify_script_expectation  # noqa: E402
 
 PAGE = """<!doctype html>
 <html><head><title>Upload Console</title></head>
@@ -77,7 +77,7 @@ def test_observe_rejects_http_error_pages(site, browser):
 
 def test_deterministic_verify_against_real_page(site, browser, tmp_path):
     workdir = tmp_path / "wd"
-    (workdir / ".knowhelm").mkdir(parents=True)
+    (workdir / ".loreloop").mkdir(parents=True)
     chain = EvidenceChain.for_workdir(workdir)
     artifacts = ArtifactStore.for_workdir(workdir)
 
@@ -100,7 +100,7 @@ def test_deterministic_verify_against_real_page(site, browser, tmp_path):
 
 def test_script_verify_against_real_page(site, browser, tmp_path):
     workdir = tmp_path / "wd"
-    (workdir / ".knowhelm").mkdir(parents=True)
+    (workdir / ".loreloop").mkdir(parents=True)
     chain = EvidenceChain.for_workdir(workdir)
     artifacts = ArtifactStore.for_workdir(workdir)
     parsed = urlsplit(site)

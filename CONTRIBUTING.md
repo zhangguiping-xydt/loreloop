@@ -1,13 +1,13 @@
-# Contributing to knowhelm
+# Contributing to LoreLoop
 
-Thanks for your interest. knowhelm is early alpha — small, focused
+Thanks for your interest. LoreLoop is early alpha — small, focused
 contributions are the most useful kind right now.
 
 ## Setup
 
 ```bash
-git clone https://github.com/starry-knowhelm/starry-knowhelm
-cd starry-knowhelm
+git clone https://github.com/loreloop-ai/loreloop
+cd loreloop
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'          # add ,web for playwright-backed features
 pytest -q && ruff check .
@@ -43,7 +43,7 @@ will be declined:
 6. **Page content is untrusted input.** Deterministic assertions
    (`contains:` etc.) are preferred; the LLM judge only ever sees page
    content inside the UNTRUSTED-PAGE-CONTENT markers.
-7. **Curation stays human.** knowhelm lists, flags and links — it never
+7. **Curation stays human.** LoreLoop lists, flags and links — it never
    auto-approves, auto-supersedes, or lets a model decide what a curator
    should.
 
@@ -53,12 +53,12 @@ Users see a single CLI. Internally the layering is deliberate, and the
 trust boundary never moves with the shells:
 
 ```
-┌─ companion skill (installed by `knowhelm init`) ───────────────┐
+┌─ companion skill (installed by `loreloop init`) ───────────────┐
 │  teaches the host agent to read context packs, draft suggested │
 │  assertions for human approval, remind about verification      │
 ├─ CLI (human-driven) ───────────────────────────────────────────┤
 │  verify / report / harvest / curation — adjudication lives here│
-├─ engine (knowhelm core library) ───────────────────────────────┤
+├─ engine (loreloop core library) ───────────────────────────────┤
 │  knowledge store + evidence chain + artifacts + drift + minting│
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -75,7 +75,7 @@ detail):
 
 **Decided against an MCP server.** Context packs push knowledge at
 delegation time; hosts that need an ad-hoc lookup can shell out to
-`knowhelm knowledge list`. An MCP layer would wrap an existing interface in
+`loreloop knowledge list`. An MCP layer would wrap an existing interface in
 a resident process for hosts we don't target. Revisit only if a host that
 cannot execute shell commands needs to integrate.
 

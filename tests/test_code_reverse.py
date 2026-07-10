@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from knowhelm.knowledge.code_reverse import (
+from loreloop.knowledge.code_reverse import (
     ExtractionError,
     RawAssertion,
     classify_assertions,
@@ -13,8 +13,8 @@ from knowhelm.knowledge.code_reverse import (
     reverse_code,
     scan_repo,
 )
-from knowhelm.knowledge.model import Channel, Curation, Entry, Kind, Source, Verification
-from knowhelm.knowledge.repos import save_repos
+from loreloop.knowledge.model import Channel, Curation, Entry, Kind, Source, Verification
+from loreloop.knowledge.repos import save_repos
 
 
 class FakeRunner:
@@ -308,7 +308,7 @@ def test_removing_repository_declaration_only_demotes_entries(repo):
             snapshot_ref=head,
         ),
     )
-    (repo / ".knowhelm/repos.json").unlink()
+    (repo / ".loreloop/repos.json").unlink()
 
     assert drifted_code_entry_ids(repo, [entry]) == {entry.id}
 

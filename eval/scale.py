@@ -23,12 +23,12 @@ for path in (ROOT, ROOT / "src"):
         sys.path.insert(0, str(path))
 
 from eval.metrics import evaluate_rankings
-from knowhelm.delegate.context_pack import render, select
-from knowhelm.evidence.chain import EvidenceChain, EvidenceRecord, _chain_hash
-from knowhelm.knowledge.harvest import harvest_run
-from knowhelm.knowledge.model import Channel, Entry, Kind, Source
-from knowhelm.knowledge.store import KnowledgeStore
-from knowhelm.report.acceptance import RunSummary
+from loreloop.delegate.context_pack import render, select
+from loreloop.evidence.chain import EvidenceChain, EvidenceRecord, _chain_hash
+from loreloop.knowledge.harvest import harvest_run
+from loreloop.knowledge.model import Channel, Entry, Kind, Source
+from loreloop.knowledge.store import KnowledgeStore
+from loreloop.report.acceptance import RunSummary
 
 
 QUERIES = [
@@ -163,12 +163,12 @@ def benchmark_evidence(sizes: list[int], repetitions: int) -> list[dict[str, Any
         verify_times = []
         harvest_times = []
         for repetition in range(repetitions):
-            with tempfile.TemporaryDirectory(prefix="knowhelm-chain-scale-") as temp:
+            with tempfile.TemporaryDirectory(prefix="loreloop-chain-scale-") as temp:
                 workdir = Path(temp) / "project"
                 key_dir = Path(temp) / "keys"
                 workdir.mkdir()
-                previous = os.environ.get("KNOWHELM_KEY_DIR")
-                os.environ["KNOWHELM_KEY_DIR"] = str(key_dir)
+                previous = os.environ.get("LORELOOP_KEY_DIR")
+                os.environ["LORELOOP_KEY_DIR"] = str(key_dir)
                 try:
                     chain = EvidenceChain.for_workdir(workdir)
                     run_id = f"scale-{size}-{repetition}"
@@ -184,15 +184,15 @@ def benchmark_evidence(sizes: list[int], repetitions: int) -> list[dict[str, Any
                         finished=True,
                         base_commits={},
                     )
-                    with KnowledgeStore(workdir / ".knowhelm/knowledge.db") as store:
+                    with KnowledgeStore(workdir / ".loreloop/knowledge.db") as store:
                         started = time.perf_counter()
                         harvest_run(run, chain, store, NoopAgent(), workdir)
                         harvest_times.append((time.perf_counter() - started) * 1000)
                 finally:
                     if previous is None:
-                        os.environ.pop("KNOWHELM_KEY_DIR", None)
+                        os.environ.pop("LORELOOP_KEY_DIR", None)
                     else:
-                        os.environ["KNOWHELM_KEY_DIR"] = previous
+                        os.environ["LORELOOP_KEY_DIR"] = previous
         rows.append(
             {
                 "records": size,

@@ -14,9 +14,8 @@ from ..federation.reader import ForeignEntry
 from ..knowledge.code_reverse import drifted_code_entry_ids
 from ..knowledge.model import Entry
 from ..knowledge.repos import load_repos
+from ..paths import state_path
 from .context_pack import ContextPack, render, select
-
-RUNS_DIR = ".knowhelm/runs"
 
 
 def _heads(workdir: Path) -> dict[str, str]:
@@ -47,7 +46,7 @@ class DelegateRunner:
     def __init__(self, agent: AgentRunner, workdir: Path) -> None:
         self._agent = agent
         self._workdir = workdir
-        self._runs_dir = workdir / RUNS_DIR
+        self._runs_dir = state_path(workdir, "runs")
         self._runs_dir.mkdir(parents=True, exist_ok=True)
 
     def run(

@@ -11,7 +11,7 @@ smoke test is not a substitute for a person who has never seen the design.
   contents, credentials, or environment variables in the repository.
 - Give them a clean machine or disposable account with Git, Python 3.11+, one
   supported coding-agent CLI, and the README only.
-- Ask them to install knowhelm and complete the bundled legacy-upload task.
+- Ask them to install LoreLoop and complete the bundled legacy-upload task.
   The observer may say only: "work from the README; think aloud if comfortable."
 - Start timing when the participant opens the README. First success is the
   first `Verdict: ACCEPTED` report followed by a successful harvest.

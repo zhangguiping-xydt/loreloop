@@ -1,4 +1,4 @@
-# knowhelm evaluation suite
+# LoreLoop evaluation suite
 
 This directory makes the three central product claims falsifiable:
 
@@ -73,7 +73,7 @@ All task variants receive the same repository, task, and hidden evaluator:
 - `no_memory`: no external project fact;
 - `session_memory`: the same critical fact as an ephemeral, unverified note;
 - `codebase_index`: bounded source snippets only, with no external policy fact;
-- `knowhelm`: the fact rendered as chain-governable established knowledge.
+- `loreloop`: the fact rendered as chain-governable established knowledge.
 
 This separates the value of simply possessing a fact from persistence,
 provenance, retrieval, and trust governance. Hidden evaluators remain outside

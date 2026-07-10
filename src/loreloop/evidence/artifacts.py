@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 
 from ..webexplore.browser import Observation
+from ..paths import state_path
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -29,7 +30,7 @@ class ArtifactStore:
 
     @classmethod
     def for_workdir(cls, workdir: Path) -> "ArtifactStore":
-        return cls(workdir / ".knowhelm/evidence/artifacts")
+        return cls(state_path(workdir, "evidence", "artifacts"))
 
     def save_observation(self, obs: Observation) -> tuple[str, Path]:
         payload = {

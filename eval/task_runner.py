@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E402
-"""Run real coding-agent tasks with and without knowhelm context.
+"""Run real coding-agent tasks with and without loreloop context.
 
 The agent sees only the public fixture and task. Hidden evaluators stay outside
 the copied repository and run after the agent exits. Every run stores stdout,
@@ -29,8 +29,8 @@ for path in (ROOT, SRC):
         sys.path.insert(0, str(path))
 
 from eval.metrics import evaluate_task_runs
-from knowhelm.delegate.context_pack import ContextPack, render
-from knowhelm.knowledge.model import Channel, Curation, Entry, Kind, Source, Trust
+from loreloop.delegate.context_pack import ContextPack, render
+from loreloop.knowledge.model import Channel, Curation, Entry, Kind, Source, Trust
 
 TASK_ROOT = ROOT / "eval/tasks"
 AGENT_COMMANDS = {
@@ -55,7 +55,7 @@ def run_task(
     variant: str,
     timeout: float,
 ) -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix=f"knowhelm-task-{spec['id']}-") as temp:
+    with tempfile.TemporaryDirectory(prefix=f"loreloop-task-{spec['id']}-") as temp:
         repo = Path(temp) / "repo"
         shutil.copytree(
             TASK_ROOT / spec["repo"],
@@ -63,8 +63,8 @@ def run_task(
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
         _git(repo, "init", "-q")
-        _git(repo, "config", "user.email", "eval@knowhelm.local")
-        _git(repo, "config", "user.name", "knowhelm eval")
+        _git(repo, "config", "user.email", "eval@loreloop.local")
+        _git(repo, "config", "user.name", "loreloop eval")
         _git(repo, "add", ".")
         _git(repo, "commit", "-qm", "task fixture")
         prompt = _task_prompt(spec, variant, repo)
@@ -148,7 +148,7 @@ def run_task(
 
 def _task_prompt(spec: dict[str, Any], variant: str, repo: Path | None = None) -> str:
     context = ""
-    if variant == "knowhelm":
+    if variant == "loreloop":
         entries = [
             Entry(
                 title=item["title"],
@@ -242,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
             "no_knowledge",
             "session_memory",
             "codebase_index",
-            "knowhelm",
+            "loreloop",
         ],
         default="both",
     )
@@ -258,9 +258,9 @@ def main(argv: list[str] | None = None) -> int:
     if missing:
         parser.error(f"unknown task(s): {', '.join(sorted(missing))}")
     if args.variant == "all":
-        variants = ["no_memory", "session_memory", "codebase_index", "knowhelm"]
+        variants = ["no_memory", "session_memory", "codebase_index", "loreloop"]
     elif args.variant == "both":
-        variants = ["no_memory", "knowhelm"]
+        variants = ["no_memory", "loreloop"]
     else:
         variants = [args.variant]
     runs = []
@@ -282,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
     )
     print(json.dumps(result["metrics"], indent=2, sort_keys=True))
-    return 0 if all(run["passed"] for run in runs if run["variant"] == "knowhelm") else 1
+    return 0 if all(run["passed"] for run in runs if run["variant"] == "loreloop") else 1
 
 
 if __name__ == "__main__":

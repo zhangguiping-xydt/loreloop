@@ -9,7 +9,7 @@
   reverse cost, 100/1k/10k retrieval scale, long evidence chains, and harvest.
 - A bundled legacy-upload application with real and deterministic-offline
   five-minute `init -> ingest -> run -> verify -> report -> harvest` modes.
-- `knowhelm doctor`, multi-repository anchors, read-only federation, query
+- `loreloop doctor`, multi-repository anchors, read-only federation, query
   expansion, command evidence, interaction scripts, usage correlation, and
   Claude/Codex companion skills.
 - Versioned SQLite migrations with pre-upgrade backups and transactional
@@ -19,6 +19,9 @@
 
 ### Changed
 
+- Renamed the product, Python package, CLI, state directory, and environment
+  variables from Knowhelm to LoreLoop. This is an intentional hard cutover:
+  `.knowhelm/` and `KNOWHELM_*` are not read or migrated automatically.
 - `repo`, `project`, and `knowledge` actions are real argparse subcommands with
   action-specific positional names.
 - Code extraction uses prompt version `code-extract-v3` and performs one strict

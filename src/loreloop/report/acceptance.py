@@ -3,7 +3,7 @@
 The report stores nothing of its own. The verdict rests entirely on the
 signed evidence chain: checks, artifact audits, and the chain-endorsed
 ``delegation_completed`` record that pins the run's task and base commit.
-The run trace under ``.knowhelm/runs/`` sits in the agent-writable tree, so
+The run trace under ``.loreloop/runs/`` sits in the agent-writable tree, so
 it is display material only — a forged ``delegation_finished`` line or an
 edited ``base_commit`` there must never sway acceptance or harvest.
 Checks count only when they postdate the completion record on the chain,
