@@ -18,7 +18,9 @@ from .model import (
     Trust,
     Verification,
 )
+from .repos import parse_code_locator
 
+_SCHEMA_VERSION = 1
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
     id TEXT PRIMARY KEY,
@@ -28,6 +30,10 @@ CREATE TABLE IF NOT EXISTS entries (
     channel TEXT NOT NULL,
     locator TEXT NOT NULL,
     snapshot_ref TEXT,
+    source_symbol TEXT,
+    source_line_start INTEGER,
+    source_line_end INTEGER,
+    source_excerpt TEXT,
     curation TEXT NOT NULL,
     verification TEXT NOT NULL,
     verified_at TEXT,
@@ -56,7 +62,16 @@ class KnowledgeStore:
         self._conn = sqlite3.connect(str(db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.executescript(_SCHEMA)
+        self._migrate()
+
+    @classmethod
+    def open_readonly(cls, db_path: str | Path) -> "KnowledgeStore":
+        path = Path(db_path).resolve()
+        store = cls.__new__(cls)
+        store._conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+        store._conn.row_factory = sqlite3.Row
+        store._conn.execute("PRAGMA foreign_keys = ON")
+        return store
 
     def close(self) -> None:
         self._conn.close()
@@ -93,7 +108,11 @@ class KnowledgeStore:
             if existing is not None:
                 return existing
             self._conn.execute(
-                "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                """INSERT INTO entries (
+                    id, title, content, kind, channel, locator, snapshot_ref,
+                    source_symbol, source_line_start, source_line_end, source_excerpt,
+                    curation, verification, verified_at, verified_by, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     entry.id,
                     entry.title,
@@ -102,6 +121,10 @@ class KnowledgeStore:
                     entry.source.channel.value,
                     entry.source.locator,
                     entry.source.snapshot_ref,
+                    entry.source.symbol,
+                    entry.source.line_start,
+                    entry.source.line_end,
+                    entry.source.excerpt,
                     entry.trust.curation.value,
                     entry.trust.verification.value,
                     _iso(entry.trust.verified_at),
@@ -111,6 +134,36 @@ class KnowledgeStore:
                 ),
             )
         return entry
+
+    def _migrate(self) -> None:
+        """Apply small, transactional SQLite migrations in place.
+
+        ``PRAGMA user_version`` is the durable schema marker. Migrations are
+        additive and idempotent so an interrupted upgrade can be retried
+        without losing existing rows. Downgrade support is a separate release
+        concern and is not implied by this forward migration.
+        """
+        version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > _SCHEMA_VERSION:
+            raise RuntimeError(
+                f"knowledge database schema {version} is newer than supported "
+                f"schema {_SCHEMA_VERSION}"
+            )
+        with self._conn:
+            self._conn.executescript(_SCHEMA)
+            columns = {
+                row[1] for row in self._conn.execute("PRAGMA table_info(entries)").fetchall()
+            }
+            additions = {
+                "source_symbol": "TEXT",
+                "source_line_start": "INTEGER",
+                "source_line_end": "INTEGER",
+                "source_excerpt": "TEXT",
+            }
+            for column, sql_type in additions.items():
+                if column not in columns:
+                    self._conn.execute(f"ALTER TABLE entries ADD COLUMN {column} {sql_type}")
+            self._conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
     def get(self, entry_id: str) -> Entry | None:
         row = self._conn.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone()
@@ -185,13 +238,35 @@ class KnowledgeStore:
         return self._require(entry_id)
 
     def set_snapshot_ref(
-        self, entry_id: str, snapshot_ref: str, now: datetime, locator: str | None = None
+        self,
+        entry_id: str,
+        snapshot_ref: str,
+        now: datetime,
+        locator: str | None = None,
+        *,
+        evidence_source: Source | None = None,
     ) -> Entry:
         """Re-anchor an entry. Code locators embed the anchor commit, so a
         code re-anchor must update both fields to stay consistent."""
         self._require(entry_id)
         with self._conn:
-            if locator is None:
+            if evidence_source is not None:
+                self._conn.execute(
+                    """UPDATE entries SET snapshot_ref = ?, locator = ?,
+                       source_symbol = ?, source_line_start = ?, source_line_end = ?,
+                       source_excerpt = ?, updated_at = ? WHERE id = ?""",
+                    (
+                        snapshot_ref,
+                        locator or evidence_source.locator,
+                        evidence_source.symbol,
+                        evidence_source.line_start,
+                        evidence_source.line_end,
+                        evidence_source.excerpt,
+                        _iso(now),
+                        entry_id,
+                    ),
+                )
+            elif locator is None:
                 self._conn.execute(
                     "UPDATE entries SET snapshot_ref = ?, updated_at = ? WHERE id = ?",
                     (snapshot_ref, _iso(now), entry_id),
@@ -226,10 +301,9 @@ class KnowledgeStore:
         Superseded entries stay in the store as history — supersession is a
         link, not a status flag — but they no longer inform new work.
 
-        The links table is a convenience cache inside the agent-writable
-        tree: deleting a supersedes row here must not resurrect an entry, so
-        trust-sensitive callers additionally filter by the chain-replayed
-        superseded set (see ``endorsement.chain_superseded_ids``)."""
+        This is a convenience view over the SQLite cache. Trust-sensitive
+        paths must start from ``list()`` and replay chain curation/supersession
+        instead, because SQLite edits must not suppress chain-backed facts."""
         superseded = self.superseded_ids()
         return [
             e
@@ -263,11 +337,12 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
 
 
-def _locator_key(channel: Channel, locator: str) -> str:
+def _locator_key(channel: Channel, locator: str) -> str | tuple[str, str]:
     """Code locators are file@commit; the same fact re-reversed at a newer
     commit is still the same fact, so only the file part identifies it."""
     if channel is Channel.CODE:
-        return locator.rsplit("@", 1)[0]
+        repo_name, relpath, _ = parse_code_locator(locator)
+        return repo_name, relpath
     return locator
 
 
@@ -281,6 +356,10 @@ def _to_entry(row: sqlite3.Row) -> Entry:
             channel=Channel(row["channel"]),
             locator=row["locator"],
             snapshot_ref=row["snapshot_ref"],
+            symbol=_row_value(row, "source_symbol"),
+            line_start=_row_value(row, "source_line_start"),
+            line_end=_row_value(row, "source_line_end"),
+            excerpt=_row_value(row, "source_excerpt"),
         ),
         trust=Trust(
             curation=Curation(row["curation"]),
@@ -293,3 +372,7 @@ def _to_entry(row: sqlite3.Row) -> Entry:
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
+
+
+def _row_value(row: sqlite3.Row, column: str):
+    return row[column] if column in row.keys() else None

@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {"id": "upload_size", "title": "Upload payload ceiling", "content": "Documents larger than 50 MiB are rejected.", "kind": "constraint"},
+    {"id": "upload_types", "title": "Accepted document formats", "content": "Only PDF and PNG documents are accepted.", "kind": "constraint"},
+    {"id": "upload_auth", "title": "Uploader authorization", "content": "Only authenticated users holding the uploader role may submit documents.", "kind": "constraint"},
+    {"id": "rate_limit", "title": "Request throttling", "content": "Each user may make 10 upload requests per minute.", "kind": "constraint"},
+    {"id": "billing", "title": "Invoice schedule", "content": "Invoices are generated on the first day of each month.", "kind": "behavior"},
+    {"id": "password", "title": "Password recovery", "content": "Password reset links expire after fifteen minutes.", "kind": "behavior"},
+    {"id": "session", "title": "Session lifetime", "content": "Login access tokens expire after thirty minutes.", "kind": "constraint"},
+    {"id": "audit", "title": "Audit retention", "content": "Security audit events are retained for seven years.", "kind": "constraint"},
+    {"id": "migration", "title": "Database rollout", "content": "Schema migrations run before application startup.", "kind": "architecture"},
+    {"id": "cache", "title": "Profile cache", "content": "User profiles are cached for five minutes.", "kind": "behavior"},
+    {"id": "locale", "title": "Supported locales", "content": "The interface supports English, Chinese, and Japanese.", "kind": "requirement"},
+    {"id": "health", "title": "Health endpoint", "content": "GET /health returns readiness and liveness state.", "kind": "interface"},
+    {"id": "thumbnail", "title": "Image previews", "content": "Uploaded images receive a 320 pixel thumbnail.", "kind": "behavior"},
+    {"id": "webhook", "title": "Webhook authentication", "content": "Webhook payloads are verified with a rotating HMAC secret.", "kind": "constraint"},
+    {"id": "csv_export", "title": "Customer export", "content": "Operators can download the customer directory as a CSV file.", "kind": "requirement"},
+    {"id": "deletion", "title": "Account deletion", "content": "Closed accounts are permanently erased after thirty days.", "kind": "requirement"}
+  ],
+  "queries": [
+    {"id": "upload-size-zh", "query": "把文档大小上限调高", "relevant": ["upload_size"], "expansion": "文档大小限制 最大文件大小 上传大小 upload size limit max file size MAX_UPLOAD_BYTES"},
+    {"id": "upload-auth-en", "query": "who is allowed to submit a file", "relevant": ["upload_auth"], "expansion": "uploader role authorized upload submit document authentication"},
+    {"id": "rate-limit-zh", "query": "上传接口被打得太频繁时怎么限流", "relevant": ["rate_limit"], "expansion": "上传限流 请求频率 upload rate limit throttling requests per minute"},
+    {"id": "webhook-en", "query": "rotate the secret used to authenticate webhooks", "relevant": ["webhook"], "expansion": "webhook secret rotation HMAC signing authentication"},
+    {"id": "csv-export-zh", "query": "把客户名单导出成表格", "relevant": ["csv_export"], "expansion": "客户目录 导出 CSV customer directory export download"},
+    {"id": "session-en", "query": "when does a login token expire", "relevant": ["session"], "expansion": "access token expiration session lifetime login token TTL"}
+  ]
+}

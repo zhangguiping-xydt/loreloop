@@ -1,0 +1,16 @@
+{
+  "model": "claude",
+  "note": "Recorded claims; excerpts omitted, evidence spans retained for deterministic rescoring.",
+  "predictions": [
+    {"title": "上传认证要求", "content": "上传操作要求用户已认证。", "kind": "constraint", "source": "auth.py@b754d33ed5b202dac1459daee557362169d97ddd", "evidence": {"line_start": 9, "line_end": 11, "symbol": "require_uploader"}},
+    {"title": "上传角色要求", "content": "上传操作要求用户具有 uploader 角色。", "kind": "constraint", "source": "auth.py@b754d33ed5b202dac1459daee557362169d97ddd", "evidence": {"line_start": 9, "line_end": 13, "symbol": "require_uploader"}},
+    {"title": "上传限流响应", "content": "上传请求受每个用户的限流器约束，限流拒绝时返回 429 和 rate_limited 错误。", "kind": "constraint", "source": "api.py@b754d33ed5b202dac1459daee557362169d97ddd", "evidence": {"line_start": 14, "line_end": 19, "symbol": "upload"}},
+    {"title": "文件类型校验", "content": "上传会使用文件名后缀的小写形式检查是否属于允许的扩展名集合。", "kind": "behavior", "source": "api.py@b754d33ed5b202dac1459daee557362169d97ddd", "evidence": {"line_start": 20, "line_end": 21, "symbol": "upload"}},
+    {"title": "允许的上传类型", "content": "允许上传的文件扩展名为 .pdf 和 .png。", "kind": "constraint", "source": "config.py@b754d33ed5b202dac1459daee557362169d97ddd", "evidence": {"line_start": 4, "line_end": 4}},
+    {"title": "上传大小上限", "content": "上传文件大小上限配置为 50 MiB。", "kind": "constraint", "source": "config.py@b754d33ed5b202dac1459daee557362169d97ddd", "evidence": {"line_start": 1, "line_end": 1}},
+    {"title": "超大文件响应", "content": "超过上传大小上限时，上传接口返回 413 和 file_too_large 错误，并在响应中返回 max_bytes。", "kind": "interface", "source": "api.py@b754d33ed5b202dac1459daee557362169d97ddd", "evidence": {"line_start": 22, "line_end": 23, "symbol": "upload"}},
+    {"title": "上传限流配置", "content": "上传限流配置为每 60 秒最多 10 次请求。", "kind": "constraint", "source": "config.py@b754d33ed5b202dac1459daee557362169d97ddd", "evidence": {"line_start": 2, "line_end": 3}},
+    {"title": "上传文件归属", "content": "保存上传文件时，接口将当前用户 ID 作为文件所有者 ID。", "kind": "behavior", "source": "api.py@b754d33ed5b202dac1459daee557362169d97ddd", "evidence": {"line_start": 24, "line_end": 24, "symbol": "upload"}},
+    {"title": "上传成功响应", "content": "成功保存上传文件时，接口返回 201 和包含文件 ID 的响应体。", "kind": "interface", "source": "api.py@b754d33ed5b202dac1459daee557362169d97ddd", "evidence": {"line_start": 24, "line_end": 25, "symbol": "upload"}}
+  ]
+}

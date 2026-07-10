@@ -1,0 +1,29 @@
+[
+  {
+    "id": "upload-limit-policy",
+    "repo": "upload_limit/repo",
+    "evaluator": "upload_limit/hidden_test.py",
+    "task": "Update upload validation to the current enterprise payload policy. Keep the public API stable and run the tests.",
+    "knowledge": [
+      {"title": "Enterprise upload ceiling", "content": "The current enterprise upload limit is exactly 37 MiB (37 * 1024 * 1024 bytes).", "kind": "constraint"}
+    ]
+  },
+  {
+    "id": "upload-rate-policy",
+    "repo": "rate_limit/repo",
+    "evaluator": "rate_limit/hidden_test.py",
+    "task": "Align the default upload request throttling with the current abuse-prevention policy. Preserve the limiter API and run the tests.",
+    "knowledge": [
+      {"title": "Per-user upload throttling", "content": "Upload throttling allows 7 requests per 45-second window, independently for each user.", "kind": "constraint"}
+    ]
+  },
+  {
+    "id": "customer-csv-contract",
+    "repo": "csv_export/repo",
+    "evaluator": "csv_export/hidden_test.py",
+    "task": "Implement the supported customer-directory download contract for operators. Keep the function signature and run the tests.",
+    "knowledge": [
+      {"title": "Customer directory export", "content": "Operators download the customer directory as UTF-8 CSV with the header customer_id,display_name,primary_email. Values map from the input id, name, and email fields, and rows stay in input order.", "kind": "requirement"}
+    ]
+  }
+]

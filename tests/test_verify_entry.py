@@ -4,6 +4,14 @@ import pytest
 from knowhelm.evidence.chain import EvidenceChain
 from knowhelm.knowledge.model import Channel, Entry, Kind, Source, Verification
 from knowhelm.knowledge.store import KnowledgeStore
+from knowhelm.webexplore import verify as verify_mod
+from knowhelm.webexplore.actions import (
+    ActionBlocked,
+    ActionExecution,
+    StepTrace,
+    parse_action_script,
+    script_locator,
+)
 from knowhelm.webexplore.browser import Observation
 from knowhelm.webexplore.verify import verify_entry
 
@@ -163,6 +171,107 @@ def test_verify_entry_saves_artifact(env, tmp_path):
 
     sha = chain.verify()[0].payload["artifact"]
     assert artifacts.load(sha)["snapshot_hash"] == PAGE.snapshot_hash
+
+
+def test_verify_script_anchored_entry_replays_script_artifact(env, tmp_path, monkeypatch):
+    from knowhelm.evidence.artifacts import ArtifactStore
+
+    store, chain = env
+    artifacts = ArtifactStore.for_workdir(tmp_path)
+    script = parse_action_script(
+        {"version": 1, "base": "http://app.local", "steps": [{"goto": "/upload"}]}
+    )
+    script_sha = artifacts.save_json(
+        {
+            "type": "interaction_script",
+            "script_digest": script.digest,
+            "script": script.to_json(),
+        }
+    )[0]
+    chain.append("check_passed", {
+        "run_id": "seed",
+        "check": "seeded script",
+        "script_digest": script.digest,
+        "script_artifact": script_sha,
+    })
+    entry = Entry(
+        title="Upload limit",
+        content="Uploads are limited to 50MB.",
+        kind=Kind.CONSTRAINT,
+        source=Source(
+            channel=Channel.WEB,
+            locator=script_locator(script.digest),
+            snapshot_ref="old-snapshot",
+        ),
+    )
+    store.add(entry)
+
+    def fake_execute(browser, script_arg, **kwargs):
+        assert script_arg.digest == script.digest
+        return ActionExecution(
+            script.digest,
+            "completed",
+            [StepTrace(0, {"goto": "/upload"}, "completed", "ok", 1, PAGE.url)],
+            final_observation=PAGE,
+        )
+
+    monkeypatch.setattr(verify_mod, "execute_action_script", fake_execute)
+    result = verify_entry(
+        FakeBrowser(), FakeRunner('{"passed": true, "reason": "Still true."}'),
+        chain, store, entry, "run-9", artifacts=artifacts,
+    )
+
+    assert result.passed and result.drifted
+    stored = store.get(entry.id)
+    assert stored.source.snapshot_ref == PAGE.snapshot_hash
+    rec = chain.verify()[-1]
+    assert rec.event == "entry_verified"
+    assert rec.payload["script_locator"] == script_locator(script.digest)
+    assert artifacts.load(rec.payload["trace_artifact"])["status"] == "completed"
+
+
+def test_verify_script_anchored_entry_blocked_does_not_contradict(env, tmp_path, monkeypatch):
+    from knowhelm.evidence.artifacts import ArtifactStore
+
+    store, chain = env
+    artifacts = ArtifactStore.for_workdir(tmp_path)
+    script = parse_action_script(
+        {"version": 1, "base": "http://app.local", "steps": [{"click": {"text": "Pay"}}]}
+    )
+    script_sha = artifacts.save_json(
+        {
+            "type": "interaction_script",
+            "script_digest": script.digest,
+            "script": script.to_json(),
+        }
+    )[0]
+    seed = chain.append("check_passed", {
+        "run_id": "seed",
+        "check": "seeded script",
+        "script_digest": script.digest,
+        "script_artifact": script_sha,
+    })
+    entry = Entry(
+        title="Checkout state",
+        content="Checkout shows a summary.",
+        kind=Kind.BEHAVIOR,
+        source=Source(
+            channel=Channel.WEB,
+            locator=script_locator(script.digest),
+            snapshot_ref="old-snapshot",
+        ),
+    )
+    store.add(entry)
+
+    def fake_execute(browser, script_arg, **kwargs):
+        return ActionExecution(script.digest, "blocked", [], reason="dangerous click")
+
+    monkeypatch.setattr(verify_mod, "execute_action_script", fake_execute)
+    with pytest.raises(ActionBlocked, match="blocked by safety rule"):
+        verify_entry(FakeBrowser(), FakeRunner("{}"), chain, store, entry, "run-9", artifacts=artifacts)
+
+    assert store.get(entry.id).trust.verification is Verification.UNVERIFIED
+    assert chain.verify() == [seed]
 
 
 def test_verify_entry_chain_failure_leaves_store_untouched(env):

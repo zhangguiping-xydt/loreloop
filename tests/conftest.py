@@ -8,3 +8,7 @@ def isolated_key_dir(tmp_path_factory, monkeypatch):
     monkeypatch.setenv(
         "KNOWHELM_KEY_DIR", str(tmp_path_factory.mktemp("knowhelm-keys"))
     )
+    monkeypatch.setenv(
+        "KNOWHELM_REGISTRY",
+        str(tmp_path_factory.mktemp("knowhelm-registry") / "projects.json"),
+    )

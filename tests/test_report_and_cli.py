@@ -1,10 +1,16 @@
 import json
+import sys
 
 import pytest
 
 from knowhelm.cli import main
 from knowhelm.evidence.chain import EvidenceChain
-from knowhelm.report.acceptance import load_run, record_check, render_report
+from knowhelm.report.acceptance import (
+    load_run,
+    record_check,
+    record_command_check,
+    render_report,
+)
 
 
 @pytest.fixture()
@@ -118,6 +124,46 @@ def test_report_prefers_chain_metadata_over_trace(workdir):
     assert "Knowledge entries injected: 2" in report
 
 
+def test_base_commits_reads_new_and_legacy_formats(workdir):
+    legacy_trace = write_trace(workdir, run_id="run-legacy")
+    legacy = load_run(legacy_trace)
+    legacy_chain = EvidenceChain.for_workdir(workdir)
+    legacy_chain.append("delegation_completed", {
+        "run_id": legacy.run_id,
+        "task": legacy.task,
+        "context_entries": [],
+        "base_commit": "abc",
+    })
+    from knowhelm.report.acceptance import evaluate_run
+
+    assert evaluate_run(legacy, legacy_chain).base_commits == {".": "abc"}
+
+    new_trace = workdir / ".knowhelm/runs/run-new.jsonl"
+    new_trace.write_text(json.dumps({
+        "event": "delegation_started",
+        "task": "new",
+        "context_entries": [],
+        "base_commits": {".": "def", "backend": "123"},
+    }) + "\n")
+    assert load_run(new_trace).base_commits == {".": "def", "backend": "123"}
+
+
+def test_load_run_rejects_invalid_repository_name_in_base_commits(workdir):
+    from knowhelm.report.acceptance import RunTraceError
+
+    trace = workdir / ".knowhelm/runs/run-bad-repo.jsonl"
+    trace.parent.mkdir(parents=True, exist_ok=True)
+    trace.write_text(json.dumps({
+        "event": "delegation_started",
+        "task": "bad",
+        "context_entries": [],
+        "base_commits": {"../escape": "abc"},
+    }) + "\n")
+
+    with pytest.raises(RunTraceError, match="base_commits"):
+        load_run(trace)
+
+
 def test_report_ignores_checks_from_other_runs(workdir):
     trace = write_trace(workdir)
     chain = EvidenceChain.for_workdir(workdir)
@@ -137,9 +183,85 @@ def test_cli_check_and_report_flow(workdir, capsys):
     assert "login page loads" in out
 
 
+def test_command_check_records_reauditable_deterministic_evidence(workdir):
+    from knowhelm.evidence.artifacts import ArtifactStore
+
+    trace = write_trace(workdir)
+    run = load_run(trace)
+    chain = EvidenceChain.for_workdir(workdir)
+    endorse_run(chain, run.run_id)
+    artifacts = ArtifactStore.for_workdir(workdir)
+
+    rec = record_command_check(
+        chain,
+        artifacts,
+        run.run_id,
+        "unit tests pass",
+        [sys.executable, "-c", "print('42 passed')"],
+        cwd=workdir,
+    )
+
+    assert rec.event == "check_passed"
+    assert rec.payload["verified_via"] == "command"
+    data = artifacts.load(rec.payload["artifact"])
+    assert data["type"] == "command_evidence"
+    assert data["exit_code"] == 0
+    assert data["stdout"] == "42 passed\n"
+    assert "Verdict: ACCEPTED" in render_report(run, chain, artifacts)
+
+
+def test_cli_command_check_does_not_invoke_a_shell(workdir, capsys):
+    trace = write_trace(workdir)
+    run_id = trace.stem
+    endorse_run(EvidenceChain.for_workdir(workdir), run_id)
+    marker = workdir / "should-not-exist"
+
+    assert main([
+        "check", run_id, "command is isolated", "--command",
+        f'{sys.executable} -c "print(1)" ; touch {marker}',
+    ]) == 2
+
+    assert not marker.exists()
+    assert "shell operators are not supported" in capsys.readouterr().err
+
+
 def test_cli_report_without_runs_errors(workdir, capsys):
     assert main(["report"]) == 2
     assert "no runs found" in capsys.readouterr().err
+
+
+def test_knowledge_usage_reports_injections_and_accepted_runs(workdir, capsys):
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    entry = Entry(
+        title="Upload limit",
+        content="Uploads are limited to 50 MiB.",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.MANUAL, locator="manual:upload-limit"),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+    chain = EvidenceChain.for_workdir(workdir)
+    chain.append("delegation_completed", {
+        "run_id": "run-a", "task": "a", "context_entries": [entry.id], "base_commits": {},
+    })
+    chain.append("delegation_completed", {
+        "run_id": "run-b", "task": "b", "context_entries": [entry.id], "base_commits": {},
+    })
+    chain.append("knowledge_harvested", {
+        "run_id": "run-b", "minted": {}, "reversed": {}, "review": [],
+    })
+
+    assert main(["knowledge", "usage"]) == 0
+
+    out = capsys.readouterr().out
+    assert entry.id[:8] in out
+    assert "2" in out
+    assert "1" in out
+    assert "Upload limit" in out
 
 
 def test_cli_report_missing_run_id_exits_cleanly(workdir, capsys):
@@ -228,6 +350,34 @@ def test_cli_knowledge_curation_flow(workdir, capsys):
     }
 
 
+def test_cli_knowledge_export_markdown(workdir, capsys):
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    entry = Entry(
+        title="Upload contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@abc", snapshot_ref="abc"),
+    )
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+
+    assert main(["knowledge", "export"]) == 0
+    out = capsys.readouterr().out
+    assert "# knowhelm knowledge export" in out
+    assert "Upload contract" in out
+    assert "POST /upload returns 201." in out
+    assert "api.py@abc" in out
+
+    target = workdir / ".knowhelm/exports/knowledge.md"
+    assert main(["knowledge", "export", "--output", str(target)]) == 0
+    assert "exported 1 entries" in capsys.readouterr().out
+    assert "Snapshot: `abc`" in target.read_text(encoding="utf-8")
+
+
 def test_cli_curation_rejects_missing_or_ambiguous_prefix(workdir, capsys):
     from knowhelm.knowledge.store import KnowledgeStore
 
@@ -303,7 +453,7 @@ def test_cli_run_demotes_unendorsed_strong_entries(workdir, monkeypatch, capsys)
 
     agent = FakeAgent()
     monkeypatch.setattr(cli, "_agent", lambda name: agent)
-    assert main(["run", "fix the upload endpoint"]) == 0
+    assert main(["run", "--no-expand", "fix the upload endpoint"]) == 0
 
     err = capsys.readouterr().err
     assert "without evidence-chain endorsement" in err
@@ -342,7 +492,7 @@ def test_cli_run_keeps_chain_endorsed_strong_entries(workdir, monkeypatch, capsy
 
     agent = FakeAgent()
     monkeypatch.setattr(cli, "_agent", lambda name: agent)
-    assert main(["run", "fix the upload endpoint"]) == 0
+    assert main(["run", "--no-expand", "fix the upload endpoint"]) == 0
 
     assert "without evidence-chain endorsement" not in capsys.readouterr().err
     assert "Established facts" in agent.prompts[0]
@@ -381,7 +531,7 @@ def test_cli_run_keeps_chain_approved_entry_after_db_curation_flip(workdir, monk
 
     agent = FakeAgent()
     monkeypatch.setattr(cli, "_agent", lambda name: agent)
-    assert main(["run", "fix the upload endpoint"]) == 0
+    assert main(["run", "--no-expand", "fix the upload endpoint"]) == 0
     assert "Established facts" in agent.prompts[0]
     assert "POST /upload returns 201." in agent.prompts[0]
 
@@ -389,6 +539,92 @@ def test_cli_run_keeps_chain_approved_entry_after_db_curation_flip(workdir, monk
     line = next(li for li in capsys.readouterr().out.splitlines() if entry.id[:8] in li)
     assert "[strong]" in line
     assert "[chain-backed" in line
+
+
+def test_cli_run_keeps_chain_approved_entry_after_db_rejection(workdir, monkeypatch, capsys):
+    import knowhelm.cli as cli
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    class FakeAgent:
+        def __init__(self):
+            self.prompts = []
+
+        def run(self, prompt):
+            self.prompts.append(prompt)
+            return "done"
+
+    entry = Entry(
+        title="Upload endpoint contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@abc"),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+    assert main(["knowledge", "approve", entry.id[:8]]) == 0
+    capsys.readouterr()
+
+    with KnowledgeStore(db) as store:
+        store._conn.execute("UPDATE entries SET curation = 'rejected' WHERE id = ?", (entry.id,))
+        store._conn.commit()
+        assert store.get(entry.id).trust.curation == "rejected"
+
+    agent = FakeAgent()
+    monkeypatch.setattr(cli, "_agent", lambda name: agent)
+    assert main(["run", "--no-expand", "fix the upload endpoint"]) == 0
+
+    assert "Established facts" in agent.prompts[0]
+    assert "POST /upload returns 201." in agent.prompts[0]
+
+
+def test_cli_run_keeps_chain_approved_entry_after_db_only_supersede_link(
+    workdir, monkeypatch, capsys
+):
+    import knowhelm.cli as cli
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Link, LinkType, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    class FakeAgent:
+        def __init__(self):
+            self.prompts = []
+
+        def run(self, prompt):
+            self.prompts.append(prompt)
+            return "done"
+
+    old = Entry(
+        title="Upload endpoint contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@abc"),
+    )
+    new = Entry(
+        title="Replacement upload endpoint contract",
+        content="POST /upload returns 202.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@def"),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(old)
+        store.add(new)
+    assert main(["knowledge", "approve", old.id[:8]]) == 0
+    capsys.readouterr()
+
+    with KnowledgeStore(db) as store:
+        store.add_link(Link(from_id=new.id, to_id=old.id, link_type=LinkType.SUPERSEDES))
+        assert old.id in store.superseded_ids()
+
+    agent = FakeAgent()
+    monkeypatch.setattr(cli, "_agent", lambda name: agent)
+    assert main(["run", "--no-expand", "fix the upload endpoint"]) == 0
+
+    assert "Established facts" in agent.prompts[0]
+    assert "POST /upload returns 201." in agent.prompts[0]
 
 
 def test_cli_run_does_not_claim_drifted_chain_backed_entry_as_established(
@@ -444,7 +680,7 @@ def test_cli_run_does_not_claim_drifted_chain_backed_entry_as_established(
 
     agent = FakeAgent()
     monkeypatch.setattr(cli, "_agent", lambda name: agent)
-    assert main(["run", "fix the upload endpoint"]) == 0
+    assert main(["run", "--no-expand", "fix the upload endpoint"]) == 0
     err = capsys.readouterr().err
 
     assert "injected as established fact" not in err
@@ -490,7 +726,7 @@ def test_cli_run_demotes_entry_whose_content_changed_after_endorsement(workdir, 
 
     agent = FakeAgent()
     monkeypatch.setattr(cli, "_agent", lambda name: agent)
-    assert main(["run", "fix the upload endpoint"]) == 0
+    assert main(["run", "--no-expand", "fix the upload endpoint"]) == 0
 
     err = capsys.readouterr().err
     assert "without evidence-chain endorsement" in err
@@ -537,7 +773,7 @@ def test_cli_run_ignores_deleted_supersede_link(workdir, monkeypatch, capsys):
 
     agent = FakeAgent()
     monkeypatch.setattr(cli, "_agent", lambda name: agent)
-    assert main(["run", "fix the upload contract"]) == 0
+    assert main(["run", "--no-expand", "fix the upload contract"]) == 0
 
     assert "POST /upload returns 200." not in agent.prompts[0]
 
@@ -596,7 +832,7 @@ def test_cli_run_ignores_db_resurrection_of_rejected_entry(workdir, monkeypatch,
 
     agent = FakeAgent()
     monkeypatch.setattr(cli, "_agent", lambda name: agent)
-    assert main(["run", "fix the upload endpoint"]) == 0
+    assert main(["run", "--no-expand", "fix the upload endpoint"]) == 0
     assert "POST /upload returns 201." not in agent.prompts[0]
 
     # the list view stays honest too
@@ -606,6 +842,52 @@ def test_cli_run_ignores_db_resurrection_of_rejected_entry(workdir, monkeypatch,
     )
     assert "[rejected]" in line
     assert "[strong]" not in line
+
+
+def test_cli_run_expands_query_and_degrades_on_bad_expansion(workdir, monkeypatch, capsys):
+    import knowhelm.cli as cli
+    from knowhelm.knowledge.model import Channel, Entry, Kind, Source
+    from knowhelm.knowledge.store import KnowledgeStore
+
+    class FakeAgent:
+        """First call is query expansion, second is the delegation."""
+
+        def __init__(self, expansion_output):
+            self.expansion_output = expansion_output
+            self.prompts = []
+
+        def run(self, prompt):
+            self.prompts.append(prompt)
+            if len(self.prompts) == 1:
+                return self.expansion_output
+            return "done"
+
+    entry = Entry(
+        title="Upload endpoint contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator="api.py@abc"),
+    )
+    db = workdir / ".knowhelm/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+
+    agent = FakeAgent('["upload", "endpoint", "限流"]')
+    monkeypatch.setattr(cli, "_agent", lambda name: agent)
+    assert main(["run", "给上传接口加限流"]) == 0
+    assert len(agent.prompts) == 2
+    assert "expanding a search query" in agent.prompts[0]
+    # bridged via expansion terms; expansion text itself is not in the prompt
+    assert "POST /upload returns 201." in agent.prompts[1]
+    assert "expanding a search query" not in agent.prompts[1]
+    capsys.readouterr()
+
+    bad = FakeAgent("not json at all")
+    monkeypatch.setattr(cli, "_agent", lambda name: bad)
+    assert main(["run", "fix the upload endpoint"]) == 0
+    assert "query expansion failed" in capsys.readouterr().err
+    assert "POST /upload returns 201." in bad.prompts[-1]
 
 
 def test_cli_knowledge_list_flags_unendorsed_strong_as_ref(workdir, capsys):
@@ -721,6 +1003,57 @@ def test_report_flags_artifact_swapped_for_a_different_observation(workdir):
     report = render_report(run, swapped, artifacts)
     assert "Verdict: NOT ACCEPTED" in report
     assert "does not match the chain record" in report
+
+
+def test_report_audits_script_and_trace_artifacts(workdir):
+    from knowhelm.evidence.artifacts import ArtifactStore
+    from knowhelm.webexplore.actions import parse_action_script
+    from knowhelm.webexplore.browser import Observation
+
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    endorse_run(chain, run.run_id)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    obs = Observation(url="http://app.local/products", title="Products", text="Filtered")
+    obs_sha, _ = artifacts.save_observation(obs)
+    script = parse_action_script(
+        {"version": 1, "base": "http://app.local", "steps": [{"goto": "/products"}]}
+    )
+    script_sha, _ = artifacts.save_json(
+        {
+            "type": "interaction_script",
+            "script_digest": script.digest,
+            "script": script.to_json(),
+        }
+    )
+    trace_sha, trace_path = artifacts.save_json(
+        {
+            "type": "interaction_trace",
+            "script_digest": script.digest,
+            "status": "completed",
+            "steps_completed": 1,
+            "steps": [],
+            "final_url": obs.url,
+            "final_snapshot": obs.snapshot_hash,
+        }
+    )
+    chain.append("check_passed", {
+        "run_id": run.run_id,
+        "check": "filtered products",
+        "artifact": obs_sha,
+        "url": obs.url,
+        "page_snapshot": obs.snapshot_hash,
+        "script_digest": script.digest,
+        "script_artifact": script_sha,
+        "trace_artifact": trace_sha,
+    })
+    assert "Verdict: ACCEPTED" in render_report(run, chain, artifacts)
+
+    trace_path.unlink()
+    report = render_report(run, chain, artifacts)
+    assert "Verdict: NOT ACCEPTED" in report
+    assert "trace artifact referenced on the chain but the file is missing" in report
 
 
 def test_report_notes_passed_checks_without_artifacts(workdir):
@@ -840,6 +1173,23 @@ def test_cli_verify_rejects_empty_assertion_before_browser(workdir, capsys):
     assert "invalid expectation" in capsys.readouterr().err
 
 
+def test_cli_verify_rejects_bad_script_before_browser(workdir, capsys):
+    script = workdir / "actions.json"
+    script.write_text(json.dumps({"version": 1, "base": "http://app.local", "steps": []}))
+
+    assert main([
+        "verify", "run-1", "http://app.local", "contains:ok", "--script", str(script)
+    ]) == 2
+    assert "invalid action script" in capsys.readouterr().err
+
+
+def test_cli_verify_rejects_allow_writes_without_script(workdir, capsys):
+    assert main([
+        "verify", "run-1", "http://app.local", "contains:ok", "--allow-writes"
+    ]) == 2
+    assert "--allow-writes requires --script" in capsys.readouterr().err
+
+
 def test_cli_init_creates_evidence_key(workdir, monkeypatch, capsys):
     import shutil as _shutil
 
@@ -849,6 +1199,36 @@ def test_cli_init_creates_evidence_key(workdir, monkeypatch, capsys):
     assert main(["init"]) == 0
     assert key_path_for(workdir).exists()
     assert "evidence signing key" in capsys.readouterr().out
+
+
+def test_cli_init_reports_unwritable_key_location_without_traceback(
+    workdir, monkeypatch, capsys
+):
+    blocked = workdir / "not-a-directory"
+    blocked.write_text("x")
+    monkeypatch.setenv("KNOWHELM_KEY_DIR", str(blocked / "keys"))
+
+    assert main(["init", "--no-skill"]) == 2
+
+    err = capsys.readouterr().err
+    assert "cannot initialize evidence key" in err
+    assert "KNOWHELM_KEY_DIR" in err
+    assert "Traceback" not in err
+
+
+def test_cli_doctor_reports_preflight_checks(workdir, monkeypatch, capsys):
+    import shutil as _shutil
+
+    monkeypatch.setattr(_shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    assert main(["doctor"]) == 0
+
+    out = capsys.readouterr().out
+    assert "Python" in out
+    assert "Git" in out
+    assert "coding agent" in out
+    assert "evidence key directory" in out
+    assert "ready" in out.lower()
 
 
 def test_cli_surfaces_legacy_key_error_cleanly(workdir, capsys):
@@ -900,11 +1280,23 @@ def test_cli_init_respects_no_skill_and_missing_agents(workdir, monkeypatch, cap
     assert "skill installation skipped" in capsys.readouterr().out
 
 
+def test_cli_init_installs_codex_companion_skill(workdir, monkeypatch, capsys):
+    import shutil as _shutil
+
+    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None)
+
+    assert main(["init", "--skill"]) == 0
+
+    skill = workdir / ".agents/skills/knowhelm/SKILL.md"
+    assert skill.exists()
+    assert "Never run `knowhelm harvest`" in skill.read_text(encoding="utf-8")
+    assert "installed companion skill for Codex" in capsys.readouterr().out
+
+
 def test_cli_ingest_web_requires_playwright(workdir):
     try:
         import playwright  # noqa: F401
         pytest.skip("playwright installed; error path not reachable")
     except ImportError:
         pass
-    with pytest.raises(RuntimeError, match="playwright is not installed"):
-        main(["ingest", "--from", "web", "http://localhost:3000"])
+    assert main(["ingest", "--from", "web", "http://localhost:3000"]) == 2

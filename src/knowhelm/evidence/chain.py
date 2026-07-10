@@ -15,16 +15,26 @@ honest-workstation threat model is enough for acceptance evidence.
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import hmac
 import json
 import os
 import secrets
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:  # POSIX
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - exercised on Windows CI
+    _fcntl = None
+
+try:  # Windows
+    import msvcrt as _msvcrt
+except ImportError:  # pragma: no cover - exercised on POSIX CI
+    _msvcrt = None
 
 _GENESIS = "genesis"
 
@@ -34,6 +44,10 @@ class ChainVerificationError(Exception):
         super().__init__(f"evidence chain broken at record {index}: {reason}")
         self.index = index
         self.reason = reason
+
+
+class FederatedTrustUnavailable(Exception):
+    pass
 
 
 class LegacyKeyError(Exception):
@@ -90,12 +104,29 @@ class EvidenceChain:
             raise LegacyKeyError(legacy, expected)
         return cls(base / "evidence.jsonl", expected)
 
+    @classmethod
+    def verify_readonly(cls, workdir: Path) -> list[EvidenceRecord]:
+        base = workdir / ".knowhelm"
+        key_path = key_path_for(workdir)
+        if not key_path.is_file():
+            raise FederatedTrustUnavailable(f"evidence key is unavailable for {workdir}")
+        key = key_path.read_bytes()
+        if len(key) != 32:
+            raise FederatedTrustUnavailable(f"evidence key is invalid for {workdir}")
+        chain = cls.__new__(cls)
+        chain._path = base / "evidence.jsonl"
+        chain._key = key
+        chain._head_path = key_path.with_suffix(".head")
+        records = chain._verify_records(chain._read())
+        if records and chain._head_path.exists() and chain._head_lags(records):
+            chain._commit_head(records[-1])
+        return records
+
     def append(self, event: str, payload: dict[str, Any]) -> EvidenceRecord:
         # Cross-process exclusive lock: read-then-append without it lets two
         # writers mint the same index and fork the chain.
         lock_path = self._path.with_suffix(".lock")
-        with lock_path.open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with _exclusive_lock(lock_path):
             # Verify BEFORE extending: append is the only writer of the head
             # commitment. Extending whatever is on disk unchecked would let
             # the next legitimate append build on a truncated prefix and then
@@ -135,8 +166,7 @@ class EvidenceChain:
             # lock, and re-read there: a stale snapshot must never rewind the
             # head a concurrent append just committed.
             lock_path = self._path.with_suffix(".lock")
-            with lock_path.open("a") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
+            with _exclusive_lock(lock_path):
                 records = self._verify_records(self._read())
                 if records and self._head_lags(records):
                     self._commit_head(records[-1])
@@ -175,11 +205,7 @@ class EvidenceChain:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, self._head_path)
-        dir_fd = os.open(self._head_path.parent, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        _fsync_directory(self._head_path.parent)
 
     def _check_head(self, records: list[EvidenceRecord]) -> None:
         """Truncation check: every prefix of a valid chain is itself valid, so
@@ -248,3 +274,50 @@ def _load_or_create_key(key_path: Path) -> bytes:
     with os.fdopen(fd, "wb") as fh:
         fh.write(key)
     return key
+
+
+def lock_backend() -> str:
+    if _fcntl is not None:
+        return "fcntl"
+    if _msvcrt is not None:
+        return "msvcrt"
+    return "unavailable"
+
+
+@contextmanager
+def _exclusive_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as lock:
+        if _fcntl is not None:
+            _fcntl.flock(lock.fileno(), _fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                _fcntl.flock(lock.fileno(), _fcntl.LOCK_UN)
+            return
+        if _msvcrt is not None:  # pragma: no cover - Windows CI
+            lock.seek(0, os.SEEK_END)
+            if lock.tell() == 0:
+                lock.write(b"\0")
+                lock.flush()
+            lock.seek(0)
+            _msvcrt.locking(lock.fileno(), _msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock.seek(0)
+                _msvcrt.locking(lock.fileno(), _msvcrt.LK_UNLCK, 1)
+            return
+        raise RuntimeError("no supported cross-process file locking backend")
+
+
+def _fsync_directory(path: Path) -> None:
+    """Best-effort directory fsync; Windows cannot open directories this way."""
+    try:
+        dir_fd = os.open(path, os.O_RDONLY)
+    except OSError:  # pragma: no cover - platform-specific durability limit
+        return
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)

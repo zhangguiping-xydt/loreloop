@@ -1,0 +1,72 @@
+{
+  "date": "2026-07-10",
+  "status": "small public baseline; not an industry-wide benchmark",
+  "reverse": {
+    "dataset": "eval/datasets/reverse_truth.json",
+    "truths": 14,
+    "codex": {
+      "predictions": 14,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "forbidden_hits": []
+    },
+    "claude": {
+      "predictions": 10,
+      "precision": 1.0,
+      "recall": 0.7142857142857143,
+      "f1": 0.8333333333333333,
+      "forbidden_hits": [],
+      "missed_truth_ids": [
+        "oversize-not-persisted",
+        "rate-scope",
+        "size-response",
+        "type-response"
+      ],
+      "note": "Three misses are atomicity penalties: one compound prediction covered two truths but receives credit for only one."
+    }
+  },
+  "retrieval": {
+    "dataset": "eval/datasets/retrieval.json",
+    "queries": 6,
+    "k": 5,
+    "plain": {
+      "hit_rate_at_k": 0.5,
+      "precision_at_k": 0.1,
+      "recall_at_k": 0.5,
+      "mrr": 0.4166666666666667,
+      "retrieved": 5,
+      "relevant_retrieved": 3,
+      "precision_over_returned": 0.6
+    },
+    "expanded": {
+      "hit_rate_at_k": 1.0,
+      "precision_at_k": 0.2,
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "retrieved": 10,
+      "relevant_retrieved": 6,
+      "precision_over_returned": 0.6
+    }
+  },
+  "coding_tasks": {
+    "agent": "Codex CLI 0.144.1",
+    "runs_per_variant": 3,
+    "no_knowledge": {
+      "passed": 0,
+      "success_rate": 0.0
+    },
+    "knowhelm": {
+      "passed": 3,
+      "success_rate": 1.0
+    },
+    "runs": [
+      {"task": "upload-limit-policy", "variant": "no_knowledge", "passed": false, "duration_seconds": 157.542, "observed_change": "50 MiB", "hidden_contract": "37 MiB"},
+      {"task": "upload-limit-policy", "variant": "knowhelm", "passed": true, "duration_seconds": 63.535, "observed_change": "37 MiB", "hidden_contract": "37 MiB"},
+      {"task": "upload-rate-policy", "variant": "no_knowledge", "passed": false, "duration_seconds": 100.422, "observed_change": "10 requests / 60 seconds", "hidden_contract": "7 requests / 45 seconds"},
+      {"task": "upload-rate-policy", "variant": "knowhelm", "passed": true, "duration_seconds": 72.675, "observed_change": "7 requests / 45 seconds", "hidden_contract": "7 requests / 45 seconds"},
+      {"task": "customer-csv-contract", "variant": "no_knowledge", "passed": false, "duration_seconds": 111.573, "observed_change": "id,name,email", "hidden_contract": "customer_id,display_name,primary_email"},
+      {"task": "customer-csv-contract", "variant": "knowhelm", "passed": true, "duration_seconds": 67.868, "observed_change": "customer_id,display_name,primary_email", "hidden_contract": "customer_id,display_name,primary_email"}
+    ]
+  }
+}

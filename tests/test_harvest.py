@@ -46,9 +46,14 @@ def head_of(repo):
 def write_trace(workdir, run_id, base_commit, finished=True):
     runs = workdir / ".knowhelm/runs"
     runs.mkdir(parents=True, exist_ok=True)
+    base_field = (
+        {"base_commits": base_commit}
+        if isinstance(base_commit, dict)
+        else {"base_commit": base_commit}
+    )
     events = [{
         "ts": "t0", "event": "delegation_started", "task": "fix upload",
-        "context_entries": [], "base_commit": base_commit,
+        "context_entries": [], **base_field,
     }]
     if finished:
         events.append({"ts": "t1", "event": "delegation_finished", "output_chars": 1})
@@ -62,9 +67,14 @@ def start_run(repo, chain, run_id, base_commit, finished=True):
     delegation_completed record that report/harvest treat as authority."""
     trace = write_trace(repo, run_id, base_commit, finished=finished)
     if finished:
+        base_field = (
+            {"base_commits": base_commit}
+            if isinstance(base_commit, dict)
+            else {"base_commit": base_commit}
+        )
         chain.append("delegation_completed", {
             "run_id": run_id, "task": "fix upload",
-            "context_entries": [], "base_commit": base_commit,
+            "context_entries": [], **base_field,
         })
     return trace
 
@@ -144,7 +154,8 @@ def test_harvest_uses_chain_base_commit_not_trace(env):
     # chain says base != HEAD, so the changed file WAS re-reversed
     assert len(result.reversed_entries) == 1
     rec = next(r for r in chain.verify() if r.event == "knowledge_harvested")
-    assert rec.payload["base_commit"] == base
+    assert rec.payload["base_commits"] == {".": base}
+    assert "base_commit" not in rec.payload
 
 
 def test_harvest_refuses_dirty_working_tree(env):
@@ -154,6 +165,15 @@ def test_harvest_refuses_dirty_working_tree(env):
     (repo / "api.py").write_text("def upload(): return 500  # uncommitted\n")
 
     with pytest.raises(HarvestError, match="uncommitted source changes"):
+        harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+
+def test_harvest_reports_unknown_base_commit_cleanly(env):
+    repo, store, chain, artifacts = env
+    trace = start_run(repo, chain, "run-x", "deadbeef")
+    record_browser_check(chain, "run-x", artifacts=artifacts)
+
+    with pytest.raises(HarvestError, match="base commit 'deadbeef' is invalid"):
         harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
 
 
@@ -177,6 +197,56 @@ def test_harvest_mints_browser_checks_as_born_verified(env):
     assert not result.reversed_entries
 
 
+def test_harvest_mints_script_checks_with_script_locator(env):
+    from knowhelm.webexplore.actions import parse_action_script
+
+    repo, store, chain, artifacts = env
+    trace = start_run(repo, chain, "run-x", head_of(repo))
+    obs = Observation(url="http://app.local/products", title="Products", text="Filtered: 1 item")
+    script = parse_action_script(
+        {"version": 1, "base": "http://app.local", "steps": [{"goto": "/products"}]}
+    )
+    digest = script.digest
+    script_sha = artifacts.save_json(
+        {
+            "type": "interaction_script",
+            "script_digest": digest,
+            "script": script.to_json(),
+        }
+    )[0]
+    trace_sha = artifacts.save_json(
+        {
+            "type": "interaction_trace",
+            "script_digest": digest,
+            "status": "completed",
+            "steps_completed": 1,
+            "steps": [],
+            "final_url": obs.url,
+            "final_snapshot": obs.snapshot_hash,
+        }
+    )[0]
+    chain.append("check_passed", {
+        "run_id": "run-x",
+        "check": "filtered products show one item",
+        "url": obs.url,
+        "page_snapshot": obs.snapshot_hash,
+        "verified_via": "browser",
+        "judge": "deterministic",
+        "artifact": artifacts.save_observation(obs)[0],
+        "script_digest": digest,
+        "script_locator": f"script:{digest}",
+        "script_artifact": script_sha,
+        "trace_artifact": trace_sha,
+    })
+
+    result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    assert len(result.minted) == 1
+    stored = store.get(result.minted[0].id)
+    assert stored.source.locator == f"script:{digest}"
+    assert stored.source.snapshot_ref == obs.snapshot_hash
+
+
 def test_harvest_skips_non_browser_checks(env):
     repo, store, chain, artifacts = env
     trace = start_run(repo, chain, "run-x", head_of(repo))
@@ -186,6 +256,31 @@ def test_harvest_skips_non_browser_checks(env):
 
     assert result.minted == []
     assert result.unauditable_checks == []
+
+
+def test_harvest_mints_successful_command_checks_as_verified_evidence(env):
+    import sys
+
+    from knowhelm.report.acceptance import record_command_check
+
+    repo, store, chain, artifacts = env
+    trace = start_run(repo, chain, "run-command", head_of(repo))
+    record_command_check(
+        chain,
+        artifacts,
+        "run-command",
+        "the unit test suite passes",
+        [sys.executable, "-c", "print('tests passed')"],
+        cwd=repo,
+    )
+
+    result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    assert len(result.minted) == 1
+    stored = store.get(result.minted[0].id)
+    assert stored.source.channel is Channel.EVIDENCE
+    assert stored.source.locator.startswith("command:")
+    assert stored.trust.verification is Verification.VERIFIED
 
 
 def test_harvest_never_mints_browser_check_without_artifact(env):
@@ -535,6 +630,44 @@ def test_harvest_review_skips_the_assertion_it_just_reminted(env):
     assert second.review == []
 
 
+def test_harvest_flags_semantically_similar_code_claims_for_review(env):
+    from datetime import datetime, timezone
+
+    from knowhelm.knowledge.endorsement import curate
+
+    repo, store, chain, artifacts = env
+    base = head_of(repo)
+    prior = Entry(
+        title="Upload size policy",
+        content="The upload size limit is 10 MB.",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
+    )
+    store.add(prior)
+    curate(store, chain, prior.id, Curation.APPROVED, datetime.now(timezone.utc))
+    trace = start_run(repo, chain, "run-review-code", base)
+    record_browser_check(chain, "run-review-code", artifacts=artifacts)
+    (repo / "api.py").write_text("MAX_UPLOAD_MB = 50\n")
+    git(repo, "add", "api.py")
+    git(repo, "commit", "-m", "raise upload limit")
+    runner = FakeRunner([
+        json.dumps([{
+            "claim": "The upload size limit is 50 MB.",
+            "title": "Upload size policy",
+            "file": "api.py",
+        }]),
+        json.dumps([{"id": 0, "kind": "constraint"}]),
+    ])
+
+    result = harvest_run(
+        load_run(trace), chain, store, runner, repo, artifacts=artifacts
+    )
+
+    assert [entry.id for entry in result.review] == [prior.id]
+    record = next(r for r in chain.verify() if r.event == "knowledge_harvested")
+    assert prior.id in record.payload["review"]
+
+
 def test_harvest_mint_reuses_existing_entry_across_runs(env):
     repo, store, chain, artifacts = env
     base = head_of(repo)
@@ -583,3 +716,101 @@ def test_harvest_reanchors_unchanged_claim_instead_of_duplicating(env):
     assert stored.source.locator == f"api.py@{head}"
     assert result.stale == []
     assert len(store.list(channel=Channel.CODE)) == 1
+
+
+def test_harvest_refuses_when_any_member_repository_is_dirty(tmp_path):
+    from knowhelm.knowledge.repos import save_repos
+
+    workdir = tmp_path / "workdir"
+    backend = tmp_path / "backend"
+    workdir.mkdir()
+    backend.mkdir()
+    make_repo(workdir)
+    make_repo(backend)
+    (workdir / ".knowhelm").mkdir()
+    save_repos(workdir, {"backend": backend})
+    store = KnowledgeStore(workdir / ".knowhelm/knowledge.db")
+    chain = EvidenceChain.for_workdir(workdir)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    bases = {".": head_of(workdir), "backend": head_of(backend)}
+    trace = start_run(workdir, chain, "run-multi", bases)
+    record_browser_check(chain, "run-multi", artifacts=artifacts)
+    (backend / "api.py").write_text("def upload(): return 500\n")
+
+    try:
+        with pytest.raises(HarvestError, match="repository 'backend'.*uncommitted"):
+            harvest_run(
+                load_run(trace), chain, store, FakeRunner([]), workdir, artifacts=artifacts
+            )
+    finally:
+        store.close()
+
+
+def test_harvest_reverses_each_repository_with_its_own_locator(tmp_path):
+    from knowhelm.knowledge.repos import save_repos
+
+    workdir = tmp_path / "workdir"
+    backend = tmp_path / "backend"
+    workdir.mkdir()
+    backend.mkdir()
+    make_repo(workdir)
+    make_repo(backend)
+    (workdir / ".knowhelm").mkdir()
+    save_repos(workdir, {"backend": backend})
+    store = KnowledgeStore(workdir / ".knowhelm/knowledge.db")
+    chain = EvidenceChain.for_workdir(workdir)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    bases = {".": head_of(workdir), "backend": head_of(backend)}
+    trace = start_run(workdir, chain, "run-multi", bases)
+    record_browser_check(chain, "run-multi", artifacts=artifacts)
+
+    (backend / "api.py").write_text("def upload(): return 202\n")
+    git(backend, "add", "api.py")
+    git(backend, "commit", "-m", "change backend")
+    runner = FakeRunner([
+        json.dumps([{
+            "claim": "Backend upload returns 202.",
+            "title": "Backend upload",
+            "file": "api.py",
+        }]),
+        json.dumps([{"id": 0, "kind": "interface"}]),
+    ])
+
+    try:
+        result = harvest_run(
+            load_run(trace), chain, store, runner, workdir, artifacts=artifacts
+        )
+        assert len(result.reversed_entries) == 1
+        assert result.reversed_entries[0].source.locator.startswith("repo:backend/api.py@")
+        rec = next(r for r in chain.verify() if r.event == "knowledge_harvested")
+        assert rec.payload["base_commits"] == bases
+        assert rec.payload["head_commits"] == {
+            ".": head_of(workdir),
+            "backend": head_of(backend),
+        }
+        assert "base_commit" not in rec.payload
+        assert "head_commit" not in rec.payload
+    finally:
+        store.close()
+
+
+def test_harvest_ignores_related_entries_on_the_completion_record(env):
+    repo, store, chain, artifacts = env
+    base = head_of(repo)
+    trace = write_trace(repo, "run-related", {".": base})
+    chain.append("delegation_completed", {
+        "run_id": "run-related",
+        "task": "fix upload",
+        "context_entries": [],
+        "related_entries": ["foreign#abc123"],
+        "base_commits": {".": base},
+    })
+    record_browser_check(chain, "run-related", artifacts=artifacts)
+
+    result = harvest_run(
+        load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts
+    )
+
+    assert len(result.minted) == 1
+    assert result.reversed_entries == []
+    assert all(entry.id != "abc123" for entry in store.list())

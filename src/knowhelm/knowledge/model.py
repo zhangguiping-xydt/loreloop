@@ -31,6 +31,7 @@ class Channel(enum.StrEnum):
     WEB = "web"
     IMAGE = "image"
     MANUAL = "manual"
+    EVIDENCE = "evidence"
 
 
 class Curation(enum.StrEnum):
@@ -66,10 +67,23 @@ class Source:
     channel: Channel
     locator: str
     snapshot_ref: str | None = None
+    symbol: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    excerpt: str | None = None
 
     def __post_init__(self) -> None:
         if not self.locator.strip():
             raise ValueError("Source.locator must be non-empty")
+        if (self.line_start is None) != (self.line_end is None):
+            raise ValueError("Source line_start and line_end must be provided together")
+        if self.line_start is not None:
+            if self.line_start < 1 or self.line_end < self.line_start:
+                raise ValueError("Source line range is invalid")
+        if self.symbol is not None and not self.symbol.strip():
+            raise ValueError("Source.symbol must be non-empty when provided")
+        if self.excerpt is not None and not self.excerpt.strip():
+            raise ValueError("Source.excerpt must be non-empty when provided")
 
 
 @dataclass(frozen=True)

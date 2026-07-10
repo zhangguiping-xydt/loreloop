@@ -39,16 +39,25 @@ def entry_digest(entry: Entry) -> str:
     """Canonical fingerprint of what an entry claims and where it points.
     Trust state is deliberately excluded — the chain event sequence itself
     carries trust; the digest pins the substance that trust was granted to."""
+    substance = {
+        "id": entry.id,
+        "title": entry.title,
+        "content": entry.content,
+        "kind": entry.kind.value,
+        "channel": entry.source.channel.value,
+        "locator": entry.source.locator,
+        "snapshot_ref": entry.source.snapshot_ref,
+    }
+    evidence = {
+        "symbol": entry.source.symbol,
+        "line_start": entry.source.line_start,
+        "line_end": entry.source.line_end,
+        "excerpt": entry.source.excerpt,
+    }
+    if any(value is not None for value in evidence.values()):
+        substance["evidence"] = evidence
     material = json.dumps(
-        {
-            "id": entry.id,
-            "title": entry.title,
-            "content": entry.content,
-            "kind": entry.kind.value,
-            "channel": entry.source.channel.value,
-            "locator": entry.source.locator,
-            "snapshot_ref": entry.source.snapshot_ref,
-        },
+        substance,
         ensure_ascii=False,
         sort_keys=True,
     )

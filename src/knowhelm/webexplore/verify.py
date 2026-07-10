@@ -25,6 +25,15 @@ from ..agents import AgentRunner
 from ..evidence.artifacts import ArtifactStore
 from ..evidence.chain import EvidenceChain, EvidenceRecord
 from ..knowledge.code_reverse import ExtractionError
+from .actions import (
+    ActionBlocked,
+    ActionExecution,
+    ActionScript,
+    digest_from_locator,
+    execute_action_script,
+    parse_action_script,
+    script_locator,
+)
 from .browser import Browser, Observation
 
 # The delimiter embeds a per-call random nonce: a fixed marker string could be
@@ -62,7 +71,7 @@ Judge strictly from the observed content. Output a single JSON object
 class VerifyResult:
     passed: bool
     reason: str
-    snapshot: str
+    snapshot: str | None
     record: EvidenceRecord
 
 
@@ -168,6 +177,67 @@ def verify_expectation(
     return VerifyResult(passed=passed, reason=reason, snapshot=obs.snapshot_hash, record=record)
 
 
+def verify_script_expectation(
+    browser,
+    runner: AgentRunner,
+    chain: EvidenceChain,
+    run_id: str,
+    base_url: str,
+    script: ActionScript,
+    expectation: str,
+    artifacts: ArtifactStore | None = None,
+    allow_writes: bool = False,
+) -> VerifyResult:
+    script_artifact = _save_script_artifact(artifacts, script)
+    execution = execute_action_script(
+        browser, script, base_url=base_url, allow_writes=allow_writes
+    )
+    trace_artifact = _save_trace_artifact(artifacts, execution)
+    if not execution.succeeded:
+        reason = f"interaction script {execution.status}: {execution.reason or 'stopped'}"
+        record = chain.append(
+            "check_failed",
+            {
+                "run_id": run_id,
+                "check": expectation,
+                "detail": reason,
+                "url": base_url,
+                "judge": "action-script",
+                "verified_via": "browser",
+                "script_digest": script.digest,
+                "script_locator": script_locator(script.digest),
+                "script_artifact": script_artifact,
+                "trace_artifact": trace_artifact,
+                "steps_completed": execution.steps_completed,
+            },
+        )
+        return VerifyResult(False, reason, None, record)
+
+    obs = execution.final_observation
+    assert obs is not None
+    artifact_sha = artifacts.save_observation(obs)[0] if artifacts else None
+    passed, reason, mode = _judge(runner, obs, expectation)
+    record = chain.append(
+        "check_passed" if passed else "check_failed",
+        {
+            "run_id": run_id,
+            "check": expectation,
+            "detail": reason,
+            "url": obs.url,
+            "page_snapshot": obs.snapshot_hash,
+            "artifact": artifact_sha,
+            "judge": mode,
+            "verified_via": "browser",
+            "script_digest": script.digest,
+            "script_locator": script_locator(script.digest),
+            "script_artifact": script_artifact,
+            "trace_artifact": trace_artifact,
+            "steps_completed": execution.steps_completed,
+        },
+    )
+    return VerifyResult(passed=passed, reason=reason, snapshot=obs.snapshot_hash, record=record)
+
+
 def verify_entry(
     browser: Browser,
     runner: AgentRunner,
@@ -190,6 +260,12 @@ def verify_entry(
 
     if entry.source.channel is not Channel.WEB:
         raise ValueError(f"entry {entry.id} is not web-channel (got {entry.source.channel})")
+
+    script_digest = digest_from_locator(entry.source.locator)
+    if script_digest:
+        return _verify_script_entry(
+            browser, runner, chain, store, entry, run_id, script_digest, artifacts
+        )
 
     obs = browser.observe(entry.source.locator)
     artifact_sha = artifacts.save_observation(obs)[0] if artifacts else None
@@ -235,6 +311,140 @@ def verify_entry(
         snapshot_ref=obs.snapshot_hash if passed else None,
     )
     return EntryVerifyResult(passed=passed, reason=reason, drifted=drifted, record=record)
+
+
+def _verify_script_entry(
+    browser,
+    runner: AgentRunner,
+    chain: EvidenceChain,
+    store,
+    entry,
+    run_id: str,
+    script_digest: str,
+    artifacts: ArtifactStore | None,
+) -> EntryVerifyResult:
+    from ..knowledge.endorsement import entry_digest
+    from ..knowledge.model import Verification
+
+    if artifacts is None:
+        raise ValueError("script-anchored entry verification requires artifacts")
+
+    script = _load_script_from_chain(chain, artifacts, script_digest)
+    execution = execute_action_script(browser, script)
+    now = datetime.now(timezone.utc)
+
+    if execution.status == "blocked":
+        raise ActionBlocked(
+            f"interaction script blocked by safety rule: {execution.reason or 'stopped'}"
+        )
+
+    script_artifact = _save_script_artifact(artifacts, script)
+    trace_artifact = _save_trace_artifact(artifacts, execution)
+    if not execution.succeeded:
+        reason = f"interaction script {execution.status}: {execution.reason or 'stopped'}"
+        record = chain.append(
+            "entry_contradicted",
+            {
+                "run_id": run_id,
+                "entry_id": entry.id,
+                "entry_digest": entry_digest(entry),
+                "claim": entry.content,
+                "detail": reason,
+                "script_digest": script.digest,
+                "script_locator": script_locator(script.digest),
+                "script_artifact": script_artifact,
+                "trace_artifact": trace_artifact,
+                "steps_completed": execution.steps_completed,
+                "anchor_drifted": True,
+                "reanchored": False,
+                "judge": "action-script",
+                "verified_via": "browser",
+            },
+        )
+        store.set_verification(
+            entry.id, Verification.CONTRADICTED, run_id, now
+        )
+        return EntryVerifyResult(False, reason, True, record)
+
+    obs = execution.final_observation
+    assert obs is not None
+    artifact_sha = artifacts.save_observation(obs)[0]
+    drifted = entry.source.snapshot_ref is None or obs.snapshot_hash != entry.source.snapshot_ref
+    passed, reason, mode = _judge(runner, obs, entry.content, allow_deterministic=False)
+    endorsed = (
+        replace(entry, source=replace(entry.source, snapshot_ref=obs.snapshot_hash))
+        if passed
+        else entry
+    )
+    record = chain.append(
+        "entry_verified" if passed else "entry_contradicted",
+        {
+            "run_id": run_id,
+            "entry_id": entry.id,
+            "entry_digest": entry_digest(endorsed),
+            "claim": entry.content,
+            "detail": reason,
+            "url": obs.url,
+            "page_snapshot": obs.snapshot_hash,
+            "artifact": artifact_sha,
+            "script_digest": script.digest,
+            "script_locator": script_locator(script.digest),
+            "script_artifact": script_artifact,
+            "trace_artifact": trace_artifact,
+            "steps_completed": execution.steps_completed,
+            "judge": mode,
+            "anchor_drifted": drifted,
+            "reanchored": passed and drifted,
+            "verified_via": "browser",
+        },
+    )
+    store.set_verification(
+        entry.id,
+        Verification.VERIFIED if passed else Verification.CONTRADICTED,
+        run_id,
+        now,
+        snapshot_ref=obs.snapshot_hash if passed else None,
+    )
+    return EntryVerifyResult(passed=passed, reason=reason, drifted=drifted, record=record)
+
+
+def _save_script_artifact(artifacts: ArtifactStore | None, script: ActionScript) -> str | None:
+    if artifacts is None:
+        return None
+    return artifacts.save_json(
+        {
+            "type": "interaction_script",
+            "script_digest": script.digest,
+            "script": script.to_json(),
+        }
+    )[0]
+
+
+def _save_trace_artifact(artifacts: ArtifactStore | None, execution: ActionExecution) -> str | None:
+    if artifacts is None:
+        return None
+    return artifacts.save_json(execution.trace_artifact_payload())[0]
+
+
+def _load_script_from_chain(
+    chain: EvidenceChain, artifacts: ArtifactStore, script_digest: str
+) -> ActionScript:
+    for record in reversed(chain.verify()):
+        if record.payload.get("script_digest") != script_digest:
+            continue
+        sha = record.payload.get("script_artifact")
+        if not sha:
+            continue
+        data = artifacts.load(sha)
+        if data.get("type") != "interaction_script":
+            continue
+        if data.get("script_digest") != script_digest:
+            continue
+        script = parse_action_script(data.get("script"))
+        if script.digest != script_digest:
+            continue
+        return script
+    raise ValueError(f"no script artifact found for digest {script_digest}")
 
 
 def _parse_verdict(raw: str) -> dict:

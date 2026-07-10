@@ -195,6 +195,30 @@ def test_verify_heals_lagging_head_and_rearms_truncation_detection(chain, tmp_pa
         chain.verify()
 
 
+def test_verify_readonly_only_advances_an_existing_head(chain, tmp_path):
+    old = chain.append("check_passed", {"check": "old"})
+    latest = chain.append("check_passed", {"check": "latest"})
+    head_path = key_path_for(tmp_path).with_suffix(".head")
+    head_path.write_text(json.dumps({"index": old.index, "chain_hash": old.chain_hash}))
+
+    records = EvidenceChain.verify_readonly(tmp_path)
+
+    assert records[-1] == latest
+    assert json.loads(head_path.read_text()) == {
+        "index": latest.index,
+        "chain_hash": latest.chain_hash,
+    }
+
+
+def test_verify_readonly_does_not_create_a_missing_head(chain, tmp_path):
+    chain.append("check_passed", {})
+    head_path = key_path_for(tmp_path).with_suffix(".head")
+    head_path.unlink()
+
+    assert len(EvidenceChain.verify_readonly(tmp_path)) == 1
+    assert not head_path.exists()
+
+
 def test_verify_does_not_heal_a_truncated_chain(chain, tmp_path):
     # Healing must never bless damage: when the head pins a record the chain
     # no longer contains, verify raises instead of re-committing.

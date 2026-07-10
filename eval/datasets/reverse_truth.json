@@ -1,0 +1,24 @@
+{
+  "truths": [
+    {"id": "authentication", "source": "auth.py", "line_start": 9, "line_end": 11, "match_all": [["authenticated", "upload"], ["login", "required"], ["认证", "上传"]]},
+    {"id": "uploader-role", "source": "auth.py", "line_start": 12, "line_end": 13, "match_all": [["uploader", "role"], ["uploader", "角色"]]},
+    {"id": "size-limit", "source": "config.py", "line_start": 1, "line_end": 1, "match_all": [["50", "mib"], ["50", "mb"]]},
+    {"id": "file-types", "source": "config.py", "line_start": 4, "line_end": 4, "match_all": [["pdf", "png"]]},
+    {"id": "rate-policy", "source": "config.py", "line_start": 2, "line_end": 3, "match_all": [["10", "minute"], ["10", "60", "second"], ["10", "60", "请求"]]},
+    {"id": "rate-scope", "source": "api.py", "line_start": 14, "line_end": 17, "match_all": [["user", "rate"], ["user", "scoped"], ["用户", "限流"]]},
+    {"id": "rate-response", "source": "api.py", "line_start": 18, "line_end": 19, "match_all": [["429", "rate"]]},
+    {"id": "case-insensitive-extension", "source": "api.py", "line_start": 20, "line_end": 20, "match_all": [["case", "insensitive", "extension"], ["小写", "后缀"]]},
+    {"id": "type-response", "source": "api.py", "line_start": 20, "line_end": 21, "match_all": [["415", "unsupported"]]},
+    {"id": "size-boundary", "source": "api.py", "line_start": 22, "line_end": 22, "match_all": [["strictly", "greater"], ["greater", "maximum"], ["超过", "上限"]]},
+    {"id": "size-response", "source": "api.py", "line_start": 22, "line_end": 23, "match_all": [["413", "large"], ["413", "oversized"], ["413", "ceiling"], ["413", "exceed"]]},
+    {"id": "oversize-not-persisted", "source": "test_api_contract.py", "line_start": 8, "line_end": 11, "match_all": [["oversized", "not", "persist"], ["oversized", "must", "not", "persisted"]]},
+    {"id": "success-response", "source": "api.py", "line_start": 24, "line_end": 25, "match_all": [["201", "id"]]},
+    {"id": "owner-binding", "source": "api.py", "line_start": 24, "line_end": 24, "match_all": [["owner", "user"], ["所有者", "用户"]]}
+  ],
+  "forbidden": [
+    {"id": "legacy-10mb", "match_all": [["10", "mb", "maximum"]]},
+    {"id": "zip-allowed", "match_all": [["zip", "allowed"]]},
+    {"id": "unlimited", "match_all": [["unlimited"]]},
+    {"id": "auth-optional", "match_all": [["authentication", "optional"]]}
+  ]
+}

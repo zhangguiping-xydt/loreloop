@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 CLAUDE_SKILL_RELPATH = ".claude/skills/knowhelm/SKILL.md"
+CODEX_SKILL_RELPATH = ".agents/skills/knowhelm/SKILL.md"
 
 CLAUDE_SKILL_MD = """\
 ---
@@ -72,6 +73,14 @@ You may run read-only knowledge commands at any time:
 
 def install_claude_skill(workdir: Path) -> Path:
     path = workdir / CLAUDE_SKILL_RELPATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(CLAUDE_SKILL_MD, encoding="utf-8")
+    return path
+
+
+def install_codex_skill(workdir: Path) -> Path:
+    """Install the same governance contract in Codex's project skill tree."""
+    path = workdir / CODEX_SKILL_RELPATH
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(CLAUDE_SKILL_MD, encoding="utf-8")
     return path

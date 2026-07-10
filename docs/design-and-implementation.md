@@ -14,7 +14,7 @@
 2. **中间委托执行**:把任务交给 `claude -p` 或 `codex exec`,同时注入按信任分级的上下文包。
 3. **后置证据验收**:用链上记录、浏览器观察工件和人工/机器检查来判定 run 是否可接受,再把验收通过的事实回流为知识。
 
-产品形态是一个本地 CLI,没有 Web 服务、账号系统或远端状态。运行时核心依赖为零;浏览器能力通过可选 `playwright` extra 提供。
+产品形态是一个本地 CLI,没有 Web 服务、账号系统或远端状态。依赖按需引入:浏览器能力当前通过可选 `playwright` extra 提供。
 
 ### 非目标
 
@@ -126,9 +126,10 @@ starry-knowhelm/
 
 `Source` 包含:
 
-- `channel`: `code` / `web` / `image` / `manual`
+- `channel`: `code` / `web` / `image` / `manual` / `evidence`
 - `locator`:源位置,例如 `src/api.py@<commit>` 或 URL
 - `snapshot_ref`:锚点,例如 git commit 或页面快照哈希
+- `symbol`、`line_start`、`line_end`、`excerpt`:可选的精确代码证据位置
 
 新鲜度由锚点判断。代码条目通过锚定 commit 与当前树对比识别 drift;Web 条目通过页面观察快照判断 drift。
 
@@ -271,13 +272,23 @@ entry_digest = sha256(canonical_json(
 
 ### 6.1 选择策略
 
-上下文选择使用确定性词法评分:
+上下文选择使用确定性 BM25 评分,外加可选的 LLM 查询扩展:
 
-- 从任务、标题、内容中抽取中英文词项。
-- 标题命中权重高于内容命中。
-- 按得分排序取前 N 条。
+- 词项抽取:ASCII 标识符 + 中文字符 bigram(无分词依赖,任务与条目之间能产生部分重叠)。
+- BM25:IDF 加权 + 文档长度归一化,标题词项按权重计入词频。
+- 查询扩展:`run` 默认先用已有的 agent CLI 把任务扩展成一组中英双语关键词
+  (`delegate/expand.py`),结构化输出按 prompt/model/task 缓存;扩展词只进评分器,不进委托 prompt;扩展词记入 run trace
+  (`query_expansion` 字段)可审计;扩展失败非致命,自动退化为纯 BM25;
+  `--no-expand` 完全跳过。
+- 英文停用词在分词时剔除;原始任务词权重高于扩展词。
+- strong/链背书、kind 与完整 provenance 只做小幅质量加权,不能替代词项相关性。
+- 相对分数下限、sharp-gap 与原始词覆盖率共同决定变长结果集,避免任意
+  `score > 0` 都占用上下文预算。
 
-当前实现不使用 embedding,以保持 MVP 可解释、可测试、零额外依赖。
+安全边界:扩展是 LLM 输出,但它只能影响"检索到哪些条目",不能影响条目内容、
+信任等级或 prompt 结构——最坏情形等价于一次糟糕的搜索。
+
+当前实现不使用 embedding 和向量库,以保持 MVP 可解释、可测试;后续引入 embedding/混合检索不受约束。
 
 ### 6.2 渲染分层
 
@@ -290,10 +301,11 @@ entry_digest = sha256(canonical_json(
 
 ### 6.3 注入时降级
 
-注入时会基于当前工作树和证据链动态调整等级,不直接改写 DB:
+注入路径从 `store.list()` 候选全集开始,再基于当前工作树和证据链动态调整等级,不直接改写 DB:
 
 - 代码锚点漂移 → reference,并标注 `source_changed_since_capture`。
 - DB strong 但链不背书 → reference。
+- 当前 digest 被链背书 → 即使 DB curation/link 缓存被改成 rejected/superseded,仍按链 strong 候选处理。
 - 条目被链上 rejected/superseded → 不注入或显示为退役状态。
 
 ### 6.4 Run trace 与 completion
@@ -322,9 +334,24 @@ entry_digest = sha256(canonical_json(
 - `text`
 - `forms`
 - `links`
+- `headings`
+- `buttons`
+- `nav`
 - `snapshot_hash`
 
 `snapshot_hash` 覆盖裁判实际读取的页面窗口:标题、可见文本和表单结构。
+`headings`/`buttons`/`nav` 是结构化上下文,用于提高反构质量和审计可读性,但不进入
+`snapshot_hash`;避免纯导航文案或按钮列表排序变化制造过多内容级 drift。
+
+Playwright 观察在导航后等待 `networkidle`,滚动页面触发懒加载,再回到顶部读取页面。链接收集不只看
+`a[href]`,还包括 `[role=link]`、`data-href`/`data-url` 和常见 onclick 导航。`observe()` 对
+HTTP 4xx/5xx 响应报错,探索循环会把这些 URL 记为 skipped,不把错误页喂给知识提取。
+
+`ingest --from web` 的初始种子来自三处:
+
+- 用户给定 URL。
+- same-origin 的 `sitemap.xml`/`robots.txt`。
+- 代码中可静态识别的绝对路由字符串,作为实现视图对行为视图的补充。
 
 ### 7.2 ArtifactStore
 
@@ -333,6 +360,12 @@ entry_digest = sha256(canonical_json(
 ```text
 .knowhelm/evidence/artifacts/<sha256>.json
 ```
+
+工件类型包括:
+
+- `page_observation`:浏览器终态观察。
+- `interaction_script`:可重放动作脚本本体。
+- `interaction_trace`:每一步执行结果、耗时、终态 URL/快照。
 
 实现约束:
 
@@ -352,16 +385,58 @@ entry_digest = sha256(canonical_json(
 
 确定性断言不经过 LLM。空 needle 被视为 malformed expectation,在浏览器打开前拒绝。
 
-### 7.4 LLM 裁判
+### 7.4 可重放动作脚本
+
+`verify --script <actions.json>` 在验收前先按动作脚本到达交互后状态。脚本是 JSON 数据,不是程序:
+没有变量、条件、循环或 eval。v1 只支持五个动作:
+
+```json
+{
+  "version": 1,
+  "base": "http://localhost:3000",
+  "steps": [
+    {"goto": "/products"},
+    {"click": {"text": "Filter", "role": "button"}},
+    {"fill": {"label": "Max price", "value": "100"}},
+    {"select": {"label": "Sort", "option": "Price low to high"}},
+    {"wait": {"text": "Filtered results"}}
+  ]
+}
+```
+
+脚本以 canonical JSON 做 SHA-256,脚本锚写作 `script:<sha256>`。一个脚本成功跑完后,终态仍然产出标准
+`Observation` 和 `snapshot_hash`;因此交互后知识条目的 freshness 由二元组表达:
+
+- locator: `script:<sha256>`,说明如何到达状态。
+- snapshot_ref:终态 `snapshot_hash`,说明到达后看到什么。
+
+重放结局分三类:
+
+- `completed`:所有步骤完成,进入终态观察和断言。
+- `failed`:定位不到、歧义、wait 超时等路径级 drift;脚本锚 entry 复核时会写
+  `entry_contradicted`。
+- `blocked`:触发安全规则;这是执行器拒绝动作,不是断言为假,不会把 entry 标成 contradicted。
+
+执行器硬编码安全边界:
+
+- `goto` 和 `wait.url` 只接受相对路径,执行中任何出同源导航都会 blocked。
+- password 控件永不填。
+- destructive/pay/transfer/delete 等危险文本不点击。
+- 默认只允许 search/filter 类幂等 fill/select;一般写操作需要 `--allow-writes`。
+- click 打开新窗口/新标签页视为 failed。
+
+### 7.5 LLM 裁判
 
 自由文本 expectation 走 LLM 裁判。页面内容被包进带随机 nonce 的 UNTRUSTED 定界符内,并明确说明页面中的指令式文本只是证据,不是命令。
 
-### 7.5 Entry 复核
+### 7.6 Entry 复核
 
 `knowledge verify` 可对 Web 条目重新观察源页面:
 
 - 通过 → 写入 `entry_verified`,DB verification 变为 verified,并把 snapshot_ref 重锚到本次观察快照。
 - 不通过 → 写入 `entry_contradicted`,DB verification 变为 contradicted。
+- locator 为 `script:<sha256>` 的条目会从证据链上的 `interaction_script` 工件恢复脚本并重放。
+  重放 blocked 时命令报错退出,不写链、不改 DB;failed 才表示路径级 drift。
 
 链记录先写,DB 后写。通过验证时,链上 digest pin 的是重锚后的行。
 
@@ -387,6 +462,8 @@ trace 中的 `delegation_finished` 只用于展示,不能让报告变成 ACCEPTE
 
 - `knowhelm check`:人工记录,链上标注 `judge: operator`。
 - `knowhelm verify`:浏览器验证,链上标注 `verified_via: browser`,并携带 url、page_snapshot、artifact。
+- `knowhelm verify --script`:先重放动作脚本,再对终态页面执行同一套 deterministic/LLM 断言。链记录额外携带
+  `script_digest`、`script_locator`、`script_artifact`、`trace_artifact` 和 `steps_completed`。
 
 人工 check 合法,但报告会说明它没有可复审工件;harvest 不从人工 check 铸造 verified 知识。
 
@@ -394,13 +471,22 @@ trace 中的 `delegation_finished` 只用于展示,不能让报告变成 ACCEPTE
 
 报告渲染时可传入 `ArtifactStore`。CLI 路径始终传入该 store。
 
-每个 artifact check 会检查:
+每个 page observation artifact check 会检查:
 
 - 文件是否存在。
 - 文件内容 hash 是否匹配 artifact 引用。
 - 链记录是否包含 url/page_snapshot pin。
 - artifact 中的 url 是否匹配链上 url。
 - artifact 中的 snapshot_hash 是否匹配链上 page_snapshot。
+
+带 `script_digest` 的 check 还会检查:
+
+- `script_artifact` 和 `trace_artifact` 是否存在且内容 hash 匹配。
+- `script_artifact.type == interaction_script`。
+- script artifact 中的 `script_digest` 和 canonical script digest 是否匹配链上 `script_digest`。
+- `trace_artifact.type == interaction_trace`。
+- trace artifact 中的 `script_digest` 是否匹配链上 `script_digest`。
+- trace 中的 `final_snapshot` 若存在,必须匹配链上 `page_snapshot`。
 
 任一失败都会让 run 变成 NOT ACCEPTED,并在报告中列出 integrity failure。
 
@@ -423,6 +509,8 @@ harvest 产生两类输出:
    - 页面由浏览器验证。
    - check 和 artifact 都在链上可审计。
    - 铸造出的条目 born-verified。
+   - 普通页面 check 的 `Source.locator` 是 URL;脚本 check 的 locator 是
+     `script:<sha256>`,snapshot_ref 仍是终态页面快照。
 
 2. **Changed code → draft entries**
    - 从 `base_commit` 到当前 HEAD 的变更文件重新反构。
@@ -460,6 +548,10 @@ harvest 会输出需要人工关注的集合:
 - 提取与分类分为两个 LLM 步骤。
 - 输出必须是合法 JSON。
 - 条目 source 锚定当前 git commit。
+- 输入按行编号并置于随机 nonce 的 untrusted-source 边界内。
+- 每条断言携带 symbol/行区间/excerpt;excerpt 必须与源行实际匹配。
+- 允许一个文件产出 0 条知识,不再用最低条数驱动模型凑数。
+- 批内近重复断言做保守 Jaccard 去重。
 - 新条目默认 draft/unverified。
 
 ### 10.2 Web 反构
@@ -467,6 +559,7 @@ harvest 会输出需要人工关注的集合:
 `reverse_web` 从浏览器探索得到的页面观察中提取知识:
 
 - 页面观察作为证据输入。
+- 页面结构与文本以 JSON 放入随机 nonce 的 untrusted-page 边界。
 - 条目 source 为 Web URL。
 - snapshot_ref 为页面观察快照哈希。
 - 新条目默认 draft/unverified。
@@ -516,19 +609,26 @@ Codex companion skill 当前未实现;CLI 已能通过 `--agent codex` 委托 Co
 主要命令:
 
 ```text
+knowhelm doctor
 knowhelm init [--skill|--no-skill]
 knowhelm ingest --from code <path> [--agent claude|codex]
 knowhelm ingest --from web <url> [--headed] [--max-pages N]
 knowhelm run <task> [--agent claude|codex]
 knowhelm check <run_id> <check> (--pass|--fail) [--detail <text>]
+knowhelm check <run_id> <check> --command <argv-string> [--timeout <seconds>]
 knowhelm verify <run_id> <url> <expectation> [--headed]
+knowhelm verify <run_id> <base-url> <expectation> --script <actions.json> [--allow-writes] [--headed]
 knowhelm report [run_id]
 knowhelm harvest <run_id> [--agent claude|codex]
 knowhelm knowledge list [--stale]
+knowhelm knowledge export [--stale] [--output <path>]
 knowhelm knowledge approve <entry_id>
 knowhelm knowledge reject <entry_id>
 knowhelm knowledge supersede <new_id> <old_id>
 knowhelm knowledge verify <entry_id> [--headed]
+knowhelm knowledge usage
+knowhelm repo add|list|remove ...
+knowhelm project add|list|remove ...
 ```
 
 文件路径相关的 run id 使用严格正则校验,避免路径穿越。
@@ -549,14 +649,19 @@ knowhelm 的威胁模型是 **honest workstation**:
 |---|---|
 | 页面 prompt injection | 确定性断言不过模型;LLM 输入使用随机 nonce untrusted 定界符;context pack 声明数据非指令且条目按单行 JSON 渲染 |
 | 证据篡改 | HMAC 链;树外 key/head;append 前验链;artifact 内容寻址;url/snapshot pin;check 时序;单 completion 约束 |
+| 交互脚本失控 | DSL 无条件/循环/eval;同源限制;password 永不填;危险点击 blocked;写操作默认禁用;script/trace artifact 纳入报告审计 |
 | 信任洗白/压制 | digest 绑定;链重放;DB strong 无背书降级;链 strong 不被 DB draft 压制;rejected/superseded 链权威 |
-| 凭据误捕获 | 不自动登录;headed 登录交人;artifact 0600/0700;`.knowhelm/` 加入 gitignore |
+| 凭据误捕获 | 不自动登录;headed 登录交人;artifact 0600/0700;`.knowhelm/` 加入 gitignore;eval transcript 保存前脱敏并截断 |
 
 ### 14.2 设计取舍
 
 - `run` 不会每次重新打开浏览器验证 Web strong entry;它信任最近一次验证并打印提醒。
 - 页面 snapshot_hash 覆盖的是裁判实际读取的有界窗口,不是完整 DOM。
+- 交互脚本 `blocked` 表示执行器拒绝动作,不是知识断言为假;`knowledge verify`
+  对脚本锚遇到 blocked 会报错退出,不改信任状态。
 - operator check 是有效人工背书,但没有机器可复审工件;报告会标注,harvest 不铸造。
+- `check --command` 不经过 shell,记录 argv、退出码与有界输出 artifact;退出码 0
+  且 artifact/链 pin 一致时可回流为 evidence-channel verified acceptance。
 - append 与 head 更新之间如果发生崩溃,最新记录在下一次 verify 之前没有 head 截断保护;下一次 verify 会关闭这个窗口。
 
 ---
@@ -577,6 +682,9 @@ knowhelm 的威胁模型是 **honest workstation**:
 - artifact 缺失、篡改、掉包、缺 pin 的报告降级。
 - harvest 链先行、幂等、dirty tree 拒绝、unauditable check 不铸造。
 - CLI 错误边界和路径穿越防护。
+- 反构 Precision/Recall、检索 Precision@K/Recall@K/MRR 和真实 Agent 隐藏测试任务。
+- SQLite schema upgrade 与 source evidence 字段的旧 digest 兼容。
+- Linux/macOS `fcntl` 与 Windows `msvcrt` 锁后端。
 
 测试环境约定:
 
@@ -594,17 +702,16 @@ knowhelm 的威胁模型是 **honest workstation**:
 ingest → run → check/verify → report → harvest
 ```
 
-适合下一步用真实小项目跑完整流程,观察:
+仓库内 `eval/` 已经把以下问题做成可重复基准:
 
-- 反构出的知识是否足够有用。
-- context pack 是否能有效约束编码代理。
-- 浏览器验证是否覆盖真实验收需求。
-- harvest 回流是否形成可持续知识治理循环。
+- 反构高价值事实的 Precision/Recall 与 forbidden claim 命中。
+- context pack 的 Precision@K、Recall@K、MRR 与变长返回精度。
+- 无知识/knowhelm 上下文的真实编码任务隐藏测试成功率。
 
 后续可扩展方向:
 
-1. Codex companion skill。
-2. 更好的上下文检索策略,例如 embedding 或混合检索。
-3. 更丰富的验收断言 DSL。
-4. 更友好的 knowledge list/review 交互。
-5. GitHub 开源发布准备。
+1. 把公开基准扩展到 Python、TypeScript 与混合语言真实仓库。
+2. 增加 100/1,000/10,000 条知识规模下的延迟与 token 成本曲线。
+3. 扩展更多确定性证据适配器,例如 JUnit/SARIF/CI attestation 导入。
+4. 更友好的冲突 review 与 supersede 交互。
+5. 零背景用户测试与多平台首次成功路径。

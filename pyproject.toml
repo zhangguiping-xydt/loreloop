@@ -35,3 +35,6 @@ packages = ["src/knowhelm"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

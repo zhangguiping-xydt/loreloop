@@ -1,0 +1,20 @@
+{
+  "model": "codex",
+  "note": "Recorded claims; excerpts omitted, evidence spans retained for deterministic rescoring.",
+  "predictions": [
+    {"title": "Upload size limit", "content": "The maximum upload size is 50 MiB.", "kind": "constraint", "source": "config.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 1, "line_end": 1, "symbol": "MAX_UPLOAD_BYTES"}},
+    {"title": "Upload rate limit", "content": "The configured upload rate limit is 10 requests per 60-second window.", "kind": "constraint", "source": "config.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 2, "line_end": 3}},
+    {"title": "Allowed upload types", "content": "Only PDF and PNG filename extensions are allowed for uploads.", "kind": "constraint", "source": "config.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 4, "line_end": 4, "symbol": "ALLOWED_EXTENSIONS"}},
+    {"title": "Authentication requirement", "content": "Upload authorization requires the user to be authenticated.", "kind": "constraint", "source": "auth.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 9, "line_end": 11, "symbol": "require_uploader"}},
+    {"title": "Uploader role requirement", "content": "Upload authorization requires the user to have the uploader role.", "kind": "constraint", "source": "auth.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 9, "line_end": 13, "symbol": "require_uploader"}},
+    {"title": "Per-user rate limiting", "content": "Upload rate limiting is keyed by the user's ID.", "kind": "architecture", "source": "api.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 14, "line_end": 17, "symbol": "upload"}},
+    {"title": "Rate-limit response", "content": "Rate-limited uploads return HTTP 429 with a retry interval of 60 seconds.", "kind": "interface", "source": "api.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 18, "line_end": 19, "symbol": "upload"}},
+    {"title": "Extension validation", "content": "Upload extension checks are case-insensitive and use the final suffix of the filename.", "kind": "behavior", "source": "api.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 20, "line_end": 20, "symbol": "upload"}},
+    {"title": "Unsupported type response", "content": "An unsupported upload extension returns HTTP 415.", "kind": "interface", "source": "api.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 20, "line_end": 21, "symbol": "upload"}},
+    {"title": "Size boundary", "content": "Upload size validation rejects files only when their size is strictly greater than the configured maximum.", "kind": "behavior", "source": "api.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 22, "line_end": 22, "symbol": "upload"}},
+    {"title": "Oversize response", "content": "An oversized upload returns HTTP 413 and reports the configured maximum byte count.", "kind": "interface", "source": "api.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 22, "line_end": 23, "symbol": "upload"}},
+    {"title": "Upload ownership", "content": "Successfully stored uploads are associated with the uploading user's ID as owner.", "kind": "behavior", "source": "api.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 24, "line_end": 24, "symbol": "upload"}},
+    {"title": "Upload success response", "content": "A successful upload returns HTTP 201 with the stored file identifier in the id field.", "kind": "interface", "source": "api.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 24, "line_end": 25, "symbol": "upload"}},
+    {"title": "Oversize persistence guard", "content": "Oversized uploads must not be persisted.", "kind": "constraint", "source": "test_api_contract.py@fe2a24a3be4d7a96dfefa161efd16af312d625ae", "evidence": {"line_start": 8, "line_end": 11, "symbol": "test_oversized_upload_is_rejected"}}
+  ]
+}

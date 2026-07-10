@@ -18,6 +18,7 @@ while its evidence material is gone or unaccounted for.
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,7 +40,11 @@ class RunSummary:
     task: str
     context_entries: list[str]
     finished: bool
-    base_commit: str | None = None
+    base_commits: dict[str, str] | None = None
+
+    @property
+    def base_commit(self) -> str | None:
+        return (self.base_commits or {}).get(".")
 
 
 @dataclass(frozen=True)
@@ -65,8 +70,14 @@ class RunEvaluation:
         return self.completed is not None
 
     @property
+    def base_commits(self) -> dict[str, str]:
+        return _read_base_commits(
+            self.completed.payload if self.completed else {}, "delegation_completed"
+        )
+
+    @property
     def base_commit(self) -> str | None:
-        return self.completed.payload.get("base_commit") if self.completed else None
+        return self.base_commits.get(".")
 
     @property
     def accepted(self) -> bool:
@@ -118,8 +129,47 @@ def load_run(trace_path: Path) -> RunSummary:
         task=task,
         context_entries=context_entries,
         finished=finished,
-        base_commit=started.get("base_commit"),
+        base_commits=_read_base_commits(started, "delegation_started"),
     )
+
+
+def _read_base_commits(payload: dict, context: str) -> dict[str, str]:
+    if "base_commits" in payload:
+        value = payload["base_commits"]
+        if not isinstance(value, dict) or any(
+            not isinstance(name, str)
+            or not _valid_repo_key(name)
+            or not isinstance(commit, str)
+            or not commit
+            or commit != commit.strip()
+            or any(char.isspace() for char in commit)
+            for name, commit in value.items()
+        ):
+            raise RunTraceError(f"invalid {context}.base_commits")
+        return dict(value)
+    value = payload.get("base_commit")
+    if value is None:
+        return {}
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(char.isspace() for char in value)
+    ):
+        raise RunTraceError(f"invalid {context}.base_commit")
+    return {".": value}
+
+
+def _valid_repo_key(name: str) -> bool:
+    if name == ".":
+        return True
+    from ..knowledge.repos import RepoConfigError, validate_repo_name
+
+    try:
+        validate_repo_name(name)
+    except RepoConfigError:
+        return False
+    return True
 
 
 def evaluate_run(
@@ -261,29 +311,112 @@ def _audit_artifacts(
         return []
     broken = []
     for rec in checks:
-        sha = rec.payload.get("artifact")
+        payload = rec.payload
+        sha = payload.get("artifact")
         if not sha:
-            continue
-        try:
-            data = artifacts.load(sha)
-        except FileNotFoundError:
-            broken.append((sha, "referenced on the chain but the file is missing"))
-            continue
-        except ValueError as exc:
-            broken.append((sha, str(exc)))
-            continue
-        chain_url = rec.payload.get("url")
-        chain_snap = rec.payload.get("page_snapshot")
-        if chain_url is None or chain_snap is None:
-            broken.append((sha, "chain record carries an artifact but no url/page_snapshot "
-                                "pin — the artifact cannot be tied to the verdict"))
-            continue
-        if data.get("url") != chain_url:
-            broken.append((sha, f"artifact url {data.get('url')!r} does not match "
-                                f"the chain record ({chain_url!r})"))
-        if data.get("snapshot_hash") != chain_snap:
-            broken.append((sha, "artifact snapshot hash does not match the chain record"))
+            data = None
+        else:
+            data = _load_artifact(artifacts, sha, broken, "observation artifact")
+        artifact_type = data.get("type") if data is not None else None
+        if artifact_type == "page_observation":
+            chain_url = payload.get("url")
+            chain_snap = payload.get("page_snapshot")
+            if chain_url is None or chain_snap is None:
+                broken.append((sha, "chain record carries an artifact but no url/page_snapshot "
+                                    "pin — the artifact cannot be tied to the verdict"))
+            else:
+                if data.get("url") != chain_url:
+                    broken.append((sha, f"artifact url {data.get('url')!r} does not match "
+                                        f"the chain record ({chain_url!r})"))
+                if data.get("snapshot_hash") != chain_snap:
+                    broken.append((sha, "artifact snapshot hash does not match the chain record"))
+        elif artifact_type == "command_evidence":
+            if payload.get("verified_via") != "command":
+                broken.append((sha, "command artifact is not pinned as command verification"))
+            if data.get("argv") != payload.get("command"):
+                broken.append((sha, "command artifact argv does not match the chain record"))
+            if data.get("exit_code") != payload.get("exit_code"):
+                broken.append((sha, "command artifact exit code does not match the chain record"))
+            if payload.get("exit_code") == 0 and data.get("timed_out"):
+                broken.append((sha, "successful command check is marked timed out"))
+        elif data is not None:
+            broken.append((sha, f"unsupported evidence artifact type {artifact_type!r}"))
+
+        script_digest = payload.get("script_digest")
+        if script_digest:
+            if not sha:
+                broken.append((
+                    rec.chain_hash,
+                    "script check carries no final observation artifact",
+                ))
+            _audit_script_artifact(rec, artifacts, broken)
+            _audit_trace_artifact(rec, artifacts, broken)
+        elif payload.get("script_artifact") or payload.get("trace_artifact"):
+            broken.append((
+                rec.chain_hash,
+                "chain record carries script/trace artifacts but no script_digest pin",
+            ))
     return broken
+
+
+def _load_artifact(
+    artifacts: ArtifactStore, sha: str, broken: list[tuple[str, str]], label: str
+) -> dict | None:
+    try:
+        return artifacts.load(sha)
+    except FileNotFoundError:
+        broken.append((sha, f"{label} referenced on the chain but the file is missing"))
+    except ValueError as exc:
+        broken.append((sha, f"{label}: {exc}"))
+    return None
+
+
+def _audit_script_artifact(
+    rec: EvidenceRecord, artifacts: ArtifactStore, broken: list[tuple[str, str]]
+) -> None:
+    from ..webexplore.actions import ActionScriptError, parse_action_script
+
+    script_digest = rec.payload.get("script_digest")
+    sha = rec.payload.get("script_artifact")
+    if not sha:
+        broken.append((rec.chain_hash, "chain record carries script_digest but no script_artifact"))
+        return
+    data = _load_artifact(artifacts, sha, broken, "script artifact")
+    if data is None:
+        return
+    if data.get("type") != "interaction_script":
+        broken.append((sha, "script artifact has the wrong type"))
+    if data.get("script_digest") != script_digest:
+        broken.append((sha, "script artifact digest does not match the chain record"))
+        return
+    try:
+        script = parse_action_script(data.get("script"))
+    except ActionScriptError as exc:
+        broken.append((sha, f"script artifact contains an invalid script: {exc}"))
+        return
+    if script.digest != script_digest:
+        broken.append((sha, "script artifact canonical digest does not match the chain record"))
+
+
+def _audit_trace_artifact(
+    rec: EvidenceRecord, artifacts: ArtifactStore, broken: list[tuple[str, str]]
+) -> None:
+    script_digest = rec.payload.get("script_digest")
+    sha = rec.payload.get("trace_artifact")
+    if not sha:
+        broken.append((rec.chain_hash, "chain record carries script_digest but no trace_artifact"))
+        return
+    data = _load_artifact(artifacts, sha, broken, "trace artifact")
+    if data is None:
+        return
+    if data.get("type") != "interaction_trace":
+        broken.append((sha, "trace artifact has the wrong type"))
+    if data.get("script_digest") != script_digest:
+        broken.append((sha, "trace artifact digest does not match the chain record"))
+    final_snapshot = data.get("final_snapshot")
+    chain_snapshot = rec.payload.get("page_snapshot")
+    if final_snapshot and chain_snapshot and final_snapshot != chain_snapshot:
+        broken.append((sha, "trace final snapshot does not match the chain record"))
 
 
 def record_check(
@@ -297,3 +430,76 @@ def record_check(
     if detail:
         payload["detail"] = detail
     return chain.append("check_passed" if passed else "check_failed", payload)
+
+
+def record_command_check(
+    chain: EvidenceChain,
+    artifacts: ArtifactStore,
+    run_id: str,
+    check: str,
+    argv: list[str],
+    *,
+    cwd: Path,
+    timeout: float = 300.0,
+) -> EvidenceRecord:
+    """Execute an operator-specified command without a shell and pin its output.
+
+    This gives tests, linters, CLI probes and API test clients the same
+    re-auditable evidence path as browser checks. Only exit code zero passes.
+    """
+    if not argv or any(not isinstance(part, str) or not part for part in argv):
+        raise ValueError("command check requires a non-empty argv")
+    if timeout <= 0:
+        raise ValueError("command check timeout must be positive")
+    started = datetime.now(timezone.utc)
+    timed_out = False
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        exit_code = proc.returncode
+        stdout = proc.stdout
+        stderr = proc.stderr
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        exit_code = None
+        stdout = _timeout_text(exc.stdout)
+        stderr = _timeout_text(exc.stderr)
+    finished = datetime.now(timezone.utc)
+    artifact, _ = artifacts.save_json(
+        {
+            "type": "command_evidence",
+            "argv": argv,
+            "cwd": str(cwd.resolve()),
+            "exit_code": exit_code,
+            "timed_out": timed_out,
+            "stdout": stdout[-100_000:],
+            "stderr": stderr[-100_000:],
+            "started_at": started.isoformat(),
+            "finished_at": finished.isoformat(),
+        }
+    )
+    payload = {
+        "run_id": run_id,
+        "check": check,
+        "judge": "command",
+        "verified_via": "command",
+        "artifact": artifact,
+        "command": argv,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+    }
+    if stderr:
+        payload["detail"] = stderr[-500:]
+    passed = exit_code == 0 and not timed_out
+    return chain.append("check_passed" if passed else "check_failed", payload)
+
+
+def _timeout_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    return value.decode(errors="replace") if isinstance(value, bytes) else value

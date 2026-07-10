@@ -8,6 +8,7 @@ the deterministic verify path — no LLM anywhere, so the test is hermetic.
 import threading
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -15,14 +16,17 @@ pytest.importorskip("playwright")
 
 from knowhelm.evidence.artifacts import ArtifactStore  # noqa: E402
 from knowhelm.evidence.chain import EvidenceChain  # noqa: E402
+from knowhelm.webexplore.actions import parse_action_script  # noqa: E402
 from knowhelm.webexplore.browser import PlaywrightBrowser  # noqa: E402
-from knowhelm.webexplore.verify import verify_expectation  # noqa: E402
+from knowhelm.webexplore.verify import verify_expectation, verify_script_expectation  # noqa: E402
 
 PAGE = """<!doctype html>
 <html><head><title>Upload Console</title></head>
 <body>
   <h1>Upload</h1>
   <p>Maximum file size is 50MB.</p>
+  <button onclick="document.getElementById('status').innerText = 'Filtered results: 1 item'">Filter</button>
+  <p id="status"></p>
   <form><input type="file" name="doc"><input type="submit"></form>
   <a href="/other.html">other</a>
 </body></html>
@@ -58,7 +62,17 @@ def test_observe_captures_title_text_forms_links(site, browser):
     assert "Maximum file size is 50MB." in obs.text
     assert any("file" in f for f in obs.forms)
     assert any(link.endswith("/other.html") for link in obs.links)
+    assert "Upload" in obs.headings
+    assert "Filter" in obs.buttons
     assert obs.snapshot_hash == browser.observe(site).snapshot_hash
+
+
+def test_observe_rejects_http_error_pages(site, browser):
+    parsed = urlsplit(site)
+    missing = f"{parsed.scheme}://{parsed.netloc}/missing.html"
+
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        browser.observe(missing)
 
 
 def test_deterministic_verify_against_real_page(site, browser, tmp_path):
@@ -82,3 +96,33 @@ def test_deterministic_verify_against_real_page(site, browser, tmp_path):
     )
     assert not bad.passed
     assert [r.event for r in chain.verify()] == ["check_passed", "check_failed"]
+
+
+def test_script_verify_against_real_page(site, browser, tmp_path):
+    workdir = tmp_path / "wd"
+    (workdir / ".knowhelm").mkdir(parents=True)
+    chain = EvidenceChain.for_workdir(workdir)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    parsed = urlsplit(site)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    script = parse_action_script(
+        {
+            "version": 1,
+            "base": base,
+            "steps": [
+                {"goto": "/index.html"},
+                {"click": {"text": "Filter", "role": "button"}},
+                {"wait": {"text": "Filtered results: 1 item"}},
+            ],
+        }
+    )
+
+    result = verify_script_expectation(
+        browser, NoLLM(), chain, "run-smoke", base,
+        script, "contains:Filtered results: 1 item", artifacts=artifacts,
+    )
+
+    assert result.passed
+    rec = chain.verify()[0]
+    assert rec.payload["script_digest"] == script.digest
+    assert artifacts.load(rec.payload["trace_artifact"])["status"] == "completed"

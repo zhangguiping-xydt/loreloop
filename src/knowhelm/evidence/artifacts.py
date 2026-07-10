@@ -39,8 +39,16 @@ class ArtifactStore:
             "text": obs.text,
             "forms": obs.forms,
             "links": obs.links,
+            "headings": obs.headings,
+            "buttons": obs.buttons,
+            "nav": obs.nav,
             "snapshot_hash": obs.snapshot_hash,
         }
+        return self.save_json(payload)
+
+    def save_json(self, payload: dict) -> tuple[str, Path]:
+        if "type" not in payload:
+            raise ValueError("artifact payload must include type")
         data = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         sha = hashlib.sha256(data.encode()).hexdigest()
         path = self._root / f"{sha}.json"

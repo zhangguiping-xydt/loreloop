@@ -14,6 +14,7 @@ from knowhelm.knowledge.code_reverse import (
     scan_repo,
 )
 from knowhelm.knowledge.model import Channel, Curation, Entry, Kind, Source, Verification
+from knowhelm.knowledge.repos import save_repos
 
 
 class FakeRunner:
@@ -48,7 +49,17 @@ def test_scan_repo_filters_by_extension(repo):
 
 def test_reverse_code_produces_anchored_entries(repo):
     extract_out = json.dumps(
-        [{"claim": "POST /upload returns 201.", "title": "Upload status", "file": "app.py"}]
+        [{
+            "claim": "POST /upload returns 201.",
+            "title": "Upload status",
+            "file": "app.py",
+            "evidence": {
+                "line_start": 1,
+                "line_end": 2,
+                "symbol": "upload",
+                "excerpt": "def upload():\n    return 201",
+            },
+        }]
     )
     classify_out = json.dumps([{"id": 0, "kind": "interface"}])
     runner = FakeRunner([extract_out, classify_out])
@@ -64,14 +75,71 @@ def test_reverse_code_produces_anchored_entries(repo):
     ).stdout.strip()
     assert e.source.locator == f"app.py@{head}"
     assert e.source.snapshot_ref == head
+    assert e.source.line_start == 1
+    assert e.source.line_end == 2
+    assert e.source.symbol == "upload"
+    assert e.source.excerpt == "def upload():\n    return 201"
     assert e.trust.curation is Curation.DRAFT
     assert e.trust.verification is Verification.UNVERIFIED
+
+
+def test_reverse_code_prefixes_declared_repository(repo):
+    runner = FakeRunner([
+        json.dumps([{"claim": "The value is one.", "title": "Value", "file": "app.py"}]),
+        json.dumps([{"id": 0, "kind": "behavior"}]),
+    ])
+
+    entry = reverse_code(runner, repo, repo_name="backend")[0]
+
+    assert entry.source.locator.startswith("repo:backend/app.py@")
 
 
 def test_extract_rejects_unknown_file(repo):
     out = json.dumps([{"claim": "x", "title": "t", "file": "ghost.py"}])
     with pytest.raises(ExtractionError, match="unknown file"):
         extract_assertions(FakeRunner([out]), repo, [repo / "app.py"])
+
+
+def test_extract_rejects_evidence_lines_outside_file(repo):
+    out = json.dumps([{
+        "claim": "POST /upload returns 201.",
+        "title": "Upload status",
+        "file": "app.py",
+        "evidence": {"line_start": 9, "line_end": 10, "symbol": "upload"},
+    }])
+
+    with pytest.raises(ExtractionError, match="evidence line"):
+        extract_assertions(FakeRunner([out]), repo, [repo / "app.py"])
+
+
+def test_extract_rejects_fabricated_evidence_excerpt(repo):
+    out = json.dumps([{
+        "claim": "POST /upload returns 201.",
+        "title": "Upload status",
+        "file": "app.py",
+        "evidence": {
+            "line_start": 1,
+            "line_end": 2,
+            "symbol": "upload",
+            "excerpt": "return 500",
+        },
+    }])
+
+    with pytest.raises(ExtractionError, match="excerpt does not match"):
+        extract_assertions(FakeRunner([out]), repo, [repo / "app.py"])
+
+
+def test_reverse_prompt_prioritizes_high_value_facts_and_versions_it(repo):
+    runner = FakeRunner(["[]"])
+
+    assert extract_assertions(runner, repo, [repo / "app.py"]) == []
+
+    prompt = runner.prompts[0]
+    assert "prompt-version:" in prompt
+    assert "Do not extract" in prompt
+    assert "test fixture values" in prompt
+    assert "3 to 15" not in prompt
+    assert "0001 | def upload():" in prompt
 
 
 def test_extract_rejects_non_json():
@@ -135,6 +203,80 @@ def test_drift_detection_treats_missing_anchor_as_drifted(repo):
         source=Source(channel=Channel.CODE, locator="app.py"),
     )
     assert drifted_code_entry_ids(repo, [anchorless]) == {anchorless.id}
+
+
+def test_drift_detection_is_grouped_by_repository(repo):
+    backend = repo.parent / f"{repo.name}-backend"
+    backend.mkdir()
+    subprocess.run(["git", "init"], cwd=backend, check=True, capture_output=True)
+    (backend / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=backend, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init"],
+        cwd=backend,
+        check=True,
+        capture_output=True,
+    )
+    save_repos(repo, {"backend": backend})
+    root_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    backend_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=backend, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    root_entry = code_entry("app.py", root_base)
+    backend_entry = Entry(
+        title="Backend value",
+        content="Backend value is one.",
+        kind=Kind.BEHAVIOR,
+        source=Source(
+            channel=Channel.CODE,
+            locator=f"repo:backend/app.py@{backend_base}",
+            snapshot_ref=backend_base,
+        ),
+    )
+
+    (backend / "app.py").write_text("value = 2\n")
+    subprocess.run(["git", "add", "app.py"], cwd=backend, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "change"],
+        cwd=backend,
+        check=True,
+        capture_output=True,
+    )
+
+    assert drifted_code_entry_ids(repo, [root_entry, backend_entry]) == {backend_entry.id}
+
+
+def test_removing_repository_declaration_only_demotes_entries(repo):
+    backend = repo.parent / f"{repo.name}-backend"
+    backend.mkdir()
+    subprocess.run(["git", "init"], cwd=backend, check=True, capture_output=True)
+    (backend / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=backend, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init"],
+        cwd=backend,
+        check=True,
+        capture_output=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=backend, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    save_repos(repo, {"backend": backend})
+    entry = Entry(
+        title="Backend value",
+        content="Backend value is one.",
+        kind=Kind.BEHAVIOR,
+        source=Source(
+            channel=Channel.CODE,
+            locator=f"repo:backend/app.py@{head}",
+            snapshot_ref=head,
+        ),
+    )
+    (repo / ".knowhelm/repos.json").unlink()
+
+    assert drifted_code_entry_ids(repo, [entry]) == {entry.id}
 
 
 def test_json_extraction_tolerates_surrounding_prose():

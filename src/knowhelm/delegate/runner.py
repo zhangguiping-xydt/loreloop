@@ -10,18 +10,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..agents import AgentRunner
+from ..federation.reader import ForeignEntry
 from ..knowledge.code_reverse import drifted_code_entry_ids
 from ..knowledge.model import Entry
+from ..knowledge.repos import load_repos
 from .context_pack import ContextPack, render, select
 
 RUNS_DIR = ".knowhelm/runs"
 
 
-def _head_or_none(workdir: Path) -> str | None:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=workdir, capture_output=True, text=True
-    )
-    return result.stdout.strip() if result.returncode == 0 else None
+def _heads(workdir: Path) -> dict[str, str]:
+    heads: dict[str, str] = {}
+    for name, repo in {".": workdir.resolve(), **load_repos(workdir)}.items():
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            heads[name] = result.stdout.strip()
+    return heads
 
 
 @dataclass(frozen=True)
@@ -30,7 +36,11 @@ class DelegationResult:
     output: str
     trace_path: Path
     pack: ContextPack
-    base_commit: str | None
+    base_commits: dict[str, str]
+
+    @property
+    def base_commit(self) -> str | None:
+        return self.base_commits.get(".")
 
 
 class DelegateRunner:
@@ -46,17 +56,21 @@ class DelegateRunner:
         entries: list[Entry],
         unendorsed_ids: set[str] | frozenset[str] = frozenset(),
         endorsed_ids: set[str] | frozenset[str] = frozenset(),
+        expansion: str = "",
+        related: list[ForeignEntry] | None = None,
     ) -> DelegationResult:
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
         trace_path = self._runs_dir / f"{run_id}.jsonl"
-        base_commit = _head_or_none(self._workdir)
-        drifted = drifted_code_entry_ids(self._workdir, entries) if base_commit else set()
+        base_commits = _heads(self._workdir)
+        drifted = drifted_code_entry_ids(self._workdir, entries) if base_commits else set()
         pack = select(
             task,
             entries,
             drifted_ids=drifted,
             unendorsed_ids=unendorsed_ids,
             endorsed_ids=endorsed_ids,
+            expansion=expansion,
+            related=related,
         )
         prefix = render(pack)
         prompt = f"{prefix}\n# Task\n\n{task}\n" if prefix else task
@@ -69,7 +83,9 @@ class DelegateRunner:
             drifted_entries=sorted(pack.drifted_ids & set(pack.entry_ids)),
             unendorsed_entries=sorted(pack.unendorsed_ids & set(pack.entry_ids)),
             chain_endorsed_entries=sorted(pack.endorsed_ids & set(pack.entry_ids)),
-            base_commit=base_commit,
+            query_expansion=expansion,
+            base_commits=base_commits,
+            related_entries=pack.related_ids,
         )
         try:
             output = self._agent.run(prompt)
@@ -82,7 +98,7 @@ class DelegateRunner:
             output=output,
             trace_path=trace_path,
             pack=pack,
-            base_commit=base_commit,
+            base_commits=base_commits,
         )
 
     def _trace(self, path: Path, event: str, **fields) -> None:

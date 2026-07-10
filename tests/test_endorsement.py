@@ -3,6 +3,8 @@ them FOR THE CURRENT CONTENT — the store lives in the agent-writable tree,
 the chain's key does not, and an endorsement bound to a bare id would survive
 a content rewrite."""
 
+import hashlib
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -35,6 +37,43 @@ def make_entry(title="Upload contract", content="POST /upload returns 201."):
         title=title, content=content, kind=Kind.INTERFACE,
         source=Source(channel=Channel.CODE, locator="api.py@abc"),
     )
+
+
+def test_entry_digest_binds_precise_source_evidence():
+    from dataclasses import replace
+
+    entry = make_entry()
+    evidenced = replace(
+        entry,
+        source=replace(
+            entry.source,
+            symbol="upload",
+            line_start=10,
+            line_end=12,
+            excerpt="return 201",
+        ),
+    )
+
+    assert entry_digest(entry) != entry_digest(evidenced)
+
+
+def test_entry_digest_remains_compatible_for_legacy_entries_without_evidence():
+    entry = make_entry()
+    legacy_material = json.dumps(
+        {
+            "id": entry.id,
+            "title": entry.title,
+            "content": entry.content,
+            "kind": entry.kind.value,
+            "channel": entry.source.channel.value,
+            "locator": entry.source.locator,
+            "snapshot_ref": entry.source.snapshot_ref,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+    assert entry_digest(entry) == hashlib.sha256(legacy_material.encode()).hexdigest()
 
 
 def strong(entry):

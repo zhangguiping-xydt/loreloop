@@ -21,6 +21,8 @@ appended on success and re-harvesting the same run is refused.
 
 from __future__ import annotations
 
+import re
+import subprocess
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +34,7 @@ from ..report.acceptance import RunSummary, evaluate_run
 from .code_reverse import changed_files, changed_paths, dirty_source_files, repo_head, reverse_code
 from .endorsement import chain_superseded_ids, entry_digest, unendorsed_strong_ids
 from .model import Channel, Entry, Kind, Source, Trust, Verification
+from .repos import RepoConfigError, parse_code_locator, resolve_repo
 from .store import KnowledgeStore
 
 HARVEST_EVENT = "knowledge_harvested"
@@ -49,7 +52,11 @@ class HarvestResult:
     unauditable_checks: list[str] = field(default_factory=list)
     review: list[Entry] = field(default_factory=list)
     demoted: list[Entry] = field(default_factory=list)
-    head_commit: str | None = None
+    head_commits: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def head_commit(self) -> str | None:
+        return self.head_commits.get(".")
 
 
 def harvest_run(
@@ -57,10 +64,10 @@ def harvest_run(
     chain: EvidenceChain,
     store: KnowledgeStore,
     runner: AgentRunner,
-    repo: Path,
+    workdir: Path,
     artifacts: ArtifactStore | None = None,
 ) -> HarvestResult:
-    repo = repo.resolve()
+    workdir = workdir.resolve()
     records = chain.verify()
     evaluation = evaluate_run(run, chain, artifacts)
     if not evaluation.accepted:
@@ -75,21 +82,28 @@ def harvest_run(
     # record, never from the trace: the trace lives in the agent-writable
     # tree, and a forged base_commit there would steer which files get
     # re-reversed and which entries get flagged stale.
-    base_commit = evaluation.base_commit
-    if base_commit:
-        dirty = dirty_source_files(repo)
+    base_commits = evaluation.base_commits
+    repos: dict[str, Path] = {}
+    for name in base_commits:
+        try:
+            repo = resolve_repo(workdir, name)
+        except RepoConfigError as exc:
+            raise HarvestError(f"repository {name!r} from the run cannot be resolved: {exc}") from exc
+        if not repo.is_dir() or not (repo / ".git").exists():
+            raise HarvestError(f"repository {name!r} from the run is not a git root: {repo}")
+        repos[name] = repo
+        try:
+            dirty = dirty_source_files(repo)
+        except subprocess.CalledProcessError as exc:
+            raise HarvestError(f"cannot inspect repository {name!r}: git status failed") from exc
         if dirty:
-            # Knowledge must anchor to a reproducible commit. Reversing a
-            # dirty tree would stamp entries with a HEAD sha whose content is
-            # not what was actually read — a lie in the provenance field.
             raise HarvestError(
-                "working tree has uncommitted source changes; commit them so "
+                f"repository {name!r} has uncommitted source changes; commit them so "
                 "knowledge anchors to a real commit: " + ", ".join(dirty[:10])
             )
 
     now = datetime.now(timezone.utc)
     candidates, unauditable = _mint_verified_checks(evaluation.passed, run.run_id, now, artifacts)
-    review = _review_candidates(store, candidates, chain_superseded_ids(records))
     # Chain before trust bits: the minted rows are only COMPUTED here — their
     # digests go on the chain first, and the DB is written after the append
     # succeeds. A failure anywhere in between leaves drafts and re-anchors at
@@ -97,20 +111,44 @@ def harvest_run(
     minted = _dedupe([_prospective_minted(store, e) for e in candidates])
 
     reversed_entries: list[Entry] = []
-    stale: list[Entry] = []
-    head = None
-    if base_commit:
-        head = repo_head(repo)
-        if head != base_commit:
-            touched = changed_paths(repo, base_commit)
-            if touched:
-                raw = reverse_code(runner, repo, files=changed_files(repo, base_commit))
-                reversed_entries = _dedupe(
-                    [_store_reanchored(store, e, head, now) for e in raw]
-                )
-                # Staleness after re-anchoring: an entry whose claim was just
-                # re-extracted verbatim at head is confirmed, not stale.
-                stale = _stale_entries(store, touched, head)
+    touched_by_repo: dict[str, list[str]] = {}
+    head_commits: dict[str, str] = {}
+    plans: dict[str, tuple[Path, str, list[str], list[Path]]] = {}
+    for name, base in base_commits.items():
+        repo = repos[name]
+        try:
+            head = repo_head(repo)
+        except subprocess.CalledProcessError as exc:
+            raise HarvestError(f"cannot inspect repository {name!r}: HEAD is unavailable") from exc
+        head_commits[name] = head
+        if head == base:
+            continue
+        try:
+            touched = changed_paths(repo, base)
+            files = changed_files(repo, base)
+        except subprocess.CalledProcessError as exc:
+            raise HarvestError(
+                f"cannot inspect repository {name!r}: base commit {base!r} is invalid"
+            ) from exc
+        touched_by_repo[name] = touched
+        plans[name] = (repo, head, touched, files)
+    for name, (repo, head, touched, files) in plans.items():
+        if not touched:
+            continue
+        raw = reverse_code(
+            runner,
+            repo,
+            files=files,
+            repo_name=name,
+        )
+        reversed_entries.extend(_store_reanchored(store, entry, head, now) for entry in raw)
+    reversed_entries = _dedupe(reversed_entries)
+    stale = _stale_entries(store, touched_by_repo, head_commits)
+    review = _review_candidates(
+        store,
+        [*minted, *reversed_entries],
+        chain_superseded_ids(records),
+    )
 
     # Re-anchoring moves the entry's digest away from any prior endorsement,
     # and re-extraction earns no new one (an LLM restating a claim is not a
@@ -131,8 +169,9 @@ def harvest_run(
             "stale": [e.id for e in stale],
             "unauditable_checks": unauditable,
             "review": [e.id for e in review],
-            "base_commit": base_commit,
-            "head_commit": head,
+            "injected_entries": list(evaluation.completed.payload.get("context_entries", [])),
+            "base_commits": base_commits,
+            "head_commits": head_commits,
         },
     )
     for e in minted:
@@ -144,7 +183,7 @@ def harvest_run(
         unauditable_checks=unauditable,
         review=review,
         demoted=demoted,
-        head_commit=head,
+        head_commits=head_commits,
     )
 
 
@@ -163,26 +202,54 @@ def _demoted_by_reanchor(
 
 
 def _review_candidates(
-    store: KnowledgeStore, minted: list[Entry], superseded: set[str]
+    store: KnowledgeStore, candidates: list[Entry], superseded: set[str]
 ) -> list[Entry]:
-    """Pre-existing strong entries at the locators being minted. A new
-    born-verified assertion about the same page may confirm, refine or
-    contradict them — a judgment for the curator, never automated here.
-    ``superseded`` is the chain-endorsed set: entries the curator already
-    retired need no second review, and the chain (not the deletable DB links
-    table) decides who those are."""
-    locators = {e.source.locator for e in minted}
-    if not locators:
+    """Return strong entries that may duplicate or conflict with new claims.
+
+    Same-source changes use a permissive lexical threshold (numbers often
+    carry the contradiction); cross-source candidates require much stronger
+    similarity. Nothing is merged or superseded automatically.
+    """
+    if not candidates:
         return []
-    minted_content = {(e.source.locator, e.content) for e in minted}
-    return [
-        e
-        for e in store.list(channel=Channel.WEB)
-        if e.source.locator in locators
-        and e.is_strong_evidence()
-        and e.id not in superseded
-        and (e.source.locator, e.content) not in minted_content
-    ]
+    candidate_ids = {entry.id for entry in candidates}
+    review = []
+    for existing in store.list():
+        if (
+            existing.id in candidate_ids
+            or existing.id in superseded
+            or not existing.is_strong_evidence()
+        ):
+            continue
+        for candidate in candidates:
+            if existing.content == candidate.content:
+                continue
+            same_scope = _same_source_scope(existing, candidate)
+            threshold = 0.50 if same_scope else 0.78
+            if same_scope or _claim_similarity(existing.content, candidate.content) >= threshold:
+                review.append(existing)
+                break
+    return _dedupe(review)
+
+
+def _same_source_scope(left: Entry, right: Entry) -> bool:
+    if left.source.channel is not right.source.channel:
+        return False
+    if left.source.channel is Channel.CODE:
+        try:
+            left_repo, left_path, _ = parse_code_locator(left.source.locator)
+            right_repo, right_path, _ = parse_code_locator(right.source.locator)
+        except RepoConfigError:
+            return False
+        return (left_repo, left_path) == (right_repo, right_path)
+    return left.source.locator == right.source.locator
+
+
+def _claim_similarity(left: str, right: str) -> float:
+    left_tokens = set(re.findall(r"[a-z0-9_]+|[一-鿿]", left.casefold()))
+    right_tokens = set(re.findall(r"[a-z0-9_]+|[一-鿿]", right.casefold()))
+    union = left_tokens | right_tokens
+    return len(left_tokens & right_tokens) / len(union) if union else 1.0
 
 
 def _prospective_minted(store: KnowledgeStore, entry: Entry) -> Entry:
@@ -248,7 +315,13 @@ def _store_reanchored(
         return store.add(entry)
     if existing.source.snapshot_ref == head:
         return existing
-    return store.set_snapshot_ref(existing.id, head, now, locator=entry.source.locator)
+    return store.set_snapshot_ref(
+        existing.id,
+        head,
+        now,
+        locator=entry.source.locator,
+        evidence_source=entry.source,
+    )
 
 
 def _dedupe(entries: list[Entry]) -> list[Entry]:
@@ -275,29 +348,48 @@ def _mint_verified_checks(
     seen: set[tuple[str, str]] = set()
     for rec in passed:
         payload = rec.payload
-        if payload.get("verified_via") != "browser":
+        verified_via = payload.get("verified_via")
+        if verified_via not in {"browser", "command"}:
             continue
-        check, url = payload["check"], payload["url"]
+        check = payload["check"]
         sha = payload.get("artifact")
         if not sha or artifacts is None:
             unauditable.append(check)
             continue
         data = artifacts.load(sha)
-        if data.get("url") != url or data.get("snapshot_hash") != payload.get("page_snapshot"):
-            unauditable.append(check)
+        if verified_via == "browser":
+            url = payload["url"]
+            locator = payload.get("script_locator") or url
+            channel = Channel.WEB
+            snapshot_ref = payload.get("page_snapshot")
+            if data.get("url") != url or data.get("snapshot_hash") != snapshot_ref:
+                unauditable.append(check)
+                continue
+        else:
+            locator = f"command:{sha}"
+            channel = Channel.EVIDENCE
+            snapshot_ref = sha
+            if (
+                data.get("type") != "command_evidence"
+                or data.get("argv") != payload.get("command")
+                or data.get("exit_code") != 0
+                or payload.get("exit_code") != 0
+                or data.get("timed_out")
+            ):
+                unauditable.append(check)
+                continue
+        if (check, locator) in seen:
             continue
-        if (check, url) in seen:
-            continue
-        seen.add((check, url))
+        seen.add((check, locator))
         minted.append(
             Entry(
                 title=check[:80],
                 content=check,
                 kind=Kind.ACCEPTANCE,
                 source=Source(
-                    channel=Channel.WEB,
-                    locator=url,
-                    snapshot_ref=payload.get("page_snapshot"),
+                    channel=channel,
+                    locator=locator,
+                    snapshot_ref=snapshot_ref,
                 ),
                 trust=Trust(
                     verification=Verification.VERIFIED,
@@ -309,15 +401,21 @@ def _mint_verified_checks(
     return minted, unauditable
 
 
-def _stale_entries(store: KnowledgeStore, touched: list[str], head: str) -> list[Entry]:
+def _stale_entries(
+    store: KnowledgeStore,
+    touched_by_repo: dict[str, list[str]],
+    head_commits: dict[str, str],
+) -> list[Entry]:
     """Staleness is judged against every touched path — including deleted or
     renamed files, where the old entries are the ones most in need of review."""
-    touched_set = set(touched)
+    touched_sets = {name: set(paths) for name, paths in touched_by_repo.items()}
     stale = []
     for entry in store.list(channel=Channel.CODE):
-        if entry.source.snapshot_ref == head:
+        repo_name, relpath, _ = parse_code_locator(entry.source.locator)
+        if repo_name not in touched_sets:
             continue
-        file_part = entry.source.locator.rsplit("@", 1)[0]
-        if file_part in touched_set:
+        if entry.source.snapshot_ref == head_commits.get(repo_name):
+            continue
+        if relpath in touched_sets[repo_name]:
             stale.append(entry)
     return stale

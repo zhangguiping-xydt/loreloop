@@ -24,4 +24,6 @@ runtime/
 # Editors
 .idea/
 .vscode/
+.claude/
+.agents/
 .claude/settings.local.json
