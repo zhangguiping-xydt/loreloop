@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 permissions:
@@ -54,9 +56,10 @@ jobs:
           version: ${{ env.UV_VERSION }}
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen --extra dev
+      - run: uv sync --frozen --all-extras
       - run: uv run --frozen ruff format --check .
       - run: uv run --frozen ruff check .
+      - run: uv run --frozen playwright install --with-deps chromium
       - run: uv run --frozen pytest --cov=loreloop --cov-report=term-missing --cov-fail-under=80
       - run: uv run --frozen python eval/validate_results.py --check-thresholds
       - run: uv run --frozen loreloop demo --offline --workspace .first-run-smoke

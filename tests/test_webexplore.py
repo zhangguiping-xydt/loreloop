@@ -1,4 +1,5 @@
 import json
+import os
 import re
 
 import pytest
@@ -389,8 +390,11 @@ def test_empty_needle_never_reaches_the_chain(tmp_path):
 def test_artifact_files_are_owner_only(tmp_path):
     artifacts = ArtifactStore.for_workdir(tmp_path)
     _, path = artifacts.save_observation(UPLOAD)
-    assert path.stat().st_mode & 0o777 == 0o600
-    assert path.parent.stat().st_mode & 0o777 == 0o700
+    assert path.is_file()
+    assert path.parent.is_dir()
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert path.parent.stat().st_mode & 0o777 == 0o700
 
 
 def test_artifact_load_rejects_non_sha_references(tmp_path):

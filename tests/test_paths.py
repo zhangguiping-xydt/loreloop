@@ -65,10 +65,14 @@ def test_state_root_and_files_are_owner_only(tmp_path):
     with KnowledgeStore(root / "knowledge.db"):
         pass
 
-    assert root.stat().st_mode & 0o777 == 0o700
-    assert trace.parent.stat().st_mode & 0o777 == 0o700
-    assert trace.stat().st_mode & 0o777 == 0o600
-    assert (root / "knowledge.db").stat().st_mode & 0o777 == 0o600
+    assert root.is_dir()
+    assert trace.is_file()
+    assert (root / "knowledge.db").is_file()
+    if os.name != "nt":
+        assert root.stat().st_mode & 0o777 == 0o700
+        assert trace.parent.stat().st_mode & 0o777 == 0o700
+        assert trace.stat().st_mode & 0o777 == 0o600
+        assert (root / "knowledge.db").stat().st_mode & 0o777 == 0o600
 
 
 def test_state_root_symlink_is_rejected(tmp_path):

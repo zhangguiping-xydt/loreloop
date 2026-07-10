@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -90,7 +91,9 @@ def test_repository_config_is_private_and_rejects_symlink_substitution(tmp_path)
     save_repos(workdir, {"backend": backend})
     config = workdir / ".loreloop/repos.json"
 
-    assert config.stat().st_mode & 0o777 == 0o600
+    assert config.is_file()
+    if os.name != "nt":
+        assert config.stat().st_mode & 0o777 == 0o600
     outside = tmp_path / "outside-repos.json"
     outside.write_text(config.read_text(encoding="utf-8"), encoding="utf-8")
     config.unlink()

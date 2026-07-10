@@ -39,6 +39,8 @@ class AgentRunner:
                 env=agent_environment(),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.timeout,
             )
         except FileNotFoundError as exc:

@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -82,8 +83,9 @@ def test_key_created_once_with_restrictive_mode(tmp_path):
     EvidenceChain.for_workdir(tmp_path)
     key_path = key_path_for(tmp_path)
     assert key_path.exists()
-    assert (key_path.stat().st_mode & 0o777) == 0o600
-    assert (key_path.parent.stat().st_mode & 0o777) == 0o700
+    if os.name != "nt":
+        assert (key_path.stat().st_mode & 0o777) == 0o600
+        assert (key_path.parent.stat().st_mode & 0o777) == 0o700
     first = key_path.read_bytes()
     EvidenceChain.for_workdir(tmp_path)
     assert key_path.read_bytes() == first

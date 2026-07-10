@@ -6,6 +6,7 @@ import pytest
 
 from loreloop.agents import (
     AgentError,
+    AgentRunner,
     delegation_runner,
     inference_runner,
 )
@@ -311,7 +312,21 @@ def test_expand_query_accepts_structured_output_and_caches_it(tmp_path):
 
     assert first == second == "upload 限流 rate limit MAX_UPLOADS_PER_MINUTE"
     assert len(agent.prompts) == 1
-    assert json.loads(cache.read_text())["entries"]
+    assert json.loads(cache.read_text(encoding="utf-8"))["entries"]
+
+
+def test_agent_runner_uses_utf8_for_cross_platform_subprocess_io(monkeypatch):
+    captured = {}
+
+    def fake_run(*args, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args[0], 0, stdout="限流", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert AgentRunner(command=("agent",)).run("上传") == "限流"
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
 
 
 def test_delegate_traces_unendorsed_entries(tmp_path):

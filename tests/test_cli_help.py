@@ -54,9 +54,35 @@ def render_help_snapshot() -> str:
     return "\n\n".join(sections) + "\n"
 
 
+def _normalize_argparse_help(text: str) -> str:
+    """Ignore the subparser ellipsis placement changed by Python 3.13."""
+    normalized = []
+    in_usage = False
+    for line in text.splitlines():
+        if line.startswith("usage: "):
+            in_usage = True
+        elif in_usage and not line.strip():
+            in_usage = False
+        if in_usage and line.strip() == "...":
+            continue
+        if in_usage and line.endswith(" ..."):
+            line = line[:-4]
+        normalized.append(line)
+    suffix = "\n" if text.endswith("\n") else ""
+    return "\n".join(normalized) + suffix
+
+
 def test_all_public_help_matches_reviewed_snapshot():
     snapshot = Path(__file__).with_name("snapshots") / "cli-help.txt"
-    assert render_help_snapshot() == snapshot.read_text(encoding="utf-8")
+    assert _normalize_argparse_help(render_help_snapshot()) == _normalize_argparse_help(
+        snapshot.read_text(encoding="utf-8")
+    )
+
+
+def test_argparse_subparser_ellipsis_normalization_is_version_stable():
+    old = "usage: loreloop [-h] {run}\n                ...\n\noptions:\n"
+    new = "usage: loreloop [-h] {run} ...\n\noptions:\n"
+    assert _normalize_argparse_help(old) == _normalize_argparse_help(new)
 
 
 def test_action_help_uses_specific_positional_names():
