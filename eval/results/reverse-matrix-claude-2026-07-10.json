@@ -1,0 +1,255 @@
+{
+  "aggregate": {
+    "duration_seconds": 133.848,
+    "f1": 0.8571428571428572,
+    "failed_cases": 0,
+    "input_tokens_estimated": 5398,
+    "output_tokens_estimated": 1829,
+    "precision": 0.8181818181818182,
+    "predictions": 11,
+    "recall": 0.9,
+    "true_positives": 9,
+    "truths": 10
+  },
+  "benchmark": "reverse-matrix",
+  "cases": [
+    {
+      "cost": {
+        "agent_calls": 3,
+        "duration_seconds": 54.058,
+        "input_chars": 7220,
+        "input_tokens_estimated": 1805,
+        "output_chars": 2622,
+        "output_tokens_estimated": 656,
+        "token_estimate_method": "characters / 4; use vendor telemetry for billed tokens"
+      },
+      "error": null,
+      "fixture": "eval/datasets/reverse_matrix/python_project",
+      "id": "python-policy",
+      "language": "Python",
+      "metrics": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "forbidden_hits": [],
+        "matched_truth_ids": [
+          "py-audit",
+          "py-premium-rate",
+          "py-upload"
+        ],
+        "missed_truth_ids": [],
+        "precision": 1.0,
+        "predictions": 3,
+        "recall": 1.0,
+        "true_positives": 3,
+        "truths": 3
+      },
+      "predictions": [
+        {
+          "content": "Uploads are allowed only for sizes from 0 through 32 MiB inclusive.",
+          "evidence": {
+            "excerpt": "MAX_UPLOAD_MIB = 32\nPREMIUM_REQUESTS_PER_MINUTE = 12\nAUDIT_RETENTION_DAYS = 90\n\n\n\ndef upload_allowed(size_mib: int) -> bool:\n    return 0 <= size_mib <= MAX_UPLOAD_MIB",
+            "line_end": 7,
+            "line_start": 1,
+            "symbol": "upload_allowed"
+          },
+          "kind": "constraint",
+          "source": "policy.py@c5b36d7ddf1b81264ce896f9ce20151706158b53",
+          "title": "Upload size limit"
+        },
+        {
+          "content": "Premium requests are allowed only while fewer than 12 requests have occurred in the current minute.",
+          "evidence": {
+            "excerpt": "PREMIUM_REQUESTS_PER_MINUTE = 12\nAUDIT_RETENTION_DAYS = 90\n\n\n\ndef upload_allowed(size_mib: int) -> bool:\n    return 0 <= size_mib <= MAX_UPLOAD_MIB\n\n\n\ndef premium_request_allowed(requests_this_minute: int) -> bool:\n    return requests_this_minute < PREMIUM_REQUESTS_PER_MINUTE",
+            "line_end": 11,
+            "line_start": 2,
+            "symbol": "premium_request_allowed"
+          },
+          "kind": "constraint",
+          "source": "policy.py@c5b36d7ddf1b81264ce896f9ce20151706158b53",
+          "title": "Premium rate limit"
+        },
+        {
+          "content": "Audit records expire only after their age exceeds 90 days.",
+          "evidence": {
+            "excerpt": "AUDIT_RETENTION_DAYS = 90\n\n\n\ndef upload_allowed(size_mib: int) -> bool:\n    return 0 <= size_mib <= MAX_UPLOAD_MIB\n\n\n\ndef premium_request_allowed(requests_this_minute: int) -> bool:\n    return requests_this_minute < PREMIUM_REQUESTS_PER_MINUTE\n\n\n\ndef audit_expired(age_days: int) -> bool:\n    return age_days > AUDIT_RETENTION_DAYS",
+            "line_end": 15,
+            "line_start": 3,
+            "symbol": "audit_expired"
+          },
+          "kind": "constraint",
+          "source": "policy.py@c5b36d7ddf1b81264ce896f9ce20151706158b53",
+          "title": "Audit retention period"
+        }
+      ]
+    },
+    {
+      "cost": {
+        "agent_calls": 3,
+        "duration_seconds": 34.082,
+        "input_chars": 7143,
+        "input_tokens_estimated": 1786,
+        "output_chars": 2039,
+        "output_tokens_estimated": 510,
+        "token_estimate_method": "characters / 4; use vendor telemetry for billed tokens"
+      },
+      "error": null,
+      "fixture": "eval/datasets/reverse_matrix/typescript_project",
+      "id": "typescript-export",
+      "language": "TypeScript",
+      "metrics": {
+        "f1": 0.8571428571428571,
+        "false_negatives": 0,
+        "false_positives": 1,
+        "forbidden_hits": [],
+        "matched_truth_ids": [
+          "ts-columns",
+          "ts-limit",
+          "ts-locale"
+        ],
+        "missed_truth_ids": [],
+        "precision": 0.75,
+        "predictions": 4,
+        "recall": 1.0,
+        "true_positives": 3,
+        "truths": 3
+      },
+      "predictions": [
+        {
+          "content": "导出仅允许行数在 0 到 10,000 之间（含边界）。",
+          "evidence": {
+            "excerpt": "export function canExport(rowCount: number): boolean {\n  return rowCount >= 0 && rowCount <= MAX_EXPORT_ROWS;",
+            "line_end": 6,
+            "line_start": 5,
+            "symbol": "canExport"
+          },
+          "kind": "constraint",
+          "source": "export.ts@25f2948ca6599dada5e6aceb14cc57c2339c24cb",
+          "title": "导出行数上限"
+        },
+        {
+          "content": "导出列顺序固定为 account_id，其后为 display_name。",
+          "evidence": {
+            "excerpt": "export const EXPORT_COLUMNS = [\"account_id\", \"display_name\"] as const;",
+            "line_end": 1,
+            "line_start": 1,
+            "symbol": "EXPORT_COLUMNS"
+          },
+          "kind": "constraint",
+          "source": "export.ts@25f2948ca6599dada5e6aceb14cc57c2339c24cb",
+          "title": "导出列定义"
+        },
+        {
+          "content": "导出头部将导出列以逗号连接。",
+          "evidence": {
+            "excerpt": "export function exportHeader(): string {\n  return EXPORT_COLUMNS.join(\",\");\n}",
+            "line_end": 11,
+            "line_start": 9,
+            "symbol": "exportHeader"
+          },
+          "kind": "behavior",
+          "source": "export.ts@25f2948ca6599dada5e6aceb14cc57c2339c24cb",
+          "title": "CSV 头部格式"
+        },
+        {
+          "content": "未提供或传入空值的区域设置会回退为 en-US。",
+          "evidence": {
+            "excerpt": "export function normalizeLocale(locale?: string): string {\n  return locale || DEFAULT_LOCALE;",
+            "line_end": 14,
+            "line_start": 13,
+            "symbol": "normalizeLocale"
+          },
+          "kind": "behavior",
+          "source": "export.ts@25f2948ca6599dada5e6aceb14cc57c2339c24cb",
+          "title": "区域设置默认值"
+        }
+      ]
+    },
+    {
+      "cost": {
+        "agent_calls": 3,
+        "duration_seconds": 45.708,
+        "input_chars": 7227,
+        "input_tokens_estimated": 1807,
+        "output_chars": 2651,
+        "output_tokens_estimated": 663,
+        "token_estimate_method": "characters / 4; use vendor telemetry for billed tokens"
+      },
+      "error": null,
+      "fixture": "eval/datasets/reverse_matrix/mixed_project",
+      "id": "mixed-document-flow",
+      "language": "Python + TypeScript",
+      "metrics": {
+        "f1": 0.75,
+        "false_negatives": 1,
+        "false_positives": 1,
+        "forbidden_hits": [],
+        "matched_truth_ids": [
+          "mixed-accepted",
+          "mixed-limit",
+          "mixed-poll"
+        ],
+        "missed_truth_ids": [
+          "mixed-route"
+        ],
+        "precision": 0.75,
+        "predictions": 4,
+        "recall": 0.75,
+        "true_positives": 3,
+        "truths": 4
+      },
+      "predictions": [
+        {
+          "content": "The create_document interface accepts document sizes up to 24 MiB.",
+          "evidence": {
+            "excerpt": "def create_document(size_mib: int) -> tuple[int, str]:\n    if size_mib > MAX_DOCUMENT_MIB:\n        return 413, \"document too large\"",
+            "line_end": 8,
+            "line_start": 6,
+            "symbol": "create_document"
+          },
+          "kind": "constraint",
+          "source": "backend.py@4adb3594ec18040ec0f9ede68226f0c064f74c34",
+          "title": "Document size limit"
+        },
+        {
+          "content": "Accepted document creation returns HTTP status 202 and the document route.",
+          "evidence": {
+            "excerpt": "DOCUMENT_ROUTE = \"/v1/documents\"\nMAX_DOCUMENT_MIB = 24\nACCEPTED_STATUS = 202",
+            "line_end": 3,
+            "line_start": 1
+          },
+          "kind": "interface",
+          "source": "backend.py@4adb3594ec18040ec0f9ede68226f0c064f74c34",
+          "title": "Document creation response"
+        },
+        {
+          "content": "The frontend exposes progress URLs by appending an identifier and /progress to DOCUMENT_ROUTE.",
+          "evidence": {
+            "excerpt": "export function progressUrl(id: string): string {\n  return `${DOCUMENT_ROUTE}/${id}/progress`;",
+            "line_end": 6,
+            "line_start": 5,
+            "symbol": "progressUrl"
+          },
+          "kind": "interface",
+          "source": "frontend.ts@4adb3594ec18040ec0f9ede68226f0c064f74c34",
+          "title": "Document progress URL"
+        },
+        {
+          "content": "The frontend polling interval is 2,000 milliseconds.",
+          "evidence": {
+            "excerpt": "export const POLL_INTERVAL_MS = 2_000;",
+            "line_end": 2,
+            "line_start": 2,
+            "symbol": "POLL_INTERVAL_MS"
+          },
+          "kind": "behavior",
+          "source": "frontend.ts@4adb3594ec18040ec0f9ede68226f0c064f74c34",
+          "title": "Progress polling interval"
+        }
+      ]
+    }
+  ],
+  "dataset": "eval/datasets/reverse_matrix/matrix.json",
+  "generated_at": "2026-07-10T07:08:07.566881+00:00",
+  "model": "claude"
+}

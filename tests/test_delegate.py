@@ -172,6 +172,19 @@ def test_delegate_failure_is_traced_and_reraised(tmp_path):
     assert events[-1]["event"] == "delegation_failed"
 
 
+def test_delegate_interrupt_is_explicit_and_never_looks_finished(tmp_path):
+    class InterruptedAgent:
+        def run(self, prompt):
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        DelegateRunner(InterruptedAgent(), tmp_path).run("fix upload", [UPLOAD_FACT])
+
+    trace = next((tmp_path / ".knowhelm/runs").glob("*.jsonl"))
+    events = [json.loads(line)["event"] for line in trace.read_text().splitlines()]
+    assert events == ["delegation_started", "delegation_interrupted"]
+
+
 def test_select_demotes_drifted_strong_entries():
     pack = select(
         "change the upload endpoint",

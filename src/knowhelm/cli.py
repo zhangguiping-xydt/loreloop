@@ -39,10 +39,73 @@ class InitializationError(Exception):
     pass
 
 
+class CLIError(Exception):
+    """A failure the operator can recover from without a traceback."""
+
+    def __init__(
+        self,
+        summary: str,
+        reason: str,
+        next_action: str,
+        *,
+        exit_code: int = 2,
+    ) -> None:
+        super().__init__(reason)
+        self.summary = summary
+        self.reason = reason
+        self.next_action = next_action
+        self.exit_code = exit_code
+
+
+class _HelpRequested(Exception):
+    pass
+
+
+class CLIArgumentParser(argparse.ArgumentParser):
+    """Keep argparse diagnostics inside the same recoverable CLI contract."""
+
+    def error(self, message: str) -> None:
+        raise CLIError(
+            "invalid command",
+            message,
+            f"run `{self.prog} --help` and retry with the documented arguments",
+        )
+
+    def exit(self, status: int = 0, message: str | None = None) -> None:
+        if message:
+            self._print_message(message, sys.stderr)
+        if status == 0:
+            raise _HelpRequested
+        raise CLIError(
+            "command parsing failed",
+            message.strip() if message else f"argument parser exited with status {status}",
+            f"run `{self.prog} --help` and correct the command",
+        )
+
+
+def _print_cli_error(error: CLIError) -> int:
+    print(f"error: {error.summary}", file=sys.stderr)
+    print(f"reason: {error.reason}", file=sys.stderr)
+    print(f"next: {error.next_action}", file=sys.stderr)
+    return error.exit_code
+
+
+def _add_agent_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--agent",
+        choices=["claude", "codex"],
+        default=argparse.SUPPRESS,
+        help="override the coding-agent CLI for this action",
+    )
+
+
 def _run_trace(workdir: Path, run_id: str) -> Path | None:
     if not _RUN_ID.match(run_id):
-        print(f"invalid run id: {run_id!r}", file=sys.stderr)
-        return None
+        raise CLIError(
+            "invalid run id",
+            f"{run_id!r} contains unsupported characters or is too long",
+            "use the exact run id printed by `knowhelm run` or `knowhelm report`",
+        )
     return workdir / f".knowhelm/runs/{run_id}.jsonl"
 
 
@@ -152,6 +215,19 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         f"{key_dir} ({key_detail})",
         key_writable,
     ))
+    key_path = key_path_for(workdir)
+    if key_path.exists():
+        try:
+            key_size = len(key_path.read_bytes())
+            key_ok = key_size == 32
+            key_detail = f"{key_path} ({key_size} bytes)"
+        except OSError as exc:
+            key_ok = False
+            key_detail = f"cannot read {key_path}: {exc}"
+    else:
+        key_ok = key_writable
+        key_detail = f"will be created at {key_path}"
+    checks.append(("evidence key", "PASS" if key_ok else "FAIL", key_detail, key_ok))
     backend = lock_backend()
     lock_ok = backend != "unavailable"
     checks.append((
@@ -170,6 +246,22 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     ready = all(ok for _, status, _, ok in checks if status != "INFO")
     print("\nREADY: knowhelm preflight passed" if ready else "\nNOT READY: fix FAIL checks above")
     return 0 if ready else 1
+
+
+def cmd_demo(args: argparse.Namespace) -> int:
+    from .demo import DemoError, run_demo
+
+    workspace = args.workspace or Path(tempfile.mkdtemp(prefix="knowhelm-demo-"))
+    workspace.mkdir(parents=True, exist_ok=True)
+    try:
+        run_demo(workspace.resolve(), agent=args.agent, offline=args.offline)
+    except DemoError as exc:
+        raise CLIError(
+            "demo did not complete",
+            str(exc),
+            "follow the failed step's recovery message, then rerun with a new --workspace",
+        ) from exc
+    return 0
 
 
 def _probe_writable_directory(path: Path, *, create: bool = False) -> tuple[bool, str]:
@@ -253,7 +345,7 @@ def cmd_repo(args: argparse.Namespace) -> int:
     workdir = _workdir()
     repos = load_repos(workdir)
     if args.action == "add":
-        repo = Path(args.path).expanduser().resolve()
+        repo = Path(args.repo_path).expanduser().resolve()
         if not repo.is_dir() or not (repo / ".git").exists():
             raise RepoConfigError(f"not a git repository root: {repo}")
         if repo == workdir.resolve():
@@ -269,17 +361,13 @@ def cmd_repo(args: argparse.Namespace) -> int:
         print(f"added repository {name}: {repo}")
         return 0
     if args.action == "list":
-        if args.path or args.name:
-            raise RepoConfigError("repo list does not accept a path or --name")
         rows = [(".", workdir.resolve()), *repos.items()]
         for name, repo in rows:
             reachable = repo.is_dir() and (repo / ".git").exists()
             print(f"{name}\t{repo}\t{_git_head_short(repo) if reachable else '-'}\t"
                   f"{'reachable' if reachable else 'unreachable'}")
         return 0
-    if args.name:
-        raise RepoConfigError("--name is only valid with repo add")
-    name = args.path
+    name = args.repo_name
     if name == ".":
         raise RepoConfigError("the implicit '.' repository cannot be removed")
     if name not in repos:
@@ -311,12 +399,8 @@ def cmd_project(args: argparse.Namespace) -> int:
     from .federation.registry import add_project, list_projects, remove_project
 
     if args.action == "add":
-        if not args.path:
-            from .federation.registry import RegistryError
-
-            raise RegistryError("project add requires a path")
         project = add_project(
-            Path(args.path),
+            Path(args.project_path),
             project_id=args.project_id,
             name=args.name,
             aliases=args.alias,
@@ -325,10 +409,6 @@ def cmd_project(args: argparse.Namespace) -> int:
         print(f"registered project {project.project_id}: {project.path}")
         return 0
     if args.action == "list":
-        if args.path or args.project_id or args.name or args.alias or args.tag:
-            from .federation.registry import RegistryError
-
-            raise RegistryError("project list does not accept add/remove arguments")
         for project in list_projects():
             available = (project.path / ".knowhelm/knowledge.db").is_file()
             print(
@@ -336,15 +416,7 @@ def cmd_project(args: argparse.Namespace) -> int:
                 f"{'available' if available else 'unavailable'}"
             )
         return 0
-    if not args.path:
-        from .federation.registry import RegistryError
-
-        raise RegistryError("project remove requires an id")
-    if args.project_id or args.name or args.alias or args.tag:
-        from .federation.registry import RegistryError
-
-        raise RegistryError("project remove only accepts a project id")
-    removed = remove_project(args.path)
+    removed = remove_project(args.registry_project_id)
     print(f"removed project {removed.project_id}")
     return 0
 
@@ -368,11 +440,17 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if script is not None:
             validate_script_origin(script, args.url)
     except MalformedExpectation as exc:
-        print(f"invalid expectation: {exc}", file=sys.stderr)
-        return 2
+        raise CLIError(
+            "invalid expectation",
+            str(exc),
+            "use `contains:<text>`, `not-contains:<text>`, or `llm:<claim>` and retry",
+        ) from exc
     except ActionScriptError as exc:
-        print(f"invalid action script: {exc}", file=sys.stderr)
-        return 2
+        raise CLIError(
+            "invalid action script",
+            str(exc),
+            "fix the JSON script, then rerun `knowhelm verify --script ...`",
+        ) from exc
 
     workdir = _workdir()
     chain = EvidenceChain.for_workdir(workdir)
@@ -403,6 +481,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
     snapshot = result.snapshot[:16] if result.snapshot else "none"
     print(f"evidence: chain hash {result.record.chain_hash[:16]}, "
           f"page snapshot {snapshot}")
+    if not result.passed:
+        print("Next: fix the observed behavior or expectation, then rerun this verification")
     return 0 if result.passed else 1
 
 
@@ -539,15 +619,21 @@ def cmd_check(args: argparse.Namespace) -> int:
         from .evidence.artifacts import ArtifactStore
         from .report.acceptance import record_command_check
 
-        argv = shlex.split(args.command)
+        try:
+            argv = shlex.split(args.command)
+        except ValueError as exc:
+            raise CLIError(
+                "invalid check command",
+                str(exc),
+                "quote each argument correctly and rerun `knowhelm check --command ...`",
+            ) from exc
         shell_tokens = {";", "|", "||", "&&", ">", ">>", "<", "2>", "2>>"}
         if any(part in shell_tokens for part in argv):
-            print(
-                "error: shell operators are not supported in --command; invoke an "
-                "executable with explicit arguments",
-                file=sys.stderr,
+            raise CLIError(
+                "unsafe check command",
+                "shell operators are not supported in --command",
+                "invoke one executable with explicit arguments and no shell operators",
             )
-            return 2
         rec = record_command_check(
             chain,
             ArtifactStore.for_workdir(workdir),
@@ -561,6 +647,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         rec = record_check(chain, args.run_id, args.check, args.passed, args.detail)
     print(f"recorded {rec.event} for {args.run_id} (chain hash {rec.chain_hash[:16]})")
     print("PASS" if rec.event == "check_passed" else "FAIL")
+    if rec.event == "check_failed":
+        print("Next: inspect the pinned command artifact, fix the failure, and record a new check")
     return 0 if rec.event == "check_passed" else 1
 
 
@@ -569,16 +657,20 @@ def cmd_report(args: argparse.Namespace) -> int:
     runs_dir = workdir / ".knowhelm/runs"
     if args.run_id:
         trace = _run_trace(workdir, args.run_id)
-        if trace is None:
-            return 2
         if not trace.exists():
-            print(f"no trace found for {args.run_id}", file=sys.stderr)
-            return 2
+            raise CLIError(
+                "run trace not found",
+                f"no trace found for {args.run_id}",
+                "copy the exact id printed by `knowhelm run`, or omit RUN_ID to use the latest run",
+            )
     else:
         traces = sorted(runs_dir.glob("run-*.jsonl")) if runs_dir.exists() else []
         if not traces:
-            print("no runs found", file=sys.stderr)
-            return 2
+            raise CLIError(
+                "no runs found",
+                "this project has no delegation trace to report",
+                "run `knowhelm run <task>` first",
+            )
         trace = traces[-1]
     from .evidence.artifacts import ArtifactStore
 
@@ -596,11 +688,12 @@ def cmd_harvest(args: argparse.Namespace) -> int:
 
     workdir = _workdir()
     trace = _run_trace(workdir, args.run_id)
-    if trace is None:
-        return 2
     if not trace.exists():
-        print(f"no trace found for {args.run_id}", file=sys.stderr)
-        return 2
+        raise CLIError(
+            "run trace not found",
+            f"no trace found for {args.run_id}",
+            "copy the exact id printed by `knowhelm run`, then retry harvest",
+        )
     run = load_run(trace)
     chain = EvidenceChain.for_workdir(workdir)
     artifacts = ArtifactStore.for_workdir(workdir)
@@ -610,9 +703,13 @@ def cmd_harvest(args: argparse.Namespace) -> int:
                 run, chain, store, _agent(args.agent), workdir, artifacts=artifacts
             )
         except HarvestError as exc:
-            print(f"harvest refused: {exc}", file=sys.stderr)
-            return 1
-    print(f"harvested run {args.run_id}:")
+            raise CLIError(
+                "harvest refused",
+                str(exc),
+                "run `knowhelm report <run-id>`, satisfy every acceptance check, then retry",
+                exit_code=1,
+            ) from exc
+    print(f"{'resumed' if result.resumed else 'harvested'} run {args.run_id}:")
     print(f"  {len(result.minted)} verified acceptance assertions minted")
     print(f"  {len(result.reversed_entries)} draft entries reversed from changed code")
     if result.unauditable_checks:
@@ -703,16 +800,12 @@ def _search_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
     from .federation.reader import grade_local_entries, read_project
     from .federation.registry import load_projects
 
-    if not args.entry_id:
-        from .federation.registry import RegistryError
-
-        raise RegistryError("knowledge search requires a query")
     if args.limit < 1:
         from .federation.registry import RegistryError
 
         raise RegistryError("search limit must be at least 1")
 
-    query = args.entry_id
+    query = args.query
     projects = load_projects()
     selected = []
     include_local = not args.project
@@ -811,19 +904,19 @@ def _import_entry(args: argparse.Namespace, store: KnowledgeStore) -> int:
     from .knowledge.endorsement import entry_digest
     from .knowledge.model import Channel, Entry, Source
 
-    if not args.entry_id or not args.old_id:
-        raise RegistryError("knowledge import requires a project id and entry id prefix")
     projects = load_projects()
-    project = projects.get(args.entry_id)
+    project = projects.get(args.project_id)
     if project is None:
-        raise RegistryError(f"project {args.entry_id!r} is not registered")
+        raise RegistryError(f"project {args.project_id!r} is not registered")
     entries, warnings = read_project(project.project_id, project.path)
     for warning in warnings:
         print(f"warning [{warning.project_id}]: {warning.message}", file=sys.stderr)
-    matches = [item for item in entries if item.entry.id.startswith(args.old_id)]
+    matches = [item for item in entries if item.entry.id.startswith(args.entry_id)]
     if len(matches) != 1:
         reason = "no entry matches" if not matches else f"{len(matches)} entries match"
-        raise RegistryError(f"{reason} id prefix {args.old_id!r} in project {project.project_id}")
+        raise RegistryError(
+            f"{reason} id prefix {args.entry_id!r} in project {project.project_id}"
+        )
     foreign = matches[0]
     imported = store.add(
         Entry(
@@ -844,12 +937,7 @@ def _import_entry(args: argparse.Namespace, store: KnowledgeStore) -> int:
 
 
 def _curate(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
-    if not args.entry_id:
-        print(f"usage: knowhelm knowledge {args.action} <entry_id>", file=sys.stderr)
-        return 2
     target = _resolve_entry(store, args.entry_id)
-    if target is None:
-        return 2
     from .knowledge.store import InvalidTransition
 
     new = Curation.APPROVED if args.action == "approve" else Curation.REJECTED
@@ -857,8 +945,11 @@ def _curate(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> i
     try:
         entry = curate(store, chain, target.id, new, datetime.now(timezone.utc))
     except InvalidTransition as exc:
-        print(f"invalid curation transition: {exc}", file=sys.stderr)
-        return 2
+        raise CLIError(
+            "invalid curation transition",
+            str(exc),
+            "inspect the entry with `knowhelm knowledge list` and choose a valid next state",
+        ) from exc
     print(f"{args.action}{'d' if args.action.endswith('e') else 'ed'}: {entry.title}")
     return 0
 
@@ -975,13 +1066,8 @@ def _drifted_entries(workdir: Path, entries: list[Entry]) -> set[str]:
 def _supersede(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
     from .knowledge.model import Link, LinkType
 
-    if not args.entry_id or not args.old_id:
-        print("usage: knowhelm knowledge supersede <new_id> <old_id>", file=sys.stderr)
-        return 2
-    new = _resolve_entry(store, args.entry_id)
-    old = _resolve_entry(store, args.old_id)
-    if new is None or old is None:
-        return 2
+    new = _resolve_entry(store, args.new_entry_id)
+    old = _resolve_entry(store, args.old_entry_id)
     # Supersession silences an entry at injection time — a trust-affecting
     # act, so it is endorsed on the chain like curation. Chain first.
     EvidenceChain.for_workdir(workdir).append(
@@ -998,8 +1084,11 @@ def _resolve_entry(store: KnowledgeStore, prefix: str):
     if len(matches) == 1:
         return matches[0]
     reason = "no entry matches" if not matches else f"{len(matches)} entries match"
-    print(f"{reason} id prefix {prefix!r}", file=sys.stderr)
-    return None
+    raise CLIError(
+        "knowledge entry not found",
+        f"{reason} id prefix {prefix!r}",
+        "run `knowhelm knowledge list` and use a unique displayed id prefix",
+    )
 
 
 def _verify_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
@@ -1013,8 +1102,11 @@ def _verify_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
     if args.entry_id:
         web_entries = [e for e in web_entries if e.id.startswith(args.entry_id)]
     if not web_entries:
-        print("no matching web-channel entries to verify", file=sys.stderr)
-        return 2
+        raise CLIError(
+            "no web knowledge to verify",
+            "no web-channel entry matches the requested id prefix",
+            "run `knowhelm knowledge list`, then choose a web entry or ingest a web source",
+        )
 
     chain = EvidenceChain.for_workdir(workdir)
     artifacts = ArtifactStore.for_workdir(workdir)
@@ -1029,9 +1121,11 @@ def _verify_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
                     browser, agent, chain, store, entry, run_id, artifacts=artifacts
                 )
             except ActionBlocked as exc:
-                print(f"BLOCKED: {entry.title}", file=sys.stderr)
-                print(f"  {exc}", file=sys.stderr)
-                return 2
+                raise CLIError(
+                    "verification action blocked",
+                    f"{entry.title}: {exc}",
+                    "use a read-only interaction or explicitly review a script before allowing writes",
+                ) from exc
             status = "VERIFIED" if result.passed else "CONTRADICTED"
             drift = "  [page drifted since ingest]" if result.drifted else ""
             print(f"{status}: {entry.title}{drift}")
@@ -1046,8 +1140,19 @@ def _verify_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="knowhelm")
-    parser.add_argument("--agent", choices=["claude", "codex"], default="claude")
+    parser = CLIArgumentParser(
+        prog="knowhelm",
+        description=(
+            "Reverse-engineer project knowledge, apply it to coding-agent work, "
+            "and return accepted outcomes to a tamper-evident knowledge loop."
+        ),
+    )
+    parser.add_argument(
+        "--agent",
+        choices=["claude", "codex"],
+        default="claude",
+        help="coding-agent CLI used for extraction and delegated work (default: claude)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_doctor = sub.add_parser("doctor", help="check prerequisites and writable trust state")
@@ -1061,28 +1166,49 @@ def build_parser() -> argparse.ArgumentParser:
                              help="skip companion skill installation")
     p_init.set_defaults(func=cmd_init)
 
+    p_demo = sub.add_parser("demo", help="run the bundled five-minute knowledge loop")
+    p_demo.add_argument("--offline", action="store_true", help="use deterministic CI adapters")
+    p_demo.add_argument("--workspace", type=Path, help="parent directory for the demo repository")
+    _add_agent_option(p_demo)
+    p_demo.set_defaults(func=cmd_demo)
+
     p_ingest = sub.add_parser("ingest", help="reverse-engineer knowledge from a source")
     p_ingest.add_argument("--from", dest="source", choices=["code", "web"], required=True)
     p_ingest.add_argument("target")
     p_ingest.add_argument("--max-pages", type=int, default=20)
     p_ingest.add_argument("--headed", action="store_true",
                           help="show the browser window (needed for login handover)")
+    _add_agent_option(p_ingest)
     p_ingest.set_defaults(func=cmd_ingest)
 
     p_repo = sub.add_parser("repo", help="manage repositories in this trust domain")
-    p_repo.add_argument("action", choices=["add", "list", "remove"])
-    p_repo.add_argument("path", nargs="?", help="for add: git repository root")
-    p_repo.add_argument("--name", help="repository name; defaults to the directory name")
-    p_repo.set_defaults(func=cmd_repo)
+    repo_sub = p_repo.add_subparsers(dest="action", required=True)
+    p_repo_add = repo_sub.add_parser("add", help="add a Git repository to this trust domain")
+    p_repo_add.add_argument("repo_path", metavar="REPO_PATH", help="Git repository root")
+    p_repo_add.add_argument("--name", help="repository name; defaults to the directory name")
+    p_repo_add.set_defaults(func=cmd_repo)
+    p_repo_list = repo_sub.add_parser("list", help="list declared repositories and reachability")
+    p_repo_list.set_defaults(func=cmd_repo)
+    p_repo_remove = repo_sub.add_parser("remove", help="remove a repository declaration")
+    p_repo_remove.add_argument("repo_name", metavar="REPO_NAME", help="declared repository name")
+    p_repo_remove.set_defaults(func=cmd_repo)
 
     p_project = sub.add_parser("project", help="manage the federation project registry")
-    p_project.add_argument("action", choices=["add", "list", "remove"])
-    p_project.add_argument("path", nargs="?", help="project path for add; project id for remove")
-    p_project.add_argument("--id", dest="project_id")
-    p_project.add_argument("--name")
-    p_project.add_argument("--alias", action="append", default=[])
-    p_project.add_argument("--tag", action="append", default=[])
-    p_project.set_defaults(func=cmd_project)
+    project_sub = p_project.add_subparsers(dest="action", required=True)
+    p_project_add = project_sub.add_parser("add", help="register a project for federation")
+    p_project_add.add_argument("project_path", metavar="PROJECT_PATH")
+    p_project_add.add_argument("--id", dest="project_id")
+    p_project_add.add_argument("--name")
+    p_project_add.add_argument("--alias", action="append", default=[])
+    p_project_add.add_argument("--tag", action="append", default=[])
+    p_project_add.set_defaults(func=cmd_project)
+    p_project_list = project_sub.add_parser("list", help="list registered projects")
+    p_project_list.set_defaults(func=cmd_project)
+    p_project_remove = project_sub.add_parser("remove", help="remove a federation registration")
+    p_project_remove.add_argument(
+        "registry_project_id", metavar="PROJECT_ID", help="registered project id"
+    )
+    p_project_remove.set_defaults(func=cmd_project)
 
     p_verify = sub.add_parser("verify", help="verify an expectation against a live page")
     p_verify.add_argument("run_id")
@@ -1095,6 +1221,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow fill/select/POST-submit actions outside search/filter controls",
     )
+    _add_agent_option(p_verify)
     p_verify.set_defaults(func=cmd_verify)
 
     p_run = sub.add_parser("run", help="delegate a task with injected knowledge")
@@ -1103,6 +1230,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="skip LLM query expansion; retrieve with the task text only")
     p_run.add_argument("--with-related", action="store_true")
     p_run.add_argument("--related-limit", type=int, default=5)
+    _add_agent_option(p_run)
     p_run.set_defaults(func=cmd_run)
 
     p_check = sub.add_parser("check", help="record an acceptance check for a run")
@@ -1127,64 +1255,143 @@ def build_parser() -> argparse.ArgumentParser:
         "harvest", help="flow knowledge back from an accepted run"
     )
     p_harvest.add_argument("run_id")
+    _add_agent_option(p_harvest)
     p_harvest.set_defaults(func=cmd_harvest)
 
     p_knowledge = sub.add_parser("knowledge", help="inspect, curate and verify knowledge entries")
-    p_knowledge.add_argument(
-        "action",
-        choices=[
-            "list", "search", "import", "export", "approve", "reject", "supersede",
-            "verify", "usage",
-        ],
+    knowledge_sub = p_knowledge.add_subparsers(dest="action", required=True)
+
+    p_knowledge_list = knowledge_sub.add_parser("list", help="list knowledge and trust state")
+    p_knowledge_list.add_argument(
+        "--stale", action="store_true", help="only entries whose code anchor drifted"
     )
-    p_knowledge.add_argument("entry_id", nargs="?")
-    p_knowledge.add_argument("old_id", nargs="?",
-                             help="for supersede: the entry being replaced")
-    p_knowledge.add_argument("--stale", action="store_true",
-                             help="for list: only entries whose code anchor drifted")
-    p_knowledge.add_argument("--headed", action="store_true")
-    p_knowledge.add_argument("--output", help="for export: write markdown to this path")
-    search_scope = p_knowledge.add_mutually_exclusive_group()
+    p_knowledge_list.set_defaults(func=cmd_knowledge)
+
+    p_knowledge_search = knowledge_sub.add_parser(
+        "search", help="search local or federated knowledge"
+    )
+    p_knowledge_search.add_argument("query", metavar="QUERY")
+    search_scope = p_knowledge_search.add_mutually_exclusive_group()
     search_scope.add_argument("--all", action="store_true", help="search all registered projects")
     search_scope.add_argument(
         "--project", action="append", help="search one registered project; may be repeated"
     )
-    p_knowledge.add_argument("--tag", action="append", help="filter selected projects by tag")
-    p_knowledge.add_argument("--limit", type=int, default=10)
-    p_knowledge.set_defaults(func=cmd_knowledge)
+    p_knowledge_search.add_argument(
+        "--tag", action="append", help="filter selected projects by tag"
+    )
+    p_knowledge_search.add_argument("--limit", type=int, default=10)
+    p_knowledge_search.set_defaults(func=cmd_knowledge)
+
+    p_knowledge_import = knowledge_sub.add_parser(
+        "import", help="copy a foreign entry into the local draft store"
+    )
+    p_knowledge_import.add_argument("project_id", metavar="PROJECT_ID")
+    p_knowledge_import.add_argument("entry_id", metavar="ENTRY_ID")
+    p_knowledge_import.set_defaults(func=cmd_knowledge)
+
+    p_knowledge_export = knowledge_sub.add_parser(
+        "export", help="export knowledge and effective trust as Markdown"
+    )
+    p_knowledge_export.add_argument("--stale", action="store_true")
+    p_knowledge_export.add_argument("--output", help="write Markdown to this path")
+    p_knowledge_export.set_defaults(func=cmd_knowledge)
+
+    for action, help_text in (
+        ("approve", "approve one draft entry and endorse its content"),
+        ("reject", "reject one entry and retire it from injection"),
+    ):
+        p_curate = knowledge_sub.add_parser(action, help=help_text)
+        p_curate.add_argument("entry_id", metavar="ENTRY_ID")
+        p_curate.set_defaults(func=cmd_knowledge)
+
+    p_knowledge_supersede = knowledge_sub.add_parser(
+        "supersede", help="retire an old entry in favor of a new entry"
+    )
+    p_knowledge_supersede.add_argument("new_entry_id", metavar="NEW_ENTRY_ID")
+    p_knowledge_supersede.add_argument("old_entry_id", metavar="OLD_ENTRY_ID")
+    p_knowledge_supersede.set_defaults(func=cmd_knowledge)
+
+    p_knowledge_verify = knowledge_sub.add_parser(
+        "verify", help="recheck web knowledge against live pages"
+    )
+    p_knowledge_verify.add_argument("entry_id", metavar="ENTRY_ID", nargs="?")
+    p_knowledge_verify.add_argument("--headed", action="store_true")
+    _add_agent_option(p_knowledge_verify)
+    p_knowledge_verify.set_defaults(func=cmd_knowledge)
+
+    p_knowledge_usage = knowledge_sub.add_parser(
+        "usage", help="show injection and accepted-run correlation"
+    )
+    p_knowledge_usage.set_defaults(func=cmd_knowledge)
 
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    from .evidence.chain import LegacyKeyError
+    import sqlite3
+    import subprocess
+
+    from .evidence.chain import KeyMaterialError, LegacyKeyError
     from .federation.registry import RegistryError
     from .knowledge.repos import RepoConfigError
     from .knowledge.code_reverse import ExtractionError
-    from .webexplore.browser import BrowserUnavailable
+    from .knowledge.store import SchemaVersionError
+    from .webexplore.browser import BrowserError, BrowserUnavailable
 
-    args = build_parser().parse_args(argv)
     try:
-        if args.command == "repo" and args.action == "add" and not args.path:
-            raise RepoConfigError("repo add requires a path")
-        if args.command == "repo" and args.action == "remove":
-            if not args.path:
-                raise RepoConfigError("repo remove requires a name")
+        args = build_parser().parse_args(argv)
         return args.func(args)
+    except _HelpRequested:
+        return 0
+    except CLIError as exc:
+        return _print_cli_error(exc)
+    except KeyboardInterrupt:
+        return _print_cli_error(
+            CLIError(
+                "command interrupted",
+                "the operator cancelled the command",
+                "inspect the last printed run id; interrupted delegations are marked and are never accepted",
+                exit_code=130,
+            )
+        )
     except (
         ChainVerificationError,
         LegacyKeyError,
+        KeyMaterialError,
         RegistryError,
         RepoConfigError,
+        SchemaVersionError,
         RunTraceError,
         InitializationError,
         AgentError,
         ExtractionError,
+        BrowserError,
         BrowserUnavailable,
+        sqlite3.Error,
+        subprocess.CalledProcessError,
+        EOFError,
         OSError,
     ) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
+        command = getattr(locals().get("args"), "command", None)
+        hints = {
+            "init": "run `knowhelm doctor`, fix each FAIL check, then retry initialization",
+            "demo": "fix the reported prerequisite, then rerun `knowhelm demo --help`",
+            "ingest": "check the source path/URL and agent setup, then retry ingestion",
+            "run": "run `knowhelm doctor`, resolve the reported agent or trust-state issue, then retry",
+            "verify": "check Playwright, the URL, and the expectation, then retry verification",
+            "report": "use a run id printed by `knowhelm run`, then retry the report",
+            "harvest": "inspect `knowhelm report <run-id>` and resolve the reported blocker",
+            "repo": "run `knowhelm repo --help` and correct the repository declaration",
+            "project": "run `knowhelm project --help` and correct the registry operation",
+            "knowledge": "run `knowhelm knowledge --help` and retry the relevant knowledge action",
+        }
+        return _print_cli_error(
+            CLIError(
+                f"{command or 'knowhelm'} failed",
+                str(exc) or exc.__class__.__name__,
+                hints.get(command, "run `knowhelm doctor`, fix the reported reason, then retry"),
+            )
+        )
 
 
 if __name__ == "__main__":

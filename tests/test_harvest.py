@@ -417,6 +417,35 @@ def test_harvest_is_idempotent_via_chain(env):
     assert events.count("knowledge_harvested") == 1
 
 
+def test_harvest_resumes_db_materialization_after_chain_first_crash(env):
+    repo, store, chain, artifacts = env
+    trace = start_run(repo, chain, "run-resume", head_of(repo))
+    record_browser_check(chain, "run-resume", artifacts=artifacts)
+    original_add = store.add
+
+    def disk_failure(entry):
+        raise OSError("simulated DB write failure after chain append")
+
+    store.add = disk_failure
+    with pytest.raises(OSError, match="simulated DB write failure"):
+        harvest_run(
+            load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts
+        )
+
+    assert store.list() == []
+    assert [record.event for record in chain.verify()].count("knowledge_harvested") == 1
+
+    store.add = original_add
+    resumed = harvest_run(
+        load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts
+    )
+
+    assert resumed.resumed
+    assert len(resumed.minted) == 1
+    assert store.get(resumed.minted[0].id).trust.verification is Verification.VERIFIED
+    assert [record.event for record in chain.verify()].count("knowledge_harvested") == 1
+
+
 def test_harvest_dedupes_repeated_checks(env):
     repo, store, chain, artifacts = env
     trace = start_run(repo, chain, "run-x", head_of(repo))

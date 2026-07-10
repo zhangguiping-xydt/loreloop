@@ -1,0 +1,119 @@
+{
+  "benchmark": "scale",
+  "evidence_and_harvest": [
+    {
+      "no_change_harvest_latency_ms": {
+        "max": 37.367,
+        "median": 34.747
+      },
+      "note": "harvest includes chain verification, acceptance evaluation, and final append",
+      "records": 100,
+      "verify_latency_ms": {
+        "max": 4.013,
+        "median": 3.133
+      }
+    },
+    {
+      "no_change_harvest_latency_ms": {
+        "max": 159.578,
+        "median": 135.415
+      },
+      "note": "harvest includes chain verification, acceptance evaluation, and final append",
+      "records": 1000,
+      "verify_latency_ms": {
+        "max": 32.156,
+        "median": 29.51
+      }
+    },
+    {
+      "no_change_harvest_latency_ms": {
+        "max": 909.141,
+        "median": 800.489
+      },
+      "note": "harvest includes chain verification, acceptance evaluation, and final append",
+      "records": 10000,
+      "verify_latency_ms": {
+        "max": 310.432,
+        "median": 237.504
+      }
+    }
+  ],
+  "generated_at": "2026-07-10T06:43:28.734204+00:00",
+  "machine": {
+    "platform": "Linux-4.19.112-2.el8.x86_64-x86_64-with-glibc2.28",
+    "processor": "x86_64",
+    "python": "3.11.10"
+  },
+  "methodology": {
+    "dataset": "deterministic synthetic scale fixture; not a relevance-diversity benchmark",
+    "fixture_digest": "72f989c9be2d6515a7a4727f136f1bd5b275560d2a4b54ab6aabf09d00678d27",
+    "repetitions": 3,
+    "sizes": [
+      100,
+      1000,
+      10000
+    ]
+  },
+  "retrieval": [
+    {
+      "entries": 100,
+      "k": 5,
+      "latency_ms": {
+        "max": 4.079,
+        "median": 3.439,
+        "p95": 4.05
+      },
+      "mean_returned": 5.0,
+      "mrr": 1.0,
+      "precision_at_k": 0.20000000000000004,
+      "projects": 5,
+      "prompt_tokens_estimated": {
+        "max": 314,
+        "median": 314,
+        "method": "rendered context characters / 4; tokenizer-independent estimate"
+      },
+      "queries": 15,
+      "recall_at_k": 1.0
+    },
+    {
+      "entries": 1000,
+      "k": 5,
+      "latency_ms": {
+        "max": 50.46,
+        "median": 31.863,
+        "p95": 44.634
+      },
+      "mean_returned": 5.0,
+      "mrr": 1.0,
+      "precision_at_k": 0.20000000000000004,
+      "projects": 5,
+      "prompt_tokens_estimated": {
+        "max": 314,
+        "median": 314,
+        "method": "rendered context characters / 4; tokenizer-independent estimate"
+      },
+      "queries": 15,
+      "recall_at_k": 1.0
+    },
+    {
+      "entries": 10000,
+      "k": 5,
+      "latency_ms": {
+        "max": 1006.103,
+        "median": 416.855,
+        "p95": 658.693
+      },
+      "mean_returned": 5.0,
+      "mrr": 1.0,
+      "precision_at_k": 0.20000000000000004,
+      "projects": 5,
+      "prompt_tokens_estimated": {
+        "max": 314,
+        "median": 314,
+        "method": "rendered context characters / 4; tokenizer-independent estimate"
+      },
+      "queries": 15,
+      "recall_at_k": 1.0
+    }
+  ]
+}

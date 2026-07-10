@@ -79,6 +79,27 @@ workstation (they can replace the binary, the key, and the chain together),
 a malicious coding agent binary, and confidentiality of the local SQLite
 store beyond file permissions.
 
+## Runtime security contract
+
+These statements are observable behavior, not aspirational documentation:
+
+| Promise | Runtime enforcement | Regression coverage |
+|---|---|---|
+| Foreign federation is read-only | SQLite opens with `mode=ro`; chain verification never creates or advances a foreign head/key | `tests/test_federation.py`, `tests/test_evidence_chain.py` |
+| Trust cannot be raised by SQLite edits | Current entry digests must replay from HMAC-chain curation/verification events | `tests/test_endorsement.py`, `tests/test_report_and_cli.py` |
+| Browser scope cannot escape origin silently | Redirect targets, robots, sitemaps, discovered links, and action steps are checked after resolution | `tests/test_webexplore.py`, `tests/test_verify_entry.py` |
+| Scripted writes require operator opt-in | Non-search fill/select and POST submit require `--allow-writes`; passwords/destructive controls stay blocked | `tests/test_webexplore.py`, `tests/test_report_and_cli.py` |
+| Interrupted/failed work is not acceptance | Trace records an explicit failed/interrupted terminal event; only one chain-backed completion can be accepted | `tests/test_delegate.py`, `tests/test_report_and_cli.py` |
+| Chain-first harvest survives a DB crash | Signed harvest events carry complete minted rows; a retry restores only missing digest-matching rows without appending a second event | `tests/test_harvest.py` |
+| Schema upgrades preserve rollback material | Ordered transaction, pre-upgrade SQLite backup, refusal of newer versions | `tests/test_knowledge_store.py` |
+| Expected failures do not leak tracebacks | argparse and runtime failures share `error`/`reason`/`next` output | `tests/test_cli_help.py`, CLI E2E tests |
+
+On POSIX, newly created key/artifact directories and files use `0700`/`0600`.
+On Windows, Python's POSIX mode bits are not an ACL mechanism; confidentiality
+there relies on the current user's profile/directory ACL. A custom
+`KNOWHELM_KEY_DIR` remains the operator's security boundary and should not be
+shared with other accounts.
+
 ## Known limitations (deliberate trade-offs)
 
 - **Injection trusts the last verification.** `knowhelm run` does not

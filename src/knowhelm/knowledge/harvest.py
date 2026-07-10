@@ -53,6 +53,7 @@ class HarvestResult:
     review: list[Entry] = field(default_factory=list)
     demoted: list[Entry] = field(default_factory=list)
     head_commits: dict[str, str] = field(default_factory=dict)
+    resumed: bool = False
 
     @property
     def head_commit(self) -> str | None:
@@ -74,10 +75,16 @@ def harvest_run(
         raise HarvestError(
             f"run {run.run_id} is not ACCEPTED; only accepted runs feed the knowledge base"
         )
-    if any(
-        r.event == HARVEST_EVENT and r.payload.get("run_id") == run.run_id for r in records
-    ):
-        raise HarvestError(f"run {run.run_id} was already harvested")
+    prior = next(
+        (
+            record
+            for record in records
+            if record.event == HARVEST_EVENT and record.payload.get("run_id") == run.run_id
+        ),
+        None,
+    )
+    if prior is not None:
+        return _resume_harvest(run, store, prior, records)
     # The base commit comes from the chain-endorsed delegation_completed
     # record, never from the trace: the trace lives in the agent-writable
     # tree, and a forged base_commit there would steer which files get
@@ -165,6 +172,7 @@ def harvest_run(
         {
             "run_id": run.run_id,
             "minted": {e.id: entry_digest(e) for e in minted},
+            "minted_entries": [_serialize_minted(entry) for entry in minted],
             "reversed": {e.id: entry_digest(e) for e in reversed_entries},
             "stale": [e.id for e in stale],
             "unauditable_checks": unauditable,
@@ -184,6 +192,119 @@ def harvest_run(
         review=review,
         demoted=demoted,
         head_commits=head_commits,
+    )
+
+
+def _resume_harvest(
+    run: RunSummary,
+    store: KnowledgeStore,
+    record: EvidenceRecord,
+    records: list[EvidenceRecord],
+) -> HarvestResult:
+    """Finish DB materialization after a crash that followed the chain append.
+
+    New harvest events carry complete minted rows plus their digests. The chain
+    is the recovery log: no agent call, source scan, or second event is needed.
+    Older events do not carry enough material and retain the historical
+    already-harvested behavior.
+    """
+    raw_rows = record.payload.get("minted_entries")
+    expected = record.payload.get("minted")
+    if not isinstance(raw_rows, list) or not isinstance(expected, dict):
+        raise HarvestError(f"run {run.run_id} was already harvested")
+    try:
+        minted = [_deserialize_minted(item) for item in raw_rows]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HarvestError("recorded harvest recovery data is invalid") from exc
+    if {entry.id for entry in minted} != set(expected) or any(
+        entry_digest(entry) != expected[entry.id] for entry in minted
+    ):
+        raise HarvestError("recorded harvest recovery data does not match its signed digests")
+
+    complete = all(
+        (stored := store.get(entry.id)) is not None
+        and entry_digest(stored) == expected[entry.id]
+        for entry in minted
+    )
+    if complete:
+        raise HarvestError(f"run {run.run_id} was already harvested")
+    for entry in minted:
+        stored = store.get(entry.id)
+        if stored is None or entry_digest(stored) != expected[entry.id]:
+            _persist_minted(
+                store,
+                entry,
+                entry.trust.verified_by or run.run_id,
+                entry.trust.verified_at or datetime.now(timezone.utc),
+            )
+        restored = store.get(entry.id)
+        if restored is None or entry_digest(restored) != expected[entry.id]:
+            raise HarvestError(
+                f"cannot restore minted entry {entry.id[:8]} to its chain-endorsed content"
+            )
+
+    reversed_entries = _entries_from_ids(store, record.payload.get("reversed", {}))
+    stale = _entries_from_ids(store, record.payload.get("stale", []))
+    review = _entries_from_ids(store, record.payload.get("review", []))
+    demoted = _demoted_by_reanchor(reversed_entries, records[: record.index])
+    return HarvestResult(
+        minted=minted,
+        reversed_entries=reversed_entries,
+        stale=stale,
+        unauditable_checks=list(record.payload.get("unauditable_checks", [])),
+        review=review,
+        demoted=demoted,
+        head_commits=dict(record.payload.get("head_commits", {})),
+        resumed=True,
+    )
+
+
+def _entries_from_ids(store: KnowledgeStore, values) -> list[Entry]:
+    ids = values.keys() if isinstance(values, dict) else values if isinstance(values, list) else []
+    return [entry for entry_id in ids if (entry := store.get(entry_id)) is not None]
+
+
+def _serialize_minted(entry: Entry) -> dict:
+    return {
+        "id": entry.id,
+        "title": entry.title,
+        "content": entry.content,
+        "kind": entry.kind.value,
+        "source": {
+            "channel": entry.source.channel.value,
+            "locator": entry.source.locator,
+            "snapshot_ref": entry.source.snapshot_ref,
+        },
+        "trust": {
+            "verification": entry.trust.verification.value,
+            "verified_at": entry.trust.verified_at.isoformat(),
+            "verified_by": entry.trust.verified_by,
+        },
+        "created_at": entry.created_at.isoformat(),
+        "updated_at": entry.updated_at.isoformat(),
+    }
+
+
+def _deserialize_minted(data: dict) -> Entry:
+    source = data["source"]
+    trust = data["trust"]
+    return Entry(
+        id=data["id"],
+        title=data["title"],
+        content=data["content"],
+        kind=Kind(data["kind"]),
+        source=Source(
+            channel=Channel(source["channel"]),
+            locator=source["locator"],
+            snapshot_ref=source.get("snapshot_ref"),
+        ),
+        trust=Trust(
+            verification=Verification(trust["verification"]),
+            verified_at=datetime.fromisoformat(trust["verified_at"]),
+            verified_by=trust["verified_by"],
+        ),
+        created_at=datetime.fromisoformat(data["created_at"]),
+        updated_at=datetime.fromisoformat(data["updated_at"]),
     )
 
 

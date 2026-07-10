@@ -154,6 +154,33 @@ def test_detects_full_chain_replacement(chain, tmp_path):
         fresh.verify()
 
 
+def test_malformed_chain_json_is_a_verification_error_without_raw_decode_failure(chain):
+    chain.append("check_passed", {})
+    chain._path.write_text("not-json\n", encoding="utf-8")
+
+    with pytest.raises(ChainVerificationError, match="valid evidence JSON"):
+        chain.verify()
+
+
+def test_malformed_head_is_a_verification_error(chain):
+    chain.append("check_passed", {})
+    chain._head_path.write_text("not-json", encoding="utf-8")
+
+    with pytest.raises(ChainVerificationError, match="head commitment is unreadable"):
+        chain.verify()
+
+
+def test_invalid_existing_key_length_is_refused(tmp_path):
+    from knowhelm.evidence.chain import KeyMaterialError
+
+    key = key_path_for(tmp_path)
+    key.parent.mkdir(parents=True, exist_ok=True)
+    key.write_bytes(b"too-short")
+
+    with pytest.raises(KeyMaterialError, match="expected exactly 32"):
+        EvidenceChain.for_workdir(tmp_path)
+
+
 def test_head_commitment_lives_outside_project_tree(chain, tmp_path):
     chain.append("check_passed", {})
     head = key_path_for(tmp_path).with_suffix(".head")
@@ -195,19 +222,17 @@ def test_verify_heals_lagging_head_and_rearms_truncation_detection(chain, tmp_pa
         chain.verify()
 
 
-def test_verify_readonly_only_advances_an_existing_head(chain, tmp_path):
+def test_verify_readonly_does_not_advance_an_existing_head(chain, tmp_path):
     old = chain.append("check_passed", {"check": "old"})
     latest = chain.append("check_passed", {"check": "latest"})
     head_path = key_path_for(tmp_path).with_suffix(".head")
     head_path.write_text(json.dumps({"index": old.index, "chain_hash": old.chain_hash}))
 
+    before = head_path.read_bytes()
     records = EvidenceChain.verify_readonly(tmp_path)
 
     assert records[-1] == latest
-    assert json.loads(head_path.read_text()) == {
-        "index": latest.index,
-        "chain_hash": latest.chain_hash,
-    }
+    assert head_path.read_bytes() == before
 
 
 def test_verify_readonly_does_not_create_a_missing_head(chain, tmp_path):

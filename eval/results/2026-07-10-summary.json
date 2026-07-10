@@ -49,6 +49,36 @@
       "precision_over_returned": 0.6
     }
   },
+  "reverse_matrix": {
+    "agent": "Claude CLI",
+    "dataset": "eval/datasets/reverse_matrix/matrix.json",
+    "repositories": ["Python", "TypeScript", "Python + TypeScript"],
+    "truths": 10,
+    "predictions": 11,
+    "precision": 0.8181818181818182,
+    "recall": 0.9,
+    "f1": 0.8571428571428572,
+    "duration_seconds": 133.848,
+    "input_tokens_estimated": 5398,
+    "output_tokens_estimated": 1829,
+    "note": "A single strict repair retry converted two initial excerpt-validation batch failures into valid, source-matching evidence. Token counts are characters/4 estimates."
+  },
+  "scale": {
+    "dataset": "deterministic synthetic scale fixture across 5 logical projects",
+    "host": "Linux x86_64, Python 3.11.10",
+    "retrieval_10000": {
+      "median_latency_ms": 416.855,
+      "p95_latency_ms": 658.693,
+      "precision_at_5": 0.2,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "prompt_tokens_estimated_median": 314
+    },
+    "evidence_10000": {
+      "verify_median_latency_ms": 237.504,
+      "no_change_harvest_median_latency_ms": 800.489
+    }
+  },
   "coding_tasks": {
     "agent": "Codex CLI 0.144.1",
     "runs_per_variant": 3,
@@ -68,5 +98,20 @@
       {"task": "customer-csv-contract", "variant": "no_knowledge", "passed": false, "duration_seconds": 111.573, "observed_change": "id,name,email", "hidden_contract": "customer_id,display_name,primary_email"},
       {"task": "customer-csv-contract", "variant": "knowhelm", "passed": true, "duration_seconds": 67.868, "observed_change": "customer_id,display_name,primary_email", "hidden_contract": "customer_id,display_name,primary_email"}
     ]
+  },
+  "coding_task_four_way": {
+    "agent": "Claude CLI",
+    "runs_per_variant": 3,
+    "no_memory": {"passed": 0, "success_rate": 0.0},
+    "session_memory": {"passed": 3, "success_rate": 1.0},
+    "codebase_index": {"passed": 0, "success_rate": 0.0},
+    "knowhelm": {"passed": 3, "success_rate": 1.0},
+    "interpretation": "The correct fact, whether ephemeral session memory or governed knowhelm context, enabled success. Repository-only indexing did not reveal the external policy."
+  },
+  "usability": {
+    "status": "awaiting real participants",
+    "sessions": 0,
+    "protocol": "docs/usability-study.md",
+    "note": "No human completion rate is inferred from agents or deterministic smoke tests."
   }
 }

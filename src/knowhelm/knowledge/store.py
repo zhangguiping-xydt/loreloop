@@ -20,8 +20,9 @@ from .model import (
 )
 from .repos import parse_code_locator
 
-_SCHEMA_VERSION = 1
-_SCHEMA = """
+SCHEMA_VERSION = 1
+
+_CREATE_ENTRIES = """
 CREATE TABLE IF NOT EXISTS entries (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -40,16 +41,16 @@ CREATE TABLE IF NOT EXISTS entries (
     verified_by TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_entries_kind ON entries(kind);
-CREATE INDEX IF NOT EXISTS idx_entries_channel ON entries(channel);
+)
+"""
+_CREATE_LINKS = """
 CREATE TABLE IF NOT EXISTS links (
     from_id TEXT NOT NULL REFERENCES entries(id),
     to_id TEXT NOT NULL REFERENCES entries(id),
     link_type TEXT NOT NULL,
     created_at TEXT NOT NULL,
     PRIMARY KEY (from_id, to_id, link_type)
-);
+)
 """
 
 
@@ -57,8 +58,40 @@ class InvalidTransition(Exception):
     pass
 
 
+class SchemaVersionError(RuntimeError):
+    pass
+
+
+def migration_backup_path(db_path: str | Path, version: int) -> Path:
+    """Stable pre-upgrade backup path that an older release can reopen."""
+    path = Path(db_path)
+    return path.with_name(f"{path.name}.schema-v{version}.bak")
+
+
+def _migration_v1(conn: sqlite3.Connection) -> None:
+    """Create the current schema or add source-evidence columns to legacy v0."""
+    conn.execute(_CREATE_ENTRIES)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_kind ON entries(kind)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_channel ON entries(channel)")
+    conn.execute(_CREATE_LINKS)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(entries)").fetchall()}
+    additions = {
+        "source_symbol": "TEXT",
+        "source_line_start": "INTEGER",
+        "source_line_end": "INTEGER",
+        "source_excerpt": "TEXT",
+    }
+    for column, sql_type in additions.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE entries ADD COLUMN {column} {sql_type}")
+
+
+_MIGRATIONS = {1: _migration_v1}
+
+
 class KnowledgeStore:
     def __init__(self, db_path: str | Path) -> None:
+        self._db_path = Path(db_path)
         self._conn = sqlite3.connect(str(db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
@@ -68,6 +101,7 @@ class KnowledgeStore:
     def open_readonly(cls, db_path: str | Path) -> "KnowledgeStore":
         path = Path(db_path).resolve()
         store = cls.__new__(cls)
+        store._db_path = path
         store._conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
         store._conn.row_factory = sqlite3.Row
         store._conn.execute("PRAGMA foreign_keys = ON")
@@ -136,34 +170,37 @@ class KnowledgeStore:
         return entry
 
     def _migrate(self) -> None:
-        """Apply small, transactional SQLite migrations in place.
+        """Apply ordered migrations with a pre-upgrade backup and rollback.
 
-        ``PRAGMA user_version`` is the durable schema marker. Migrations are
-        additive and idempotent so an interrupted upgrade can be retried
-        without losing existing rows. Downgrade support is a separate release
-        concern and is not implied by this forward migration.
+        ``PRAGMA user_version`` is the durable marker. Existing databases are
+        copied before the first forward step. Every step then runs inside one
+        explicit transaction, so a crash or invalid migration preserves the
+        previous schema and data. Newer schemas are refused before any write.
         """
         version = self._conn.execute("PRAGMA user_version").fetchone()[0]
-        if version > _SCHEMA_VERSION:
-            raise RuntimeError(
+        if version > SCHEMA_VERSION:
+            raise SchemaVersionError(
                 f"knowledge database schema {version} is newer than supported "
-                f"schema {_SCHEMA_VERSION}"
+                f"schema {SCHEMA_VERSION}; upgrade knowhelm or restore a compatible backup"
             )
-        with self._conn:
-            self._conn.executescript(_SCHEMA)
-            columns = {
-                row[1] for row in self._conn.execute("PRAGMA table_info(entries)").fetchall()
-            }
-            additions = {
-                "source_symbol": "TEXT",
-                "source_line_start": "INTEGER",
-                "source_line_end": "INTEGER",
-                "source_excerpt": "TEXT",
-            }
-            for column, sql_type in additions.items():
-                if column not in columns:
-                    self._conn.execute(f"ALTER TABLE entries ADD COLUMN {column} {sql_type}")
-            self._conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+        if version == SCHEMA_VERSION:
+            return
+        if _has_user_schema(self._conn):
+            _backup_once(self._conn, migration_backup_path(self._db_path, version))
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            while version < SCHEMA_VERSION:
+                target = version + 1
+                migration = _MIGRATIONS.get(target)
+                if migration is None:
+                    raise SchemaVersionError(f"missing migration for schema {version} -> {target}")
+                migration(self._conn)
+                self._conn.execute(f"PRAGMA user_version = {target}")
+                version = target
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def get(self, entry_id: str) -> Entry | None:
         row = self._conn.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone()
@@ -335,6 +372,24 @@ class KnowledgeStore:
 
 def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
+
+
+def _has_user_schema(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+    ).fetchone()
+    return row is not None
+
+
+def _backup_once(conn: sqlite3.Connection, path: Path) -> None:
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup = sqlite3.connect(str(path))
+    try:
+        conn.backup(backup)
+    finally:
+        backup.close()
 
 
 def _locator_key(channel: Channel, locator: str) -> str | tuple[str, str]:

@@ -2,9 +2,9 @@
 
 The files in this directory are small, auditable baselines rather than claims
 of broad model superiority. The reverse predictions retain claim text and
-evidence spans; long excerpts and model transcripts are omitted. Coding-task
-transcripts are not committed because an agent may print local environment
-variables. The runner redacts secret-shaped values before saving future runs.
+evidence spans. Coding-task transcripts are bounded and redacted before being
+saved because an agent may print local environment variables; never commit an
+unredacted temporary run.
 
 Re-score the recorded reverse outputs:
 
@@ -13,19 +13,23 @@ uv run python eval/run.py reverse \
   --predictions eval/results/reverse-codex-2026-07-10.json
 uv run python eval/run.py reverse \
   --predictions eval/results/reverse-claude-2026-07-10.json
+uv run python eval/run.py reverse-matrix \
+  --predictions eval/results/reverse-matrix-claude-2026-07-10.json
 ```
 
 Reproduce retrieval locally without a model:
 
 ```bash
 uv run python eval/run.py retrieval
+uv run python eval/scale.py
+uv run python eval/usability.py
 ```
 
-Run fresh coding-agent A/B tasks (this invokes the selected local agent CLI):
+Run fresh four-way coding-agent tasks (this invokes the selected local agent CLI):
 
 ```bash
 uv run python eval/task_runner.py \
-  --agent codex \
+  --agent codex --variant all \
   --output eval/results/my-codex-run.json
 ```
 

@@ -25,10 +25,24 @@ uv run python eval/run.py reverse \
 # Produce a fresh reverse run
 uv run python eval/run.py reverse --agent codex --output /tmp/reverse-codex.json
 
-# Real coding-agent A/B tasks
+# Python / TypeScript / mixed-language reverse quality and cost
+uv run python eval/run.py reverse-matrix --agent claude \
+  --output /tmp/reverse-matrix.json
+
+# Re-score the checked-in matrix without calling an agent
+uv run python eval/run.py reverse-matrix \
+  --predictions eval/results/reverse-matrix-claude-2026-07-10.json
+
+# Real coding-agent four-way task comparison
 uv run python eval/task_runner.py \
-  --agent codex \
+  --agent codex --variant all \
   --output /tmp/codex-task-results.json
+
+# 100 / 1k / 10k retrieval, evidence-chain, and harvest scale
+uv run python eval/scale.py --output /tmp/scale.json
+
+# Validate and aggregate real zero-context participant records
+uv run python eval/usability.py
 ```
 
 ## Metrics
@@ -54,17 +68,29 @@ Coding-task success requires all of the following:
 - hidden contract tests pass;
 - the run does not time out.
 
-The no-knowledge and knowhelm variants receive the same repository and task.
-Only the knowhelm variant receives the rendered established-facts section.
-Hidden evaluators remain outside the repository copied for the agent.
+All task variants receive the same repository, task, and hidden evaluator:
+
+- `no_memory`: no external project fact;
+- `session_memory`: the same critical fact as an ephemeral, unverified note;
+- `codebase_index`: bounded source snippets only, with no external policy fact;
+- `knowhelm`: the fact rendered as chain-governable established knowledge.
+
+This separates the value of simply possessing a fact from persistence,
+provenance, retrieval, and trust governance. Hidden evaluators remain outside
+the repository copied for the agent.
+
+The scale fixture is deterministic and synthetic. It measures algorithmic
+behavior and operating limits across five logical projects, not real-world
+relevance diversity. Prompt-token cost is explicitly an estimate of rendered
+characters divided by four; vendor-billed tokens require vendor telemetry.
 
 ## Safety and limitations
 
 - Task transcripts are redacted and truncated before saving. Recorded public
   baselines omit transcripts because agents may inspect local environment variables.
-- The committed benchmark is intentionally small. It proves the harness and
-  catches regressions; it does not establish superiority across languages,
-  repositories or models.
+- The committed truth sets and coding tasks remain intentionally small. The
+  multi-language matrix and 10k scale run widen coverage but do not establish
+  industry-wide superiority across repositories or models.
 - Query expansion in the offline retrieval dataset is frozen so ranker changes
   are measured independently of model variance.
 - Add new fixtures and truths before inspecting new model output whenever
@@ -72,3 +98,7 @@ Hidden evaluators remain outside the repository copied for the agent.
 
 The recorded 2026-07-10 baseline is in
 [`eval/results/2026-07-10-summary.json`](results/2026-07-10-summary.json).
+Additional raw results include the
+[`multi-language reverse matrix`](results/reverse-matrix-claude-2026-07-10.json)
+and [`scale benchmark`](results/scale-2026-07-10.json). The usability summary
+reports `awaiting real participants` until actual uncoached session JSON exists.

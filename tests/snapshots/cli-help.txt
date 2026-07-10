@@ -1,0 +1,330 @@
+$ knowhelm --help
+usage: knowhelm [-h] [--agent {claude,codex}]
+                {doctor,init,demo,ingest,repo,project,verify,run,check,report,harvest,knowledge}
+                ...
+
+Reverse-engineer project knowledge, apply it to coding-agent work, and return
+accepted outcomes to a tamper-evident knowledge loop.
+
+positional arguments:
+  {doctor,init,demo,ingest,repo,project,verify,run,check,report,harvest,knowledge}
+    doctor              check prerequisites and writable trust state
+    init                set up knowhelm in this project
+    demo                run the bundled five-minute knowledge loop
+    ingest              reverse-engineer knowledge from a source
+    repo                manage repositories in this trust domain
+    project             manage the federation project registry
+    verify              verify an expectation against a live page
+    run                 delegate a task with injected knowledge
+    check               record an acceptance check for a run
+    report              render the acceptance report for a run
+    harvest             flow knowledge back from an accepted run
+    knowledge           inspect, curate and verify knowledge entries
+
+options:
+  -h, --help            show this help message and exit
+  --agent {claude,codex}
+                        coding-agent CLI used for extraction and delegated
+                        work (default: claude)
+
+$ knowhelm doctor --help
+usage: knowhelm doctor [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+$ knowhelm init --help
+usage: knowhelm init [-h] [--skill | --no-skill]
+
+options:
+  -h, --help  show this help message and exit
+  --skill     install the companion skill without asking
+  --no-skill  skip companion skill installation
+
+$ knowhelm demo --help
+usage: knowhelm demo [-h] [--offline] [--workspace WORKSPACE]
+                     [--agent {claude,codex}]
+
+options:
+  -h, --help            show this help message and exit
+  --offline             use deterministic CI adapters
+  --workspace WORKSPACE
+                        parent directory for the demo repository
+  --agent {claude,codex}
+                        override the coding-agent CLI for this action
+
+$ knowhelm ingest --help
+usage: knowhelm ingest [-h] --from {code,web} [--max-pages MAX_PAGES]
+                       [--headed] [--agent {claude,codex}]
+                       target
+
+positional arguments:
+  target
+
+options:
+  -h, --help            show this help message and exit
+  --from {code,web}
+  --max-pages MAX_PAGES
+  --headed              show the browser window (needed for login handover)
+  --agent {claude,codex}
+                        override the coding-agent CLI for this action
+
+$ knowhelm repo --help
+usage: knowhelm repo [-h] {add,list,remove} ...
+
+positional arguments:
+  {add,list,remove}
+    add              add a Git repository to this trust domain
+    list             list declared repositories and reachability
+    remove           remove a repository declaration
+
+options:
+  -h, --help         show this help message and exit
+
+$ knowhelm repo add --help
+usage: knowhelm repo add [-h] [--name NAME] REPO_PATH
+
+positional arguments:
+  REPO_PATH    Git repository root
+
+options:
+  -h, --help   show this help message and exit
+  --name NAME  repository name; defaults to the directory name
+
+$ knowhelm repo list --help
+usage: knowhelm repo list [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+$ knowhelm repo remove --help
+usage: knowhelm repo remove [-h] REPO_NAME
+
+positional arguments:
+  REPO_NAME   declared repository name
+
+options:
+  -h, --help  show this help message and exit
+
+$ knowhelm project --help
+usage: knowhelm project [-h] {add,list,remove} ...
+
+positional arguments:
+  {add,list,remove}
+    add              register a project for federation
+    list             list registered projects
+    remove           remove a federation registration
+
+options:
+  -h, --help         show this help message and exit
+
+$ knowhelm project add --help
+usage: knowhelm project add [-h] [--id PROJECT_ID] [--name NAME]
+                            [--alias ALIAS] [--tag TAG]
+                            PROJECT_PATH
+
+positional arguments:
+  PROJECT_PATH
+
+options:
+  -h, --help       show this help message and exit
+  --id PROJECT_ID
+  --name NAME
+  --alias ALIAS
+  --tag TAG
+
+$ knowhelm project list --help
+usage: knowhelm project list [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+$ knowhelm project remove --help
+usage: knowhelm project remove [-h] PROJECT_ID
+
+positional arguments:
+  PROJECT_ID  registered project id
+
+options:
+  -h, --help  show this help message and exit
+
+$ knowhelm verify --help
+usage: knowhelm verify [-h] [--headed] [--script SCRIPT] [--allow-writes]
+                       [--agent {claude,codex}]
+                       run_id url expectation
+
+positional arguments:
+  run_id
+  url                   page URL, or same-origin base URL for --script
+  expectation
+
+options:
+  -h, --help            show this help message and exit
+  --headed
+  --script SCRIPT       replay an interaction script before verification
+  --allow-writes        allow fill/select/POST-submit actions outside
+                        search/filter controls
+  --agent {claude,codex}
+                        override the coding-agent CLI for this action
+
+$ knowhelm run --help
+usage: knowhelm run [-h] [--no-expand] [--with-related]
+                    [--related-limit RELATED_LIMIT] [--agent {claude,codex}]
+                    task
+
+positional arguments:
+  task
+
+options:
+  -h, --help            show this help message and exit
+  --no-expand           skip LLM query expansion; retrieve with the task text
+                        only
+  --with-related
+  --related-limit RELATED_LIMIT
+  --agent {claude,codex}
+                        override the coding-agent CLI for this action
+
+$ knowhelm check --help
+usage: knowhelm check [-h] (--pass | --fail | --command COMMAND)
+                      [--detail DETAIL] [--timeout TIMEOUT]
+                      run_id check
+
+positional arguments:
+  run_id
+  check
+
+options:
+  -h, --help         show this help message and exit
+  --pass
+  --fail
+  --command COMMAND  execute an argv-style command without a shell; exit code
+                     zero passes
+  --detail DETAIL
+  --timeout TIMEOUT
+
+$ knowhelm report --help
+usage: knowhelm report [-h] [run_id]
+
+positional arguments:
+  run_id
+
+options:
+  -h, --help  show this help message and exit
+
+$ knowhelm harvest --help
+usage: knowhelm harvest [-h] [--agent {claude,codex}] run_id
+
+positional arguments:
+  run_id
+
+options:
+  -h, --help            show this help message and exit
+  --agent {claude,codex}
+                        override the coding-agent CLI for this action
+
+$ knowhelm knowledge --help
+usage: knowhelm knowledge [-h]
+                          {list,search,import,export,approve,reject,supersede,verify,usage}
+                          ...
+
+positional arguments:
+  {list,search,import,export,approve,reject,supersede,verify,usage}
+    list                list knowledge and trust state
+    search              search local or federated knowledge
+    import              copy a foreign entry into the local draft store
+    export              export knowledge and effective trust as Markdown
+    approve             approve one draft entry and endorse its content
+    reject              reject one entry and retire it from injection
+    supersede           retire an old entry in favor of a new entry
+    verify              recheck web knowledge against live pages
+    usage               show injection and accepted-run correlation
+
+options:
+  -h, --help            show this help message and exit
+
+$ knowhelm knowledge list --help
+usage: knowhelm knowledge list [-h] [--stale]
+
+options:
+  -h, --help  show this help message and exit
+  --stale     only entries whose code anchor drifted
+
+$ knowhelm knowledge search --help
+usage: knowhelm knowledge search [-h] [--all | --project PROJECT] [--tag TAG]
+                                 [--limit LIMIT]
+                                 QUERY
+
+positional arguments:
+  QUERY
+
+options:
+  -h, --help         show this help message and exit
+  --all              search all registered projects
+  --project PROJECT  search one registered project; may be repeated
+  --tag TAG          filter selected projects by tag
+  --limit LIMIT
+
+$ knowhelm knowledge import --help
+usage: knowhelm knowledge import [-h] PROJECT_ID ENTRY_ID
+
+positional arguments:
+  PROJECT_ID
+  ENTRY_ID
+
+options:
+  -h, --help  show this help message and exit
+
+$ knowhelm knowledge export --help
+usage: knowhelm knowledge export [-h] [--stale] [--output OUTPUT]
+
+options:
+  -h, --help       show this help message and exit
+  --stale
+  --output OUTPUT  write Markdown to this path
+
+$ knowhelm knowledge approve --help
+usage: knowhelm knowledge approve [-h] ENTRY_ID
+
+positional arguments:
+  ENTRY_ID
+
+options:
+  -h, --help  show this help message and exit
+
+$ knowhelm knowledge reject --help
+usage: knowhelm knowledge reject [-h] ENTRY_ID
+
+positional arguments:
+  ENTRY_ID
+
+options:
+  -h, --help  show this help message and exit
+
+$ knowhelm knowledge supersede --help
+usage: knowhelm knowledge supersede [-h] NEW_ENTRY_ID OLD_ENTRY_ID
+
+positional arguments:
+  NEW_ENTRY_ID
+  OLD_ENTRY_ID
+
+options:
+  -h, --help    show this help message and exit
+
+$ knowhelm knowledge verify --help
+usage: knowhelm knowledge verify [-h] [--headed] [--agent {claude,codex}]
+                                 [ENTRY_ID]
+
+positional arguments:
+  ENTRY_ID
+
+options:
+  -h, --help            show this help message and exit
+  --headed
+  --agent {claude,codex}
+                        override the coding-agent CLI for this action
+
+$ knowhelm knowledge usage --help
+usage: knowhelm knowledge usage [-h]
+
+options:
+  -h, --help  show this help message and exit

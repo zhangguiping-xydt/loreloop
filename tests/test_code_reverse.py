@@ -129,6 +129,40 @@ def test_extract_rejects_fabricated_evidence_excerpt(repo):
         extract_assertions(FakeRunner([out]), repo, [repo / "app.py"])
 
 
+def test_reverse_retries_once_after_deterministic_evidence_rejection(repo):
+    bad = json.dumps([{
+        "claim": "POST /upload returns 201.",
+        "title": "Upload status",
+        "file": "app.py",
+        "evidence": {
+            "line_start": 1,
+            "line_end": 2,
+            "symbol": "upload",
+            "excerpt": "return 500",
+        },
+    }])
+    repaired = json.dumps([{
+        "claim": "POST /upload returns 201.",
+        "title": "Upload status",
+        "file": "app.py",
+        "evidence": {
+            "line_start": 1,
+            "line_end": 2,
+            "symbol": "upload",
+            "excerpt": "def upload():\n    return 201",
+        },
+    }])
+    classified = json.dumps([{"id": 0, "kind": "interface"}])
+    runner = FakeRunner([bad, repaired, classified])
+
+    entries = reverse_code(runner, repo)
+
+    assert len(entries) == 1
+    assert len(runner.prompts) == 3
+    assert "failed deterministic validation" in runner.prompts[1]
+    assert "excerpt does not match app.py:1-2" in runner.prompts[1]
+
+
 def test_reverse_prompt_prioritizes_high_value_facts_and_versions_it(repo):
     runner = FakeRunner(["[]"])
 

@@ -48,6 +48,20 @@ def test_task_prompt_keeps_knowledge_out_of_no_context_variant() -> None:
     assert "Established facts" in governed
 
 
+def test_task_prompt_exposes_distinct_memory_and_index_baselines(tmp_path) -> None:
+    spec = json.loads((task_runner.TASK_ROOT / "tasks.json").read_text(encoding="utf-8"))[0]
+    (tmp_path / "policy.py").write_text("MAX = 10\n", encoding="utf-8")
+
+    session = task_runner._task_prompt(spec, "session_memory")
+    indexed = task_runner._task_prompt(spec, "codebase_index", tmp_path)
+
+    assert "37 MiB" in session
+    assert "unverified and ephemeral" in session
+    assert "37 MiB" not in indexed
+    assert "MAX = 10" in indexed
+    assert "source snippets, no external project memory" in indexed
+
+
 def test_task_result_redaction_removes_environment_secrets() -> None:
     text = "OPENAI_API_KEY=super-secret\nnormal output\npassword: hunter2"
 

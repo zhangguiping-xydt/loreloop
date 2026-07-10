@@ -27,12 +27,18 @@ jobs:
       - run: python -m ruff check .
       - run: python -m pytest -q
       - run: python eval/run.py retrieval --output eval-retrieval.json
+      - run: python eval/scale.py --sizes 100 1000 --repetitions 1 --output eval-scale.json
+      - run: python eval/usability.py --output eval-usability.json
+      - run: knowhelm demo --offline --workspace .first-run-smoke
       - run: python -m pip wheel --no-deps . --wheel-dir dist
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: retrieval-${{ matrix.os }}-py${{ matrix.python }}
-          path: eval-retrieval.json
+          path: |
+            eval-retrieval.json
+            eval-scale.json
+            eval-usability.json
 
   browser:
     name: Playwright smoke

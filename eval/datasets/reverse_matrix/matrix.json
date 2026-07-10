@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "python-policy",
+      "language": "Python",
+      "fixture": "python_project",
+      "truths": [
+        {"id": "py-upload", "source": "policy.py", "match_all": [["upload", "32", "mib"]]},
+        {"id": "py-premium-rate", "source": "policy.py", "match_all": [["premium", "12", "minute"]]},
+        {"id": "py-audit", "source": "policy.py", "match_all": [["audit", "90", "days"]]}
+      ]
+    },
+    {
+      "id": "typescript-export",
+      "language": "TypeScript",
+      "fixture": "typescript_project",
+      "truths": [
+        {"id": "ts-columns", "source": "export.ts", "match_all": [["account_id", "display_name"]]},
+        {"id": "ts-limit", "source": "export.ts", "match_all": [["export", "10000", "rows"], ["export", "10", "000", "rows"], ["导出", "10", "000"]]},
+        {"id": "ts-locale", "source": "export.ts", "match_all": [["locale", "en", "us"], ["区域", "en", "us"], ["回退", "en", "us"]]}
+      ]
+    },
+    {
+      "id": "mixed-document-flow",
+      "language": "Python + TypeScript",
+      "fixture": "mixed_project",
+      "truths": [
+        {"id": "mixed-route", "match_all": [["documents", "v1"]]},
+        {"id": "mixed-limit", "match_all": [["document", "24", "mib"]]},
+        {"id": "mixed-accepted", "source": "backend.py", "match_all": [["accepted", "202"], ["returns", "202"]]},
+        {"id": "mixed-poll", "source": "frontend.ts", "match_all": [["poll", "2000"], ["poll", "2", "seconds"]]}
+      ]
+    }
+  ]
+}

@@ -16,6 +16,8 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = []
 
@@ -28,6 +30,9 @@ knowhelm = "knowhelm.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/starry-knowhelm/starry-knowhelm"
+Repository = "https://github.com/starry-knowhelm/starry-knowhelm"
+Issues = "https://github.com/starry-knowhelm/starry-knowhelm/issues"
+Changelog = "https://github.com/starry-knowhelm/starry-knowhelm/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/knowhelm"]

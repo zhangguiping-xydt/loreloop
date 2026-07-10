@@ -96,6 +96,10 @@ starry-knowhelm/
 
 `KNOWHELM_KEY_DIR` 可覆盖 key 目录,测试环境也使用该变量隔离真实 home。
 
+SQLite 使用 `PRAGMA user_version` 和有序 migration。打开旧 schema 时先生成
+`knowledge.db.schema-v<old>.bak`,再在单个 `BEGIN IMMEDIATE` 事务内升级;失败回滚。
+高于当前版本的 schema 在任何写入前被拒绝,降级通过恢复对应备份完成。
+
 ---
 
 ## 3. 知识模型
@@ -492,7 +496,7 @@ trace 中的 `delegation_finished` 只用于展示,不能让报告变成 ACCEPTE
 
 ### 8.4 CLI 错误边界
 
-`knowhelm report <run_id>` 会在 trace 缺失时返回干净错误。trace JSON 损坏、缺少 `delegation_started` 或关键字段格式不对时,CLI 也以错误消息和非零状态退出。证据链校验失败同样由 CLI 捕获,不会打印 Python traceback。
+`knowhelm report <run_id>` 会在 trace 缺失时返回干净错误。trace JSON 损坏、缺少 `delegation_started` 或关键字段格式不对时,CLI 也以错误消息和非零状态退出。证据链校验失败同样由 CLI 捕获,不会打印 Python traceback。所有 action 使用真正的 argparse 子命令;预期失败统一输出一条 `error`、一条 `reason` 和一条可执行的 `next`。Ctrl-C 会写入 `delegation_interrupted`,普通代理失败写入 `delegation_failed`,两者都不会产生链上 completion。
 
 ---
 
@@ -524,6 +528,9 @@ harvest 产生两类输出:
 ### 9.3 链先行
 
 minted 条目先在内存中计算出最终内容和 digest。`knowledge_harvested` 写链成功后,才把 verified 状态落到 DB。链写失败不会留下无背书 strong 行。
+该链事件同时携带完整 minted 行作为恢复日志。若进程在链成功、DB 未完成之间崩溃,
+重跑 harvest 只补写缺失且 digest 与签名事件一致的行,不重复追加事件;已完整落库的
+run 仍返回 already harvested。
 
 ### 9.4 Review 与 demotion
 
@@ -550,6 +557,9 @@ harvest 会输出需要人工关注的集合:
 - 条目 source 锚定当前 git commit。
 - 输入按行编号并置于随机 nonce 的 untrusted-source 边界内。
 - 每条断言携带 symbol/行区间/excerpt;excerpt 必须与源行实际匹配。
+- 首次模型输出若未通过 JSON、路径、行号、symbol 或 excerpt 的同一套确定性校验,
+  `code-extract-v3` 最多进行一次修复调用;失败原因放在独立随机 nonce 的
+  untrusted 边界中。第二次仍失败则整批拒绝,不会自动改写伪造证据。
 - 允许一个文件产出 0 条知识,不再用最低条数驱动模型凑数。
 - 批内近重复断言做保守 Jaccard 去重。
 - 新条目默认 draft/unverified。
@@ -590,7 +600,7 @@ harvest 会输出需要人工关注的集合:
 
 ## 12. Companion skill
 
-`knowhelm init` 可安装 Claude Code companion skill。
+`knowhelm init` 可安装 Claude Code 和 Codex companion skill。
 
 skill 的作用是让编码代理理解 knowhelm 的协作规则:
 
@@ -600,7 +610,8 @@ skill 的作用是让编码代理理解 knowhelm 的协作规则:
 - 完成工作后给操作者起草可验证的验收断言。
 - 不主动运行 harvest/approve/reject/supersede。
 
-Codex companion skill 当前未实现;CLI 已能通过 `--agent codex` 委托 Codex。
+两个 companion skill 使用同一份只读协作契约;都只能读取知识、建议验收断言,
+不能替操作者执行 verify/report/harvest/策展。
 
 ---
 
@@ -627,8 +638,12 @@ knowhelm knowledge reject <entry_id>
 knowhelm knowledge supersede <new_id> <old_id>
 knowhelm knowledge verify <entry_id> [--headed]
 knowhelm knowledge usage
-knowhelm repo add|list|remove ...
-knowhelm project add|list|remove ...
+knowhelm repo add <repo_path> [--name <repo_name>]
+knowhelm repo list
+knowhelm repo remove <repo_name>
+knowhelm project add <project_path> [--id <project_id>] ...
+knowhelm project list
+knowhelm project remove <project_id>
 ```
 
 文件路径相关的 run id 使用严格正则校验,避免路径穿越。
@@ -684,7 +699,9 @@ knowhelm 的威胁模型是 **honest workstation**:
 - CLI 错误边界和路径穿越防护。
 - 反构 Precision/Recall、检索 Precision@K/Recall@K/MRR 和真实 Agent 隐藏测试任务。
 - SQLite schema upgrade 与 source evidence 字段的旧 digest 兼容。
+- schema 升级前备份、失败事务回滚和未来版本拒绝。
 - Linux/macOS `fcntl` 与 Windows `msvcrt` 锁后端。
+- 所有公开 CLI help 快照、三平台 bundled first-run、零背景研究记录校验。
 
 测试环境约定:
 
@@ -707,6 +724,9 @@ ingest → run → check/verify → report → harvest
 - 反构高价值事实的 Precision/Recall 与 forbidden claim 命中。
 - context pack 的 Precision@K、Recall@K、MRR 与变长返回精度。
 - 无知识/knowhelm 上下文的真实编码任务隐藏测试成功率。
+- Python/TypeScript/混合仓库反构成本与质量。
+- 100/1k/10k 多项目检索、证据链验证与无变更 harvest 延迟。
+- 无记忆、会话记忆、代码索引与 knowhelm 四组任务对照。
 
 后续可扩展方向:
 

@@ -14,7 +14,13 @@ from knowhelm.knowledge.model import (
     Trust,
     Verification,
 )
-from knowhelm.knowledge.store import InvalidTransition, KnowledgeStore
+from knowhelm.knowledge.store import (
+    SCHEMA_VERSION,
+    InvalidTransition,
+    KnowledgeStore,
+    SchemaVersionError,
+    migration_backup_path,
+)
 
 NOW = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
 
@@ -101,7 +107,58 @@ def test_opening_legacy_database_migrates_without_losing_entries(tmp_path):
             row[1] for row in migrated._conn.execute("PRAGMA table_info(entries)").fetchall()
         }
         assert {"source_symbol", "source_line_start", "source_line_end", "source_excerpt"} <= columns
-        assert migrated._conn.execute("PRAGMA user_version").fetchone()[0] >= 1
+        assert migrated._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+    backup = migration_backup_path(path, 0)
+    assert backup.is_file()
+    with sqlite3.connect(backup) as old:
+        assert old.execute("PRAGMA user_version").fetchone()[0] == 0
+        old_columns = {row[1] for row in old.execute("PRAGMA table_info(entries)").fetchall()}
+        assert "source_excerpt" not in old_columns
+        assert old.execute("SELECT title FROM entries WHERE id = ?", (legacy.id,)).fetchone()[0] == legacy.title
+
+
+def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
+    import knowhelm.knowledge.store as store_module
+
+    path = tmp_path / "rollback.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE entries (id TEXT PRIMARY KEY)")
+    conn.execute("INSERT INTO entries VALUES ('kept')")
+    conn.commit()
+    conn.close()
+
+    def broken_migration(conn):
+        conn.execute("ALTER TABLE entries ADD COLUMN temporary_value TEXT")
+        raise RuntimeError("simulated migration failure")
+
+    monkeypatch.setattr(store_module, "_MIGRATIONS", {1: broken_migration})
+    with pytest.raises(RuntimeError, match="simulated migration failure"):
+        KnowledgeStore(path)
+
+    with sqlite3.connect(path) as unchanged:
+        assert unchanged.execute("PRAGMA user_version").fetchone()[0] == 0
+        columns = {row[1] for row in unchanged.execute("PRAGMA table_info(entries)").fetchall()}
+        assert "temporary_value" not in columns
+        assert unchanged.execute("SELECT id FROM entries").fetchone()[0] == "kept"
+
+
+def test_newer_schema_is_refused_without_mutation(tmp_path):
+    path = tmp_path / "future.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE future_data (value TEXT)")
+    conn.execute("INSERT INTO future_data VALUES ('untouched')")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(SchemaVersionError, match="newer than supported"):
+        KnowledgeStore(path)
+
+    with sqlite3.connect(path) as unchanged:
+        assert unchanged.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
+        assert unchanged.execute("SELECT value FROM future_data").fetchone()[0] == "untouched"
+    assert not migration_backup_path(path, SCHEMA_VERSION + 1).exists()
 
 
 def test_list_filters(store):

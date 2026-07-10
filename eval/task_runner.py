@@ -57,19 +57,26 @@ def run_task(
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix=f"knowhelm-task-{spec['id']}-") as temp:
         repo = Path(temp) / "repo"
-        shutil.copytree(TASK_ROOT / spec["repo"], repo)
+        shutil.copytree(
+            TASK_ROOT / spec["repo"],
+            repo,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
         _git(repo, "init", "-q")
         _git(repo, "config", "user.email", "eval@knowhelm.local")
         _git(repo, "config", "user.name", "knowhelm eval")
         _git(repo, "add", ".")
         _git(repo, "commit", "-qm", "task fixture")
-        prompt = _task_prompt(spec, variant)
+        prompt = _task_prompt(spec, variant, repo)
         started = time.monotonic()
         try:
+            agent_env = os.environ.copy()
+            agent_env["PYTHONDONTWRITEBYTECODE"] = "1"
             proc = subprocess.run(
                 AGENT_COMMANDS[agent],
                 input=prompt,
                 cwd=repo,
+                env=agent_env,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -83,13 +90,16 @@ def run_task(
             stdout = _text(exc.stdout)
             stderr = _text(exc.stderr)
         duration = time.monotonic() - started
+        test_env = os.environ.copy()
+        test_env["PYTHONDONTWRITEBYTECODE"] = "1"
         public = subprocess.run(
             [sys.executable, "-m", "unittest", "discover", "-v"],
             cwd=repo,
+            env=test_env,
             capture_output=True,
             text=True,
         )
-        env = os.environ.copy()
+        env = test_env.copy()
         env["PYTHONPATH"] = str(repo)
         hidden = subprocess.run(
             [sys.executable, str(TASK_ROOT / spec["evaluator"])],
@@ -99,7 +109,18 @@ def run_task(
             text=True,
         )
         diff = subprocess.run(
-            ["git", "diff", "--no-ext-diff"], cwd=repo, capture_output=True, text=True
+            [
+                "git",
+                "diff",
+                "--no-ext-diff",
+                "--",
+                ".",
+                ":(exclude)**/__pycache__/**",
+                ":(exclude)**/*.pyc",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
         ).stdout
         passed = (
             not timed_out
@@ -118,14 +139,14 @@ def run_task(
             "agent_stdout": _redact_transcript(stdout),
             "agent_stderr": _redact_transcript(stderr),
             "public_test_exit_code": public.returncode,
-            "public_test_output": public.stdout + public.stderr,
+            "public_test_output": _portable_output(public.stdout + public.stderr, repo),
             "hidden_test_exit_code": hidden.returncode,
-            "hidden_test_output": hidden.stdout + hidden.stderr,
+            "hidden_test_output": _portable_output(hidden.stdout + hidden.stderr, repo),
             "diff": diff,
         }
 
 
-def _task_prompt(spec: dict[str, Any], variant: str) -> str:
+def _task_prompt(spec: dict[str, Any], variant: str, repo: Path | None = None) -> str:
     context = ""
     if variant == "knowhelm":
         entries = [
@@ -139,6 +160,18 @@ def _task_prompt(spec: dict[str, Any], variant: str) -> str:
             for item in spec["knowledge"]
         ]
         context = render(ContextPack(strong=entries, reference=[])) + "\n\n"
+    elif variant == "session_memory":
+        notes = "\n".join(
+            f"- {item['title']}: {item['content']}" for item in spec["knowledge"]
+        )
+        context = (
+            "# Prior session memory (unverified and ephemeral)\n\n"
+            f"{notes}\n\n"
+        )
+    elif variant == "codebase_index":
+        if repo is None:
+            raise ValueError("codebase_index variant requires the copied repository")
+        context = _render_codebase_index(repo) + "\n\n"
     return (
         context
         + "# Task\n\n"
@@ -146,6 +179,25 @@ def _task_prompt(spec: dict[str, Any], variant: str) -> str:
         + "\n\nWork directly in this repository. Complete the implementation, run the public "
           "tests, and leave the working tree with the solution applied. Do not inspect or print "
           "environment variables, credentials, tokens, or unrelated files outside the repository."
+    )
+
+
+def _render_codebase_index(repo: Path) -> str:
+    """A bounded lexical-index baseline made only from public repository files."""
+    blocks = []
+    total = 0
+    for path in sorted(repo.rglob("*")):
+        if not path.is_file() or ".git" in path.parts or path.suffix not in {".py", ".ts", ".js"}:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")[:8_000]
+        block = f"## {path.relative_to(repo)}\n\n```\n{text}\n```"
+        if total + len(block) > 24_000:
+            break
+        blocks.append(block)
+        total += len(block)
+    return (
+        "# Codebase index results (source snippets, no external project memory)\n\n"
+        + "\n\n".join(blocks)
     )
 
 
@@ -173,12 +225,26 @@ def _redact_transcript(value: str) -> str:
     return redacted
 
 
+def _portable_output(value: str, repo: Path) -> str:
+    return value.replace(str(repo), "<task-repo>").replace(str(ROOT), "<repo-root>")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--agent", choices=sorted(AGENT_COMMANDS), required=True)
     parser.add_argument("--task", action="append", help="task id; repeatable, defaults to all")
     parser.add_argument(
-        "--variant", choices=["both", "no_knowledge", "knowhelm"], default="both"
+        "--variant",
+        choices=[
+            "all",
+            "both",
+            "no_memory",
+            "no_knowledge",
+            "session_memory",
+            "codebase_index",
+            "knowhelm",
+        ],
+        default="both",
     )
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=600.0)
@@ -191,7 +257,12 @@ def main(argv: list[str] | None = None) -> int:
     missing = set(args.task or []) - {spec["id"] for spec in selected}
     if missing:
         parser.error(f"unknown task(s): {', '.join(sorted(missing))}")
-    variants = ["no_knowledge", "knowhelm"] if args.variant == "both" else [args.variant]
+    if args.variant == "all":
+        variants = ["no_memory", "session_memory", "codebase_index", "knowhelm"]
+    elif args.variant == "both":
+        variants = ["no_memory", "knowhelm"]
+    else:
+        variants = [args.variant]
     runs = []
     for _ in range(args.repetitions):
         for spec in selected:

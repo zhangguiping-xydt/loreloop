@@ -1,0 +1,12 @@
+{
+  "participant_id": "pseudonym-001",
+  "study_round": 1,
+  "completed": false,
+  "time_to_first_success_seconds": null,
+  "wrong_turns": [],
+  "help_lookups": [],
+  "recovery_attempts": [],
+  "abandoned_step": null,
+  "trust_model_explanation": "",
+  "observer_notes": "Do not coach. Record behavior, not interpretations."
+}

@@ -21,6 +21,10 @@ class BrowserUnavailable(RuntimeError):
     pass
 
 
+class BrowserError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class Observation:
     url: str
@@ -69,9 +73,17 @@ class PlaywrightBrowser:
                 "playwright is not installed; run: pip install 'knowhelm[web]' "
                 "&& playwright install chromium"
             ) from exc
-        self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=not headed)
-        self._page = self._browser.new_page()
+        try:
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=not headed)
+            self._page = self._browser.new_page()
+        except Exception as exc:
+            if hasattr(self, "_pw"):
+                self._pw.stop()
+            raise BrowserUnavailable(
+                "cannot start Chromium; run `python -m playwright install chromium` "
+                f"and retry: {exc}"
+            ) from exc
         self._timeout_ms = timeout_ms
 
     @property
@@ -79,11 +91,18 @@ class PlaywrightBrowser:
         return self._page
 
     def observe(self, url: str) -> Observation:
-        response = self._page.goto(url, timeout=self._timeout_ms, wait_until="domcontentloaded")
-        if response is not None and response.status >= 400:
-            raise RuntimeError(f"page returned HTTP {response.status}: {response.url}")
-        self._settle()
-        return self.observe_current()
+        try:
+            response = self._page.goto(
+                url, timeout=self._timeout_ms, wait_until="domcontentloaded"
+            )
+            if response is not None and response.status >= 400:
+                raise BrowserError(f"page returned HTTP {response.status}: {response.url}")
+            self._settle()
+            return self.observe_current()
+        except BrowserError:
+            raise
+        except Exception as exc:
+            raise BrowserError(f"cannot observe {url}: {exc}") from exc
 
     def observe_current(self) -> Observation:
         title = self._page.title()

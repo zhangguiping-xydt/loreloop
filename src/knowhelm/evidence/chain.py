@@ -50,6 +50,10 @@ class FederatedTrustUnavailable(Exception):
     pass
 
 
+class KeyMaterialError(Exception):
+    pass
+
+
 class LegacyKeyError(Exception):
     """A pre-relocation key was found inside the project tree. Refuse to
     proceed rather than mint a new key: the old chain would then fail with
@@ -117,10 +121,10 @@ class EvidenceChain:
         chain._path = base / "evidence.jsonl"
         chain._key = key
         chain._head_path = key_path.with_suffix(".head")
-        records = chain._verify_records(chain._read())
-        if records and chain._head_path.exists() and chain._head_lags(records):
-            chain._commit_head(records[-1])
-        return records
+        # Federation means read-only literally: never create, heal, or advance
+        # another trust domain's head commitment. The owning project heals its
+        # own valid lagging head on its next local verification.
+        return chain._verify_records(chain._read())
 
     def append(self, event: str, payload: dict[str, Any]) -> EvidenceRecord:
         # Cross-process exclusive lock: read-then-append without it lets two
@@ -175,7 +179,7 @@ class EvidenceChain:
     def _head_lags(self, records: list[EvidenceRecord]) -> bool:
         if not self._head_path.exists():
             return True
-        head = json.loads(self._head_path.read_text(encoding="utf-8"))
+        head = self._read_head()
         return head["index"] < records[-1].index
 
     def _verify_records(self, records: list[EvidenceRecord]) -> list[EvidenceRecord]:
@@ -215,7 +219,7 @@ class EvidenceChain:
         it appears on the next append."""
         if not self._head_path.exists():
             return
-        head = json.loads(self._head_path.read_text(encoding="utf-8"))
+        head = self._read_head()
         index, chain_hash = head["index"], head["chain_hash"]
         if len(records) <= index:
             raise ChainVerificationError(
@@ -232,10 +236,44 @@ class EvidenceChain:
         if not self._path.exists():
             return []
         records = []
-        for line in self._path.read_text(encoding="utf-8").splitlines():
+        for line_no, line in enumerate(
+            self._path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
             if line.strip():
-                records.append(EvidenceRecord(**json.loads(line)))
+                try:
+                    data = json.loads(line)
+                    record = EvidenceRecord(**data)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    raise ChainVerificationError(
+                        line_no - 1, f"record is not valid evidence JSON: {exc}"
+                    ) from exc
+                if (
+                    not isinstance(record.index, int)
+                    or not isinstance(record.ts, str)
+                    or not isinstance(record.event, str)
+                    or not isinstance(record.payload, dict)
+                    or not isinstance(record.prev_hash, str)
+                    or not isinstance(record.chain_hash, str)
+                    or not isinstance(record.signature, str)
+                ):
+                    raise ChainVerificationError(line_no - 1, "record fields have invalid types")
+                records.append(record)
         return records
+
+    def _read_head(self) -> dict[str, Any]:
+        try:
+            head = json.loads(self._head_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ChainVerificationError(0, f"head commitment is unreadable: {exc}") from exc
+        if (
+            not isinstance(head, dict)
+            or not isinstance(head.get("index"), int)
+            or head["index"] < 0
+            or not isinstance(head.get("chain_hash"), str)
+            or not head["chain_hash"]
+        ):
+            raise ChainVerificationError(0, "head commitment has invalid fields")
+        return head
 
     def _sign(self, chain_hash: str) -> str:
         digest = hmac.new(self._key, chain_hash.encode(), hashlib.sha256).hexdigest()
@@ -262,7 +300,13 @@ def key_path_for(workdir: Path) -> Path:
 
 def _load_or_create_key(key_path: Path) -> bytes:
     if key_path.exists():
-        return key_path.read_bytes()
+        key = key_path.read_bytes()
+        if len(key) != 32:
+            raise KeyMaterialError(
+                f"evidence key {key_path} has {len(key)} bytes; expected exactly 32. "
+                "Restore the matching key backup or archive the old chain and start fresh."
+            )
+        return key
     key_path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(key_path.parent, 0o700)
     key = secrets.token_bytes(32)
@@ -270,7 +314,12 @@ def _load_or_create_key(key_path: Path) -> bytes:
         fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         # Two processes raced to create the key; the winner's key is the key.
-        return key_path.read_bytes()
+        key = key_path.read_bytes()
+        if len(key) != 32:
+            raise KeyMaterialError(
+                f"concurrently created evidence key {key_path} is invalid ({len(key)} bytes)"
+            )
+        return key
     with os.fdopen(fd, "wb") as fh:
         fh.write(key)
     return key

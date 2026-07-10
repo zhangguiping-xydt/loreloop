@@ -53,7 +53,7 @@ chain, whose signing key lives outside the project tree. Concretely:
 The referee stays outside the player's process: acceptance assertions are
 written and entered by a human, verdicts come from `knowhelm report` reading
 the evidence chain, and approve/reject/supersede are human acts. The
-companion skill (installed into Claude Code by `knowhelm init`) only makes
+companion skill (installed into Claude Code/Codex by `knowhelm init`) only makes
 the agent a better citizen — it never verifies, never renders verdicts,
 never writes knowledge.
 
@@ -69,14 +69,57 @@ user surface — no web dashboard, no server.
 - [Claude Code](https://code.claude.com) (`claude`) or Codex (`codex`) CLI on your PATH
 - Optional: Playwright for web exploration and browser-verified acceptance
 
-## Quick start
+## Install
 
-Install from source (no PyPI release yet):
+Use one of these two supported paths; do not run knowhelm directly from an
+uninstalled source tree.
+
+Source checkout (contributors and unreleased builds):
 
 ```bash
 git clone https://github.com/starry-knowhelm/starry-knowhelm
-pip install -e './starry-knowhelm[web]' && playwright install chromium
+cd starry-knowhelm
+python -m venv .venv
+# POSIX: source .venv/bin/activate
+# Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install -e '.[web]'
+python -m playwright install chromium
+knowhelm doctor
+```
 
+Published release (after the first PyPI release):
+
+```bash
+pipx install --include-deps 'knowhelm[web]'
+playwright install chromium
+knowhelm doctor
+```
+
+## Five-minute quick start
+
+The bundled legacy application is the shortest complete learning path. From a
+source checkout with one coding-agent CLI configured:
+
+```bash
+knowhelm demo --agent codex
+```
+
+It creates a disposable Git repository and visibly runs
+`init -> ingest -> run -> verify -> report -> harvest`. Use `--agent claude`
+if preferred. A credential-free plumbing mode used by CI is also available:
+
+```bash
+knowhelm demo --offline
+```
+
+Offline mode validates product plumbing, not model quality. Replay the checked-in
+terminal recording with `asciinema play docs/demo.cast`.
+
+## Use it in your project
+
+The full workflow is intentionally one CLI:
+
+```bash
 cd your-project
 knowhelm doctor                          # preflight Python/Git/agent/key/locking
 knowhelm init                            # set up .knowhelm/; offers to install the
@@ -94,6 +137,24 @@ knowhelm report                          # acceptance report backed by the evide
 knowhelm harvest <run-id>                # flow knowledge back from the accepted run
 knowhelm knowledge usage                 # injected count and accepted-run correlation
 ```
+
+If a step fails, the CLI prints exactly one `error`, its `reason`, and the next
+recovery action. See [`docs/troubleshooting.md`](docs/troubleshooting.md) for
+agent, browser, evidence-key, schema-upgrade, interrupted-run, and harvest help.
+
+## Architecture and trust boundary
+
+| Stage | What happens | Trust outcome |
+|---|---|---|
+| Reverse | Code and live behavior become atomic assertions with source spans/snapshots | LLM output is draft and unverified |
+| Apply | BM25 + bounded query expansion selects a small trust-ranked context pack | Approved/verified facts constrain; drafts are references |
+| Return | Browser/command evidence is chained, reported, then harvested | Only accepted, auditable outcomes mint verified knowledge |
+
+SQLite is the local projection; the out-of-tree HMAC key and evidence chain are
+the trust authority. Federation opens foreign SQLite databases read-only and
+imports nothing until the operator explicitly copies an entry as a local draft.
+The detailed design is in
+[`docs/design-and-implementation.md`](docs/design-and-implementation.md).
 
 Notes:
 - Retrieval for `run` is deterministic BM25 over ASCII terms and CJK bigrams,
@@ -173,10 +234,18 @@ Precision@K/Recall@K/MRR, and executable coding-task success. The recorded
 | Retrieval, frozen expansion | Hit@5 1.00, MRR 1.00, 6 relevant / 10 returned |
 | Codex coding tasks, no knowledge | 0/3 hidden contracts passed |
 | Codex coding tasks, knowhelm context | 3/3 hidden contracts passed |
+| Claude four-way tasks | no memory 0/3; code index 0/3; session memory 3/3; knowhelm 3/3 |
+| Claude multi-language reverse matrix | Precision 0.82, Recall 0.90 across Python, TypeScript, mixed fixtures |
+| Retrieval scale, 10k entries / 5 projects | median 417 ms, P95 659 ms; Recall@5 1.00, MRR 1.00 on synthetic scale fixture |
+| Evidence chain / no-change harvest, 10k records | median 238 ms / 800 ms on the recorded Linux host |
 
 These are regression baselines, not broad claims of model superiority. The
 fixtures are deliberately small and all scoring rules, recorded predictions,
-diff outcomes and limitations are published under `eval/`.
+diff outcomes and limitations are published under `eval/`. The 10k retrieval
+result is usable but not instant; larger corpora will need a persistent lexical
+index. No zero-context human completion rate is claimed yet—the protocol is
+published, and the report remains explicitly "awaiting real participants" until
+real sessions are recorded.
 
 ## License
 

@@ -89,6 +89,9 @@ class DelegateRunner:
         )
         try:
             output = self._agent.run(prompt)
+        except KeyboardInterrupt:
+            self._trace(trace_path, "delegation_interrupted", reason="operator cancelled")
+            raise
         except Exception as exc:
             self._trace(trace_path, "delegation_failed", error=str(exc))
             raise

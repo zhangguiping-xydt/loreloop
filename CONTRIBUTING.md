@@ -26,8 +26,10 @@ will be declined:
    silent except-blocks papering over a failure downstream. Find the
    upstream cause.
 2. **Never trust LLM output format.** Extraction and classification are
-   separate steps; model output is schema-validated JSON or the batch fails
-   (`ExtractionError`). No inline markers, no "the model will comply".
+   separate steps. Model output must pass JSON, source-path, line, symbol, and
+   verbatim-excerpt validation. One repair call may retry the same strict
+   contract; a second failure rejects the batch (`ExtractionError`). Validation
+   messages are untrusted data too. No inline markers, no "the model will comply".
 3. **Trust is two explicit axes.** Human curation (draft/approved/rejected)
    and machine verification (unverified/verified/contradicted). Nothing is
    born strong unless a human wrote it and a machine checked it against
