@@ -1,6 +1,6 @@
 # 多代码库锚点与跨项目联邦检索 — 设计文档
 
-> 状态:待实现。本文是实现的唯一依据,精度到文件与函数级。
+> 状态:已实现并纳入回归测试(2026-07-10)。本文记录当前设计契约、威胁边界与验收标准。
 > 前置阅读:`docs/design-and-implementation.md`(尤其 §3 知识模型、§5 链背书、§9 harvest、§14 安全语义)。
 
 ---
@@ -359,9 +359,9 @@ constraints. Adoption into this project is an operator act
 
 ---
 
-## ⑤ 实现顺序与验收标准
+## ⑤ 实现顺序与回归验收标准
 
-分四个提交,每个提交自带测试、`pytest` 全绿、`ruff check` 干净:
+功能按以下四层落地;对应测试继续作为回归门槛,要求 `pytest` 全绿、`ruff check` 干净:
 
 1. **repos + locator**:`knowledge/repos.py`(含解析纯函数)、`reverse_code` 带
    `repo_name`、`_locator_key` 改造、`repo add/list/remove` CLI。

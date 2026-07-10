@@ -21,6 +21,11 @@ sensitive.
 Use `--headed` for a login handover; LoreLoop never types passwords. Check that
 the URL is reachable from the same account running LoreLoop. Exploration,
 redirects, robots, sitemap discovery, and action scripts remain same-origin.
+After signing in, leave the browser on the authenticated application page and
+press Enter in the terminal; LoreLoop observes that current page and continues
+from its links. The CLI reports whether the handover resumed and records
+`human_handover_completed`, `handover_abandoned`, or `handover_observe_failed`
+in the exploration trace.
 Write-like script steps are refused unless the reviewed command includes
 `--allow-writes`; password fields and destructive controls remain blocked.
 

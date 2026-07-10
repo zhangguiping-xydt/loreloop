@@ -1,6 +1,6 @@
 # LoreLoop 设计与实现说明
 
-> 截至 2026-07-09。本文描述 LoreLoop 当前的产品边界、核心模型、安全语义和实现结构。
+> 截至 2026-07-10。本文描述 LoreLoop 当前的产品边界、核心模型、安全语义和实现结构。
 
 ---
 
@@ -8,7 +8,8 @@
 
 **LoreLoop = 知识治理 + 编码代理委托 + 证据验收。**
 
-它是 starry-opc 的开源最小闭环版本,包名为 `loreloop`,目标不是替代 Claude Code/Codex 写代码,而是在它们前后补上两层能力:
+LoreLoop 是独立、可开源的本地知识闭环,包名和 CLI 均为 `loreloop`。它不替代
+Claude Code/Codex 写代码,而是在代理执行前后补上三段能力:
 
 1. **前置知识治理**:把代码、网页、人工输入等来源转成可溯源、可策展、可验证的结构化知识。
 2. **中间委托执行**:把任务交给 `claude -p` 或 `codex exec`,同时注入按信任分级的上下文包。
@@ -18,8 +19,8 @@
 
 ### 非目标
 
-- 不提供 Web 驾驶舱。
-- 不做 PyPI 发布流程。
+- 不提供托管式 Web 驾驶舱、账号系统或云端同步。
+- 不直接调用模型 API;复用操作者已经配置好的 Claude Code/Codex CLI。
 - 不实现 MCP 接入。
 - 不自动 approve/reject/supersede 知识。
 - 不自动登录或自动化凭据输入。
@@ -53,25 +54,33 @@ loreloop/
 │   ├── cli.py                  # CLI 命令入口
 │   ├── agents.py               # Claude/Codex subprocess 适配
 │   ├── companion.py            # Claude Code companion skill 安装
+│   ├── paths.py                # .loreloop/、树外 key 与 registry 路径
 │   ├── knowledge/
 │   │   ├── model.py            # Entry/Source/Trust/Link 模型
 │   │   ├── store.py            # SQLite 存储
 │   │   ├── endorsement.py      # 证据链背书与信任重放
 │   │   ├── code_reverse.py     # 代码反构
+│   │   ├── repos.py            # 多代码库声明、locator 与 drift
 │   │   └── harvest.py          # 验收后知识回流
 │   ├── delegate/
 │   │   ├── context_pack.py     # 上下文选择与渲染
+│   │   ├── expand.py           # 有界查询扩展
 │   │   └── runner.py           # 委托执行与 trace 记录
 │   ├── evidence/
 │   │   ├── chain.py            # HMAC 证据链
 │   │   └── artifacts.py        # 内容寻址观察工件
 │   ├── report/
 │   │   └── acceptance.py       # 验收评估与报告渲染
+│   ├── federation/
+│   │   ├── registry.py         # 用户级信任域注册表
+│   │   └── reader.py           # 外域只读验证、检索与导入
 │   └── webexplore/
+│       ├── actions.py          # 受限交互脚本 DSL
 │       ├── browser.py          # Browser/Observation 抽象
 │       ├── explorer.py         # Web 探索循环
 │       ├── web_reverse.py      # Web 反构
 │       └── verify.py           # 浏览器验证
+├── eval/                       # 可复现质量、检索、任务与规模评估
 └── tests/                      # 单元、CLI、验收、安全语义测试
 ```
 
@@ -582,18 +591,21 @@ harvest 会输出需要人工关注的集合:
 
 ## 11. Web 探索
 
-`Explorer` 采用 observe-plan-act 循环:
+`Explorer` 采用有界、可追踪的同源探索循环:
 
-1. 观察当前页面。
-2. 记录页面摘要和可操作元素。
-3. 选择下一步导航或停止。
-4. 保存探索 trace。
+1. 从入口 URL、代码静态路由、robots/sitemap 和已观察链接生成同源种子。
+2. 逐页导航,等待 network-idle 并滚动触发懒加载。
+3. 记录页面文本、表单、标题、按钮、导航和语义链接。
+4. 把新发现的同源链接加入有界队列。
+5. 为开始、跳过、登录交接、页面观察和结束写入 JSONL trace。
 
 约束:
 
 - 同源限制。
 - 最大页面数限制。
 - 遇到登录墙时,headless 模式跳过;headed 模式把真实浏览器窗口交给人登录。
+- 人工登录完成后读取浏览器当前页面,而不是重新打开旧登录 URL;随后继续探索该页面链接。
+- 入口 URL 本身是登录页时同样触发交接。交接成功、放弃和观察失败都有独立 trace 事件。
 - LoreLoop 不保存凭据,不自动提交登录表单。
 
 ---
@@ -730,8 +742,8 @@ ingest → run → check/verify → report → harvest
 
 后续可扩展方向:
 
-1. 把公开基准扩展到 Python、TypeScript 与混合语言真实仓库。
-2. 增加 100/1,000/10,000 条知识规模下的延迟与 token 成本曲线。
+1. 把固定夹具扩展为更多语言和真实公开仓库,避免把小样本回归分数外推成普遍结论。
+2. 为超过 10k 条目的语料引入持久化词法索引,同时保留可解释排序和离线复现。
 3. 扩展更多确定性证据适配器,例如 JUnit/SARIF/CI attestation 导入。
 4. 更友好的冲突 review 与 supersede 交互。
-5. 零背景用户测试与多平台首次成功路径。
+5. 按已发布协议完成真实零背景参与者测试,持续打磨首次成功路径。

@@ -177,7 +177,9 @@ Notes:
   nav text and forms, and expands seeds from same-origin links, sitemap/robots
   and static route strings found in code. HTTP 4xx/5xx pages are skipped during
   exploration. When it hits a login form it hands the browser to you with
-  `--headed`; without `--headed` login-walled pages are skipped.
+  `--headed`; after you finish signing in and press Enter, LoreLoop observes the
+  browser's current authenticated page and continues from its links. Without
+  `--headed`, login-walled pages are skipped.
 - `verify` prefers deterministic assertions — `contains:`, `absent:`,
   `title-contains:` prefixes are checked directly against the page, no model
   involved. Free-form expectations fall back to an LLM judge that treats page

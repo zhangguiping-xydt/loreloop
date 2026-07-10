@@ -148,6 +148,81 @@ def test_explore_login_wall_handover_resolves(tmp_path):
     result = Explorer(browser, tmp_path).explore("http://app.local")
     assert len(browser.handovers) == 1
     assert any(p.title == "Admin" for p in result.pages)
+    assert result.login_resumed == ["http://app.local/admin"]
+
+
+def test_explore_hands_over_when_start_url_is_login_page(tmp_path):
+    login = Observation(
+        url="http://app.local/login",
+        title="Sign in",
+        text="Please sign in.",
+        forms=["input:text:user,input:password:pass"],
+    )
+    resolved = Observation(
+        url="http://app.local/dashboard",
+        title="Dashboard",
+        text="Signed in.",
+    )
+    browser = FakeBrowser(
+        {"http://app.local/login": login},
+        handover_resolves={"http://app.local/login": resolved},
+    )
+
+    result = Explorer(browser, tmp_path, discover_seeds=False).explore(
+        "http://app.local/login"
+    )
+
+    assert len(browser.handovers) == 1
+    assert [page.title for page in result.pages] == ["Dashboard"]
+    assert result.login_resumed == ["http://app.local/dashboard"]
+
+
+def test_explore_observes_current_page_after_login_handover(tmp_path):
+    dashboard = Observation(
+        url="http://app.local/dashboard",
+        title="Dashboard",
+        text="Signed in.",
+        links=["http://app.local/settings"],
+    )
+
+    class BrowserWithCurrentPage(FakeBrowser):
+        def __init__(self):
+            super().__init__(
+                {
+                    "http://app.local": Observation(
+                        url="http://app.local",
+                        title="Home",
+                        text="Public home.",
+                        links=["http://app.local/admin"],
+                    ),
+                    "http://app.local/admin": ADMIN_LOGIN,
+                    "http://app.local/settings": Observation(
+                        url="http://app.local/settings",
+                        title="Settings",
+                        text="Private settings.",
+                    ),
+                }
+            )
+            self.current = ADMIN_LOGIN
+
+        def observe(self, url):
+            observation = super().observe(url)
+            self.current = observation
+            return observation
+
+        def wait_for_user(self, message):
+            self.handovers.append(message)
+            self.current = dashboard
+
+        def observe_current(self):
+            return self.current
+
+    browser = BrowserWithCurrentPage()
+
+    result = Explorer(browser, tmp_path, discover_seeds=False).explore("http://app.local")
+
+    assert [page.title for page in result.pages] == ["Home", "Dashboard", "Settings"]
+    assert result.login_resumed == ["http://app.local/dashboard"]
 
 
 def test_explore_login_wall_skip_mode(tmp_path):

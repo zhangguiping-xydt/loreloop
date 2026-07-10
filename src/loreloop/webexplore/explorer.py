@@ -30,6 +30,7 @@ class ExplorationResult:
     trace_path: Path
     skipped: list[str] = field(default_factory=list)
     login_walls: list[str] = field(default_factory=list)
+    login_resumed: list[str] = field(default_factory=list)
 
 
 class Explorer:
@@ -58,6 +59,7 @@ class Explorer:
         pages: list[Observation] = []
         skipped: list[str] = []
         login_walls: list[str] = []
+        login_resumed: list[str] = []
 
         self._trace(
             trace_path,
@@ -93,8 +95,10 @@ class Explorer:
                 )
                 continue
 
-            if obs.looks_like_login and obs.url != start_url:
-                obs = self._handle_login_wall(trace_path, obs, skipped, login_walls)
+            if obs.looks_like_login:
+                obs = self._handle_login_wall(
+                    trace_path, obs, skipped, login_walls, login_resumed
+                )
                 if obs is None:
                     continue
                 if not same_origin(obs.url, start_url):
@@ -123,11 +127,20 @@ class Explorer:
 
         self._trace(trace_path, "exploration_finished", pages=len(pages), skipped=len(skipped))
         return ExplorationResult(
-            pages=pages, trace_path=trace_path, skipped=skipped, login_walls=login_walls
+            pages=pages,
+            trace_path=trace_path,
+            skipped=skipped,
+            login_walls=login_walls,
+            login_resumed=login_resumed,
         )
 
     def _handle_login_wall(
-        self, trace_path: Path, obs: Observation, skipped: list[str], login_walls: list[str]
+        self,
+        trace_path: Path,
+        obs: Observation,
+        skipped: list[str],
+        login_walls: list[str],
+        login_resumed: list[str],
     ) -> Observation | None:
         login_walls.append(obs.url)
         if self._on_login_wall == "handover" and hasattr(self._browser, "wait_for_user"):
@@ -135,11 +148,33 @@ class Explorer:
             self._browser.wait_for_user(
                 f"login required at {obs.url} — please sign in in the browser window"
             )
-            retry = self._browser.observe(obs.url)
+            observe_current = getattr(self._browser, "observe_current", None)
+            try:
+                retry = (
+                    observe_current()
+                    if callable(observe_current)
+                    else self._browser.observe(obs.url)
+                )
+            except Exception as exc:
+                self._trace(
+                    trace_path,
+                    "handover_observe_failed",
+                    url=obs.url,
+                    error=str(exc)[:300],
+                )
+                skipped.append(obs.url)
+                return None
             if retry.looks_like_login:
                 self._trace(trace_path, "handover_abandoned", url=obs.url)
                 skipped.append(obs.url)
                 return None
+            self._trace(
+                trace_path,
+                "human_handover_completed",
+                login_url=obs.url,
+                url=retry.url,
+            )
+            login_resumed.append(retry.url)
             return retry
         self._trace(trace_path, "skipped_login_wall", url=obs.url)
         skipped.append(obs.url)

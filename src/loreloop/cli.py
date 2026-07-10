@@ -301,6 +301,19 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             if result.login_walls and not args.headed:
                 print(f"skipped {len(result.login_walls)} login-walled page(s); "
                       f"re-run with --headed to sign in yourself", file=sys.stderr)
+            if result.login_resumed:
+                print(
+                    f"resumed {len(result.login_resumed)} login handover(s) and continued "
+                    "from the authenticated page",
+                    file=sys.stderr,
+                )
+            abandoned = len(result.login_walls) - len(result.login_resumed)
+            if args.headed and abandoned:
+                print(
+                    f"could not resume {abandoned} login handover(s); inspect "
+                    f"{result.trace_path}",
+                    file=sys.stderr,
+                )
             entries = reverse_web(_agent(args.agent), result.pages)
         finally:
             browser.close()

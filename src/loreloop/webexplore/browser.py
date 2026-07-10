@@ -169,6 +169,7 @@ class PlaywrightBrowser:
     def wait_for_user(self, message: str) -> None:
         print(f"\n[LoreLoop] {message}")
         input("[LoreLoop] press Enter when done... ")
+        self._settle()
 
     def close(self) -> None:
         self._browser.close()
