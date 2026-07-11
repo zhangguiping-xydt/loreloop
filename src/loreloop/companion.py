@@ -1,10 +1,9 @@
 """Companion skill installation for host coding agents.
 
-The skill makes the host agent a better citizen in a LoreLoop-governed
-project. It teaches — it never verifies, never judges, never mints. The
-four invariants (human-written assertions, on-chain verdicts, human-driven
-harvest, read-only knowledge access for agents) are restated inside the
-skill text itself so the agent carries them into every session.
+The skill keeps Codex or Claude Code as the user's entry point while LoreLoop
+provides knowledge and evidence underneath. It may execute operator-authorized
+CLI actions in the current session, but it never treats the agent's own
+judgment as authorization to complete, harvest, or curate.
 """
 
 from __future__ import annotations
@@ -22,9 +21,25 @@ description: Collaborate with LoreLoop, the knowledge-governance and evidence-ba
 
 # Working in a LoreLoop-governed project
 
-LoreLoop injects curated project knowledge into your prompt before a task
-and verifies the result against a real browser afterwards. Evidence, not
-your own account, decides acceptance. Your part:
+Keep the user in this Claude Code or Codex session. LoreLoop is the local
+knowledge and evidence engine behind the host agent, not a replacement chat
+entry point. Evidence, not your own account, decides acceptance.
+
+## Start work in the current session
+
+When the operator asks to use LoreLoop for a development task:
+
+1. Run `loreloop begin "<task>"`. This prepares and signs the task boundary,
+   retrieves relevant knowledge, and prints a context pack without launching
+   a nested coding agent. If `loreloop` is not on PATH, use the project's
+   `.venv/bin/loreloop` or `uv run loreloop` installation.
+2. Keep the printed run id for later evidence commands.
+3. Read the printed context pack using the rules below, then perform the task
+   in this current host session.
+
+Do not use `loreloop run` for normal interactive work: it launches a separate
+coding-agent process. Use it only when the operator explicitly requests an
+automated or headless delegation.
 
 ## Reading the injected context pack
 
@@ -36,6 +51,9 @@ your own account, decides acceptance. Your part:
 - An entry marked `[source changed since this was captured]` has a drifted
   anchor: the file it was extracted from has changed since. Treat it as a
   question, not an answer.
+- A strong web entry reflects its last verification, not a live browser check
+  for this run. If the task materially relies on it, propose re-verification
+  to the operator.
 
 ## Looking things up
 
@@ -44,30 +62,36 @@ You may run read-only knowledge commands at any time:
     loreloop knowledge list
     loreloop knowledge list --stale
 
-## Acceptance: draft, never certify
+## Finish and prove — explicit operator authorization
 
-- When you finish a change, propose acceptance assertions for the operator
-  to approve. Prefer deterministic ones — they are checked against the
-  page without any model involved:
+- When implementation is ready, summarize the concrete changes and propose
+  acceptance assertions. Ask the operator to confirm completion before
+  running `loreloop complete <run-id> --confirm`. Never infer that approval
+  from silence or from your own confidence.
+- Propose acceptance assertions for the operator to approve. Prefer
+  deterministic ones — they are checked without trusting your self-report:
 
       contains:<text that must appear>
       absent:<text that must not appear>
       title-contains:<text>
 
-- You may re-run checks the operator already approved for fast feedback
-  while iterating (`loreloop verify <run-id> <url> "<approved assertion>"`).
-- The verdict comes from the operator running `loreloop report`, which
-  audits the tamper-evident evidence chain. Never present your own summary
-  or your own verify runs as the acceptance verdict.
-- End your work by reminding the operator to run their verification.
+- Run `loreloop check` or `loreloop verify` only for assertions the operator
+  has approved. You may re-run an already approved check while iterating.
+- Run `loreloop report <run-id>` when the operator asks for the verdict. The
+  report audits the tamper-evident evidence chain; never present your own
+  summary or a raw test run as LoreLoop's acceptance verdict.
+- `loreloop harvest <run-id>` and knowledge curation remain operator acts.
+  You may execute them inside this host session only after the operator gives
+  a specific, explicit instruction for that run or entry. Never decide to
+  harvest, approve, reject, reopen, supersede, or unsupersede on your own.
 
 ## Never
 
-- Never run `loreloop harvest` — minting knowledge is a human act.
-- Never run `loreloop knowledge approve`, `reject`, or `supersede` —
-  curation is a human act.
+- Never call `loreloop complete --confirm`, harvest, or curation based only on
+  your own judgment; the confirmation must come from the operator.
 - Never create, edit, or delete anything under `.loreloop/`.
 - Never invent, weaken, or reword an operator's acceptance assertion.
+- Never work around an operator-boundary refusal or signing-key restriction.
 """
 
 

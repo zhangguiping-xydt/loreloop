@@ -36,7 +36,9 @@ server violates HTTP semantics.
 ## Provider or data-residency concern
 
 LoreLoop stores state locally but invokes the configured Claude Code or Codex
-CLI for extraction, expansion, delegation, and free-form judging. Those tools
+CLI for extraction, optional expansion, headless delegation, and free-form judging. `begin`
+itself is deterministic and stays in the host-agent session; the host agent and
+any other model-backed action still operate under that provider's terms. Those tools
 may send source snippets or page observations to an external provider. Review
 the provider/account policy before ingestion, prefer deterministic assertions,
 and use `run --no-expand` when query expansion is not needed.
@@ -57,16 +59,21 @@ database transaction. To downgrade, stop all LoreLoop processes, archive the
 new database, restore the matching backup, and use the older binary. Never copy
 individual SQLite tables between versions.
 
-## A run was interrupted or the agent failed
+## A run was interrupted, abandoned, or the agent failed
 
 The trace ends in `delegation_interrupted` or `delegation_failed`; neither state
 can be accepted because no chain-backed `delegation_completed` event exists.
 Fix the reported agent issue and start a new run. Do not edit or reuse the old
-run id.
+run id. A current-session `begin` intentionally has only a signed
+`delegation_prepared` event until the operator confirms
+`loreloop complete <run-id> --confirm`; an abandoned preparation cannot be
+accepted and needs no cleanup.
 
 ## Report or harvest is refused
 
-Use the exact run id printed by `loreloop run`. `loreloop report <run-id>` shows
+Use the exact run id printed by `loreloop begin` or `loreloop run`. For a
+current-session run, confirm `loreloop complete <run-id> --confirm` before
+recording acceptance checks. `loreloop report <run-id>` shows
 missing, failed, or broken-artifact checks. Harvest additionally requires every
 source repository captured by the run to have committed source changes; commit
 them first so returned knowledge can anchor to a real Git commit.

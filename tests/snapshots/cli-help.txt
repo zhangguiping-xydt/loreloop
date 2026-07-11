@@ -1,13 +1,13 @@
 $ loreloop --help
 usage: loreloop [-h] [--agent {claude,codex}]
-                {doctor,init,demo,ingest,repo,project,verify,run,check,report,harvest,knowledge}
+                {doctor,init,demo,ingest,repo,project,verify,begin,complete,run,check,report,harvest,knowledge}
                 ...
 
 Reverse-engineer project knowledge, apply it to coding-agent work, and return
 accepted outcomes to a tamper-evident knowledge loop.
 
 positional arguments:
-  {doctor,init,demo,ingest,repo,project,verify,run,check,report,harvest,knowledge}
+  {doctor,init,demo,ingest,repo,project,verify,begin,complete,run,check,report,harvest,knowledge}
     doctor              check prerequisites and writable trust state
     init                set up LoreLoop in this project
     demo                run the bundled five-minute knowledge loop
@@ -15,7 +15,11 @@ positional arguments:
     repo                manage repositories in this trust domain
     project             manage the federation project registry
     verify              verify an expectation against a live page
-    run                 delegate a task with injected knowledge
+    begin               prepare knowledge for the coding-agent session already
+                        in use
+    complete            mark a prepared current-session implementation
+                        complete
+    run                 delegate a task in a new coding-agent process
     check               record an acceptance check for a run
     report              render the acceptance report for a run
     harvest             flow knowledge back from an accepted run
@@ -176,6 +180,33 @@ options:
                         search/filter controls
   --agent {claude,codex}
                         override the coding-agent CLI for this action
+
+$ loreloop begin --help
+usage: loreloop begin [-h] [--expand TERMS] [--with-related]
+                      [--related-limit RELATED_LIMIT]
+                      task
+
+positional arguments:
+  task                  development task for the current agent session
+
+options:
+  -h, --help            show this help message and exit
+  --expand TERMS        caller-supplied retrieval terms; never included in the
+                        context pack
+  --with-related        include relevant references from registered related
+                        projects
+  --related-limit RELATED_LIMIT
+                        maximum related-project references
+
+$ loreloop complete --help
+usage: loreloop complete [-h] [--confirm] run_id
+
+positional arguments:
+  run_id
+
+options:
+  -h, --help  show this help message and exit
+  --confirm   confirm that the operator authorized signing session completion
 
 $ loreloop run --help
 usage: loreloop run [-h] [--no-expand] [--with-related]

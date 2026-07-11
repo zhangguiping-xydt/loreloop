@@ -22,6 +22,10 @@
   scans, Dependabot, community templates, governance/support/release policies,
   and a Trusted Publishing workflow with SPDX SBOM and provenance attestation.
 - `knowledge reopen` for an explicit rejected → draft review path.
+- Current-session `begin`/`complete` lifecycle for using LoreLoop inside an
+  existing Codex or Claude Code conversation without launching a nested agent;
+  preparation metadata is signed before work and completion requires explicit
+  operator confirmation.
 
 ### Changed
 
@@ -41,6 +45,9 @@
   the offline demo and tests exercise both without invoking a real model.
 - Command evidence binds repository HEAD/working-tree state, redacts output,
   and the latest result for an identical check supersedes older attempts.
+- Companion skills now keep Codex/Claude Code as the user-facing entry point,
+  use session-native preparation by default, and mediate completion, harvest,
+  and curation only after specific operator authorization.
 
 ### Security
 

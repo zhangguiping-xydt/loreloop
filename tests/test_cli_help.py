@@ -19,6 +19,8 @@ PUBLIC_HELP_PATHS = [
     ("project", "list"),
     ("project", "remove"),
     ("verify",),
+    ("begin",),
+    ("complete",),
     ("run",),
     ("check",),
     ("report",),

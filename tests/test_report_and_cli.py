@@ -231,6 +231,98 @@ def test_cli_check_and_report_flow(workdir, capsys):
     assert "login page loads" in out
 
 
+def test_cli_begin_keeps_work_in_current_session_and_complete_signs_it(
+    workdir, monkeypatch, capsys
+):
+    import loreloop.cli as cli
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
+
+    entry = Entry(
+        title="Upload endpoint contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.MANUAL, locator="manual:upload"),
+    )
+    db = workdir / ".loreloop/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+
+    monkeypatch.setattr(
+        cli, "_agent", lambda _name: pytest.fail("begin must not launch a delegated agent")
+    )
+    monkeypatch.setattr(
+        cli,
+        "_inference_agent",
+        lambda _name: pytest.fail("begin must not launch query-expansion inference"),
+    )
+
+    assert main(["begin", "fix the upload endpoint"]) == 0
+    captured = capsys.readouterr()
+    run_id = next(
+        line.removeprefix("Run ID: ")
+        for line in captured.out.splitlines()
+        if line.startswith("Run ID: ")
+    )
+    assert "Project knowledge (provided by LoreLoop)" in captured.out
+    assert "fix the upload endpoint" in captured.out
+    assert "current session prepared" in captured.err
+
+    chain = EvidenceChain.for_workdir(workdir)
+    records = chain.verify()
+    prepared = next(record for record in records if record.event == "delegation_prepared")
+    assert prepared.payload["run_id"] == run_id
+    assert prepared.payload["context_entries"] == [entry.id]
+    assert not any(record.event == "delegation_completed" for record in records)
+
+    assert main(["complete", run_id]) == 2
+    assert "operator confirmation required" in capsys.readouterr().err
+
+    assert main(["complete", run_id, "--confirm"]) == 0
+    out = capsys.readouterr().out
+    assert "completed current-session run" in out
+    records = chain.verify()
+    completed = next(record for record in records if record.event == "delegation_completed")
+    assert completed.payload["task"] == "fix the upload endpoint"
+    assert completed.payload["prepared_chain_hash"] == prepared.chain_hash
+
+    record_check(chain, run_id, "upload endpoint tests pass", passed=True)
+    assert main(["report", run_id]) == 0
+    assert "Verdict: ACCEPTED" in capsys.readouterr().out
+    monkeypatch.setattr(cli, "_inference_agent", lambda _name: object())
+    assert main(["harvest", run_id]) == 0
+    assert any(record.event == "knowledge_harvested" for record in chain.verify())
+
+
+def test_cli_complete_uses_signed_preparation_not_agent_writable_trace(workdir, capsys):
+    assert main(["begin", "real operator task"]) == 0
+    run_id = next(
+        line.removeprefix("Run ID: ")
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("Run ID: ")
+    )
+    trace = workdir / ".loreloop/runs" / f"{run_id}.jsonl"
+    events = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    events[0]["task"] = "forged agent task"
+    events[0]["context_entries"] = ["forged-entry"]
+    trace.write_text("\n".join(json.dumps(event) for event in events) + "\n")
+
+    assert main(["complete", run_id, "--confirm"]) == 0
+    capsys.readouterr()
+
+    completed = next(
+        record
+        for record in EvidenceChain.for_workdir(workdir).verify()
+        if record.event == "delegation_completed"
+    )
+    assert completed.payload["task"] == "real operator task"
+    assert completed.payload["context_entries"] == []
+
+    assert main(["complete", run_id, "--confirm"]) == 1
+    assert "run already complete" in capsys.readouterr().err
+
+
 def test_command_check_records_reauditable_deterministic_evidence(workdir):
     from loreloop.evidence.artifacts import ArtifactStore
 
@@ -2007,7 +2099,9 @@ def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys)
     skill = workdir / ".claude/skills/loreloop/SKILL.md"
     assert skill.exists()
     text = skill.read_text()
-    assert "Never run `loreloop harvest`" in text
+    assert 'Run `loreloop begin "<task>"`' in text
+    assert "Do not use `loreloop run` for normal interactive work" in text
+    assert "specific, explicit instruction" in text
     assert "name: loreloop" in text
 
     # idempotent: second run must not duplicate the gitignore line
@@ -2041,7 +2135,9 @@ def test_cli_init_installs_codex_companion_skill(workdir, monkeypatch, capsys):
 
     skill = workdir / ".agents/skills/loreloop/SKILL.md"
     assert skill.exists()
-    assert "Never run `loreloop harvest`" in skill.read_text(encoding="utf-8")
+    text = skill.read_text(encoding="utf-8")
+    assert 'Run `loreloop begin "<task>"`' in text
+    assert "Keep the user in this Claude Code or Codex session" in text
     assert "installed companion skill for Codex" in capsys.readouterr().out
 
 

@@ -300,9 +300,10 @@ loreloop knowledge import <project-id> <entry-id-prefix>
 不缓存、每次现算:registry 项目数是个位数到几十,读 N 个 repos.json 的成本可忽略,
 而缓存会腐烂。`tags` 仅作为 `search --tag` 过滤条件,不参与关联度。
 
-### 3.2 `run --with-related`
+### 3.2 `begin/run --with-related`
 
 ```
+loreloop begin <task> [--with-related] [--related-limit N=5]
 loreloop run <task> [--with-related] [--related-limit N=5]
 ```
 
@@ -336,6 +337,7 @@ constraints. Adoption into this project is an operator act
 ### 3.4 Trace 与链记录
 
 - run trace `delegation_started` 增加 `related_entries: ["<pid>#<eid>", ...]`;
+- 当前会话 `delegation_prepared` 同样先签名这组 related entries;
 - `delegation_completed` payload 同样携带 `related_entries`——审计"这次委托看过谁家的
   知识"必须上链;
 - **harvest 完全忽略 related_entries**:它们不是本域条目,不可铸造、不可背书。加一条

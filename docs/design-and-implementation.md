@@ -15,7 +15,9 @@ Claude Code/Codex 写代码,而是在代理执行前后补上三段能力:
 2. **中间委托执行**:把任务交给 `claude -p` 或 `codex exec`,同时注入按信任分级的上下文包。
 3. **后置证据验收**:用链上记录、浏览器观察工件和人工/机器检查来判定 run 是否可接受,再把验收通过的事实回流为知识。
 
-产品形态是一个本地 CLI,没有 Web 服务、账号系统或远端状态。依赖按需引入:浏览器能力当前通过可选 `playwright` extra 提供。
+产品内核是本地 CLI,用户入口优先复用已经打开的 Claude Code/Codex 会话。Companion
+skill 在当前会话中调用 CLI,而不是要求用户切换到 LoreLoop 聊天入口。没有 Web 服务、
+账号系统或远端状态。依赖按需引入:浏览器能力当前通过可选 `playwright` extra 提供。
 
 ### 非目标
 
@@ -29,7 +31,7 @@ Claude Code/Codex 写代码,而是在代理执行前后补上三段能力:
 
 1. 正式验收断言由人写、人录;代理最多起草建议。
 2. 裁决以证据链为准,不采信代理对自己工作的自述。
-3. harvest 只通过人驱动的 CLI 触发。
+3. completion、harvest 和策展只在操作者明确授权后通过 CLI 触发;代理不能自行决定。
 4. 编码代理对知识库只读;approve/reject/supersede 是操作者行为。
 
 ### 设计原则
@@ -287,7 +289,7 @@ entry_digest = sha256(canonical_json(
 
 ## 6. 委托执行与上下文包
 
-委托流程由 `DelegateRunner` 和 `context_pack` 负责。
+当前会话准备与独立进程委托都由 `DelegateRunner` 和 `context_pack` 负责。
 
 ### 6.1 选择策略
 
@@ -299,6 +301,8 @@ entry_digest = sha256(canonical_json(
   (`delegate/expand.py`),结构化输出按 prompt/model/task 缓存;扩展词只进评分器,不进委托 prompt;扩展词记入 run trace
   (`query_expansion` 字段)可审计;扩展失败非致命,自动退化为纯 BM25;
   `--no-expand` 完全跳过。
+- `begin` 不调用另一个模型,默认只使用任务原文。当前 host agent 可通过 `--expand`
+  提供额外检索词;这些词同样只进评分器、不进 context pack。
 - 英文停用词在分词时剔除;原始任务词权重高于扩展词。
 - strong/链背书、kind 与完整 provenance 只做小幅质量加权,不能替代词项相关性。
 - 相对分数下限、sharp-gap 与原始词覆盖率共同决定变长结果集,避免任意
@@ -330,16 +334,28 @@ entry_digest = sha256(canonical_json(
 在上述分层前,`assert_trust_projection` 先检查链权威与 SQLite 投影的完整性。这样
 “把已背书行改成恶意 reference”不能绕过 digest 检查；无法解释的缺失/改写不会进入 prompt。
 
-### 6.4 Run trace 与 completion
+### 6.4 当前会话、Run trace 与 completion
 
 `.loreloop/runs/*.jsonl` 记录委托 trace,包含 started/finished/failed 等事件,用于展示和排查。验收不信任 trace 本身。
 
-成功委托完成后,CLI 会把 `delegation_completed` 写入证据链,包含:
+交互式入口使用两阶段生命周期:
+
+1. `loreloop begin <task>` 选择并渲染知识,创建 trace,把 task/context/base commits/
+   repository roots/ingestion policies 先写为签名 `delegation_prepared`,然后把 context pack
+   返回当前 Claude Code/Codex 会话;不会启动嵌套代理。
+2. 实现完成后,只有操作者明确确认,companion skill 才调用
+   `loreloop complete <run_id> --confirm`。complete 从签名 preparation 复制权威元数据,
+   不读取 agent 可写 trace 中的 task/context/base 值。
+
+独立进程自动化继续使用 `loreloop run`;代理成功返回后直接写
+`delegation_completed`。两条路径的 completion 都包含:
 
 - `run_id`
 - `task`
 - `context_entries`
-- `base_commit`
+- `base_commits`
+- `repository_roots`
+- `ingestion_policies`
 
 验收和 harvest 都以该链记录为权威锚点。
 
@@ -645,16 +661,17 @@ harvest 会输出需要人工关注的集合:
 
 `loreloop init` 可安装 Claude Code 和 Codex companion skill。
 
-skill 的作用是让编码代理理解 LoreLoop 的协作规则:
+skill 的作用是让编码代理把 LoreLoop 作为当前会话背后的本地引擎:
 
+- 当前会话优先调用 `loreloop begin`,不使用 `loreloop run` 启动嵌套代理。
 - 阅读和尊重 context pack。
 - 把 established facts 当作约束。
 - 把 references 当作需核对的信息。
 - 完成工作后给操作者起草可验证的验收断言。
-- 不主动运行 harvest/approve/reject/supersede。
+- complete、验收、harvest 和策展都要求操作者针对具体 run/entry 明确授权。
 
-两个 companion skill 使用同一份只读协作契约;都只能读取知识、建议验收断言,
-不能替操作者执行 verify/report/harvest/策展。
+两个 companion skill 使用同一份协作契约。它们可以在同一 host 会话里代操作者执行
+CLI,但不能把自身判断当作授权,不能自行签 completion、harvest 或策展。
 
 ---
 
@@ -667,6 +684,8 @@ loreloop doctor
 loreloop init [--skill|--no-skill]
 loreloop ingest --from code <path> [--agent claude|codex]
 loreloop ingest --from web <url> [--headed] [--max-pages N]
+loreloop begin <task> [--expand <terms>]
+loreloop complete <run_id> --confirm
 loreloop run <task> [--agent claude|codex]
 loreloop check <run_id> <check> (--pass|--fail) [--detail <text>]
 loreloop check <run_id> <check> --command <argv-string> [--timeout <seconds>]

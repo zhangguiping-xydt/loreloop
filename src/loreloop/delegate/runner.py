@@ -33,6 +33,20 @@ def _repository_snapshot(workdir: Path) -> tuple[dict[str, str], dict[str, str]]
 
 
 @dataclass(frozen=True)
+class RunPreparation:
+    run_id: str
+    prompt: str
+    trace_path: Path
+    pack: ContextPack
+    base_commits: dict[str, str]
+    repository_roots: dict[str, str]
+
+    @property
+    def base_commit(self) -> str | None:
+        return self.base_commits.get(".")
+
+
+@dataclass(frozen=True)
 class DelegationResult:
     run_id: str
     output: str
@@ -47,13 +61,13 @@ class DelegationResult:
 
 
 class DelegateRunner:
-    def __init__(self, agent: AgentRunner, workdir: Path) -> None:
+    def __init__(self, agent: AgentRunner | None, workdir: Path) -> None:
         self._agent = agent
         self._workdir = workdir
         ensure_state_root(workdir)
         self._runs_dir = ensure_private_directory(state_path(workdir, "runs"))
 
-    def run(
+    def prepare(
         self,
         task: str,
         entries: list[Entry],
@@ -62,7 +76,8 @@ class DelegateRunner:
         expansion: str = "",
         related: list[ForeignEntry] | None = None,
         ingestion_policies: dict[str, IngestionPolicy] | None = None,
-    ) -> DelegationResult:
+        mode: str = "delegated",
+    ) -> RunPreparation:
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
         trace_path = self._runs_dir / f"{run_id}.jsonl"
         base_commits, repository_roots = _repository_snapshot(self._workdir)
@@ -99,23 +114,62 @@ class DelegateRunner:
                 for name in sorted(base_commits)
             },
             related_entries=pack.related_ids,
+            mode=mode,
         )
-        try:
-            output = self._agent.run(prompt)
-        except KeyboardInterrupt:
-            self._trace(trace_path, "delegation_interrupted", reason="operator cancelled")
-            raise
-        except Exception as exc:
-            self._trace(trace_path, "delegation_failed", error=str(exc))
-            raise
-        self._trace(trace_path, "delegation_finished", output_chars=len(output))
-        return DelegationResult(
+        return RunPreparation(
             run_id=run_id,
-            output=output,
+            prompt=prompt,
             trace_path=trace_path,
             pack=pack,
             base_commits=base_commits,
             repository_roots=repository_roots,
+        )
+
+    def run(
+        self,
+        task: str,
+        entries: list[Entry],
+        unendorsed_ids: set[str] | frozenset[str] = frozenset(),
+        endorsed_ids: set[str] | frozenset[str] = frozenset(),
+        expansion: str = "",
+        related: list[ForeignEntry] | None = None,
+        ingestion_policies: dict[str, IngestionPolicy] | None = None,
+    ) -> DelegationResult:
+        if self._agent is None:
+            raise RuntimeError("delegated run requires an agent runner")
+        prepared = self.prepare(
+            task,
+            entries,
+            unendorsed_ids=unendorsed_ids,
+            endorsed_ids=endorsed_ids,
+            expansion=expansion,
+            related=related,
+            ingestion_policies=ingestion_policies,
+        )
+        try:
+            output = self._agent.run(prepared.prompt)
+        except KeyboardInterrupt:
+            self._trace(prepared.trace_path, "delegation_interrupted", reason="operator cancelled")
+            raise
+        except Exception as exc:
+            self._trace(prepared.trace_path, "delegation_failed", error=str(exc))
+            raise
+        self.finish(prepared.trace_path, output_chars=len(output), mode="delegated")
+        return DelegationResult(
+            run_id=prepared.run_id,
+            output=output,
+            trace_path=prepared.trace_path,
+            pack=prepared.pack,
+            base_commits=prepared.base_commits,
+            repository_roots=prepared.repository_roots,
+        )
+
+    def finish(self, trace_path: Path, *, output_chars: int = 0, mode: str) -> None:
+        self._trace(
+            trace_path,
+            "delegation_finished",
+            output_chars=output_chars,
+            mode=mode,
         )
 
     def _trace(self, path: Path, event: str, **fields) -> None:

@@ -27,10 +27,13 @@ LoreLoop is a local-first CLI that closes the loop with a gate at both ends:
    exists: the codebase (implementation view) and the running web app
    (behavior view). Day one on a legacy project, you get assertion-level
    facts with structured provenance — not chunks, not summaries.
-2. **Run** — delegate a task to `claude -p` or `codex exec` with a context
-   pack of relevant, trust-ranked knowledge injected up front. Established
-   facts are marked as constraints; unverified references are marked as
-   "verify before relying". LoreLoop never writes code itself.
+2. **Apply** — keep working in the Codex or Claude Code session you already
+   use. The companion skill calls `loreloop begin`, which signs the task
+   boundary and returns a relevant, trust-ranked context pack without
+   launching a nested agent. `loreloop run` remains available for headless
+   delegation to `claude -p` or `codex exec`. Established facts are marked as
+   constraints; unverified references are marked as "verify before relying".
+   LoreLoop never writes code itself.
 3. **Report & harvest (trust gate)** — verify the result in a real browser,
    record every check on a tamper-evident (HMAC-chained) evidence trail, and
    only then let knowledge flow back. Human-written, browser-verified
@@ -131,7 +134,32 @@ terminal recording with `asciinema play docs/demo.cast`.
 
 ## Use it in your project
 
-The full workflow is intentionally one CLI:
+For interactive work, keep Codex or Claude Code as the user-facing entry point:
+
+```bash
+loreloop init --skill
+```
+
+Then invoke `$loreloop` in Codex, `/loreloop` in Claude Code, or simply ask:
+`Use LoreLoop to add rate limiting to the upload endpoint.` The companion skill
+prepares the signed run and injects knowledge into that same conversation.
+Under the hood, the current-session lifecycle is:
+
+```bash
+loreloop begin "add rate limiting to the upload endpoint"
+# Codex or Claude Code implements the task in the current session.
+loreloop complete <run-id> --confirm       # only after explicit operator confirmation
+loreloop check <run-id> "tests pass" --command "pytest -q"
+loreloop report <run-id>
+loreloop harvest <run-id>                  # only after explicit operator instruction
+```
+
+`begin` is deterministic by default and does not invoke another model. A host
+agent may supply additional retrieval-only terms with `--expand`; those terms
+widen retrieval but never enter the context pack. `loreloop run` is the
+separate-process path for automation and unattended delegation.
+
+The complete CLI surface remains available for operators and automation:
 
 ```bash
 cd your-project
@@ -144,7 +172,7 @@ loreloop knowledge list --status draft --channel code --limit 50
 loreloop knowledge show <entry-id>       # full assertion, trust, source span and relations
 loreloop knowledge review --stale        # detailed stale/draft curation queue
 loreloop knowledge export --output loreloop-knowledge.md  # export knowledge as Markdown
-loreloop run "add rate limiting to the upload endpoint"   # delegate with injected knowledge
+loreloop run "add rate limiting to the upload endpoint"   # optional headless delegation
 loreloop verify <run-id> http://localhost:3000/upload \
     "uploading a file larger than the limit shows an error"  # browser-verified check
 loreloop verify <run-id> http://localhost:3000 \
@@ -221,9 +249,10 @@ Notes:
   Markdown, Dockerfile) are included by default; use `--include`, `--exclude`,
   `--max-file-bytes`, or `--strict` to make coverage policy explicit. The latest
   per-repository policy is signed onto the evidence chain and reused by
-  dirty-tree checks and drift detection. Every delegated run pins the complete
-  repository-policy map in its signed completion record, so later ingestion
-  cannot retroactively alter that run's harvest scope.
+  dirty-tree checks and drift detection. Every current-session or delegated
+  run pins the complete repository-policy map in signed preparation/completion
+  records, so later ingestion cannot retroactively alter that run's harvest
+  scope.
 - Status filters and review queues use chain-replayed effective curation, never
   the agent-writable SQLite cache. `knowledge show` displays both effective and
   stored curation when they differ. Curation commands also validate transitions

@@ -161,6 +161,23 @@ def test_delegate_injects_pack_and_traces(tmp_path):
     assert result.run_id.startswith("run-")
 
 
+def test_prepare_builds_current_session_prompt_without_invoking_agent(tmp_path):
+    agent = FakeAgent()
+
+    prepared = DelegateRunner(agent, tmp_path).prepare(
+        "fix the upload endpoint",
+        [UPLOAD_FACT, UPLOAD_HINT],
+        mode="session",
+    )
+
+    assert agent.prompts == []
+    assert "Established facts" in prepared.prompt
+    assert prepared.prompt.endswith("# Task\n\nfix the upload endpoint\n")
+    events = [json.loads(line) for line in prepared.trace_path.read_text().splitlines()]
+    assert [event["event"] for event in events] == ["delegation_started"]
+    assert events[0]["mode"] == "session"
+
+
 def test_delegate_without_matches_sends_bare_task(tmp_path):
     agent = FakeAgent()
     DelegateRunner(agent, tmp_path).run("completely unrelated words", [UPLOAD_FACT])

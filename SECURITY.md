@@ -35,8 +35,11 @@ boundary, LoreLoop defends against:
   re-hashed on load and cross-checked against the url/snapshot pin recorded
   on the chain; an artifact-bearing check without that pin is itself an
   integrity failure). Run traces under `.loreloop/runs/` are display
-  material only: acceptance and harvest key off the chain-endorsed
-  `delegation_completed` record (run id, task, context, base commit), so a
+  material only: current-session `begin` first signs a
+  `delegation_prepared` boundary, and `complete` copies its metadata into the
+  chain-endorsed `delegation_completed` record (run id, task, context, base
+  commits and repository identities). Headless `run` writes the same
+  completion metadata directly. Therefore a
   forged `delegation_finished` line or an edited `base_commit` in the trace
   cannot sway a verdict. Checks count only when they postdate that
   completion record on the chain — a check pre-planted while the run was
@@ -49,7 +52,8 @@ boundary, LoreLoop defends against:
   store sits inside the agent-writable tree, so its trust columns are not
   taken at face value: every approval, verification and supersession is also
   endorsed on the evidence chain, and each trust-raising event binds a
-  digest of the entry's content and source. Before injection, `loreloop run`
+  digest of the entry's content and source. Before injection, `loreloop begin`
+  and `loreloop run`
   recomputes that digest from the current DB row. A DB-only strong bit is
   demoted, but deletion or an unexplained rewrite of a chain-backed row fails
   closed: delegation stops instead of exposing attacker-controlled content as
@@ -109,6 +113,7 @@ These statements are observable behavior, not aspirational documentation:
 | Browser scope cannot escape origin silently | Redirect targets, robots, sitemaps, discovered links, network requests, action steps, and final observations are checked | `tests/test_webexplore.py`, `tests/test_smoke_playwright.py` |
 | Scripted writes require operator opt-in | Network interception blocks same-origin non-GET requests without `--allow-writes`; password/destructive controls stay blocked | `tests/test_webexplore.py`, `tests/test_smoke_playwright.py` |
 | Agent children do not receive normal signing capability | Key/registry variables are removed; the child marker makes evidence append fail; inference/delegation commands use explicit permission profiles | `tests/test_delegate.py`, `tests/test_evidence_chain.py` |
+| Current-session metadata cannot be rewritten through the trace | `begin` signs preparation metadata before work; `complete` copies only that signed payload and requires explicit confirmation | `tests/test_report_and_cli.py` |
 | Interrupted/failed work is not acceptance | Trace records an explicit failed/interrupted terminal event; only one chain-backed completion can be accepted | `tests/test_delegate.py`, `tests/test_report_and_cli.py` |
 | Chain-first harvest survives a DB crash | Signed harvest events carry complete minted rows; a retry restores only missing digest-matching rows without appending a second event | `tests/test_harvest.py` |
 | Schema upgrades preserve rollback material | Ordered transaction, pre-upgrade SQLite backup, refusal of newer versions | `tests/test_knowledge_store.py` |
@@ -124,6 +129,13 @@ shared with other accounts.
 
 ## Known limitations (deliberate trade-offs)
 
+- **Current-session authorization is cooperative.** The companion skill must
+  obtain explicit operator approval before passing `--confirm`, harvesting, or
+  curating, but the CLI cannot cryptographically distinguish a command typed
+  by the operator from one launched by the already-trusted host Codex/Claude
+  process under the same OS account. The flag records an authorization
+  boundary for honest-agent workflows; it is not protection against a
+  malicious host-agent binary, which is already outside the threat model.
 - **Local storage is not local inference.** Claude Code and Codex may send
   source snippets, page observations, and prompts to their configured model
   provider. Provider retention, residency, account policy, and transport are
@@ -135,13 +147,14 @@ shared with other accounts.
   against disposable or staging systems and review scripts before using
   `--allow-writes`.
 
-- **Injection trusts the last verification.** `loreloop run` does not
+- **Injection trusts the last verification.** `loreloop begin` and `loreloop run` do not
   re-open a browser to re-check strong web entries before injecting them;
   live pages may have drifted since verification. Re-verification is an
   explicit, human-initiated act (`loreloop knowledge verify`) because a
   silent per-run browser sweep would be slow, break offline use, and hit
   live systems as a side effect. `run` prints a reminder when strong web
-  entries are injected.
+  entries are injected (`run` prints the reminder directly; the companion
+  skill carries the same re-verification rule for current-session work).
 - **Page snapshot hashes observe a bounded window.** The snapshot hash
   covers title, visible text (truncated at the observation limit) and form
   structure — not links or the full DOM. Including navigation/ad noise

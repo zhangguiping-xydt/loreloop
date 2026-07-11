@@ -59,9 +59,10 @@ class RunEvaluation:
 
     @property
     def completed(self) -> EvidenceRecord | None:
-        """The FIRST completion record for the run. cmd_run appends exactly
-        one; a later record with the same run_id cannot rewrite the task or
-        base commit the first one pinned."""
+        """The FIRST completion record for the run. ``run`` or confirmed
+        current-session ``complete`` appends exactly one; a later record with
+        the same run_id cannot rewrite the task or base commit the first one
+        pinned."""
         return self.completions[0] if self.completions else None
 
     @property

@@ -140,7 +140,7 @@ def _run_trace(workdir: Path, run_id: str) -> Path | None:
         raise CLIError(
             "invalid run id",
             f"{run_id!r} contains unsupported characters or is too long",
-            "use the exact run id printed by `loreloop run` or `loreloop report`",
+            "use the exact run id printed by `loreloop begin`, `loreloop run`, or `loreloop report`",
         )
     return state_path(workdir, "runs", f"{run_id}.jsonl")
 
@@ -653,32 +653,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     workdir = _workdir()
     chain = EvidenceChain.for_workdir(workdir)
     records = chain.verify()
-    with _store(workdir) as store:
-        entries = store.list()
-    # Retirement by chain replay, not DB state: DB-only rejected flags or
-    # supersedes links live in the agent-writable tree and cannot suppress a
-    # chain-backed fact. Conversely, a chain-rejected or chain-superseded entry
-    # stays retired even if SQLite is edited back to active.
-    retired = chain_superseded_ids(records) | chain_rejected_ids(records)
-    assert_trust_projection(entries, records, retired_ids=retired)
-    entries = [e for e in entries if e.id not in retired]
-    # The DB sits in the agent-writable tree; its strong bits count only when
-    # the chain endorses them FOR THE CURRENT CONTENT. Anything strong-in-DB
-    # but unendorsed (no event, or content changed since endorsement) is
-    # injected as reference and flagged for the operator.
-    endorsed = chain_endorsed_strong_ids(entries, records)
-    unendorsed = unendorsed_strong_ids(entries, records)
-    if unendorsed:
-        print(
-            f"[LoreLoop] WARNING: {len(unendorsed)} entr{'y' if len(unendorsed) == 1 else 'ies'} "
-            f"claim strong trust in the store without evidence-chain endorsement "
-            f"of their current content — injected as reference only. "
-            f"Inspect with `loreloop knowledge list`:",
-            file=sys.stderr,
-        )
-        for e in entries:
-            if e.id in unendorsed:
-                print(f"    {e.id[:8]}  {e.title}", file=sys.stderr)
+    entries, endorsed, unendorsed = _active_delegation_entries(workdir, records)
     agent = _agent(args.agent)
     expansion = ""
     if (entries or args.with_related) and not args.no_expand:
@@ -711,29 +686,20 @@ def cmd_run(args: argparse.Namespace) -> int:
         related=related,
         ingestion_policies=current_policies,
     )
-    chain_only = [e for e in result.pack.strong if e.id in endorsed and not e.is_strong_evidence()]
-    if chain_only:
-        print(
-            f"[LoreLoop] note: {len(chain_only)} entr"
-            f"{'y is' if len(chain_only) == 1 else 'ies are'} chain-endorsed "
-            f"although the store cache says reference — injected as established fact.",
-            file=sys.stderr,
-        )
+    _print_context_pack_notes(result.pack, endorsed)
     # This chain record is the acceptance authority for the run: report and
     # harvest key off it, not off the agent-writable trace file.
     chain.append(
         "delegation_completed",
-        {
-            "run_id": result.run_id,
-            "task": args.task,
-            "context_entries": result.pack.entry_ids,
-            "base_commits": result.base_commits,
-            "repository_roots": result.repository_roots,
-            "related_entries": result.pack.related_ids,
-            "ingestion_policies": ingestion_policies_payload(
-                current_policies, set(result.base_commits)
-            ),
-        },
+        _completion_payload(
+            result.run_id,
+            args.task,
+            result.pack.entry_ids,
+            result.base_commits,
+            result.repository_roots,
+            result.pack.related_ids,
+            current_policies,
+        ),
     )
     print(result.output)
     print(
@@ -759,6 +725,209 @@ def cmd_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     return 0
+
+
+def _active_delegation_entries(workdir: Path, records) -> tuple[list[Entry], set[str], set[str]]:
+    with _store(workdir) as store:
+        entries = store.list()
+    # Retirement by chain replay, not DB state: DB-only rejected flags or
+    # supersedes links live in the agent-writable tree and cannot suppress a
+    # chain-backed fact. Conversely, a chain-rejected or chain-superseded entry
+    # stays retired even if SQLite is edited back to active.
+    retired = chain_superseded_ids(records) | chain_rejected_ids(records)
+    assert_trust_projection(entries, records, retired_ids=retired)
+    entries = [e for e in entries if e.id not in retired]
+    # The DB sits in the agent-writable tree; its strong bits count only when
+    # the chain endorses them FOR THE CURRENT CONTENT. Anything strong-in-DB
+    # but unendorsed (no event, or content changed since endorsement) is
+    # injected as reference and flagged for the operator.
+    endorsed = chain_endorsed_strong_ids(entries, records)
+    unendorsed = unendorsed_strong_ids(entries, records)
+    if unendorsed:
+        print(
+            f"[LoreLoop] WARNING: {len(unendorsed)} entr{'y' if len(unendorsed) == 1 else 'ies'} "
+            f"claim strong trust in the store without evidence-chain endorsement "
+            f"of their current content — injected as reference only. "
+            f"Inspect with `loreloop knowledge list`:",
+            file=sys.stderr,
+        )
+        for e in entries:
+            if e.id in unendorsed:
+                print(f"    {e.id[:8]}  {e.title}", file=sys.stderr)
+    return entries, endorsed, unendorsed
+
+
+def _print_context_pack_notes(pack, endorsed: set[str]) -> None:
+    chain_only = [e for e in pack.strong if e.id in endorsed and not e.is_strong_evidence()]
+    if chain_only:
+        print(
+            f"[LoreLoop] note: {len(chain_only)} entr"
+            f"{'y is' if len(chain_only) == 1 else 'ies are'} chain-endorsed "
+            f"although the store cache says reference — injected as established fact.",
+            file=sys.stderr,
+        )
+
+
+def _completion_payload(
+    run_id: str,
+    task: str,
+    context_entries: list[str],
+    base_commits: dict[str, str],
+    repository_roots: dict[str, str],
+    related_entries: list[str],
+    ingestion_policies: dict[str, IngestionPolicy],
+) -> dict:
+    return {
+        "run_id": run_id,
+        "task": task,
+        "context_entries": context_entries,
+        "base_commits": base_commits,
+        "repository_roots": repository_roots,
+        "related_entries": related_entries,
+        "ingestion_policies": ingestion_policies_payload(ingestion_policies, set(base_commits)),
+    }
+
+
+def cmd_begin(args: argparse.Namespace) -> int:
+    """Prepare a signed run for the coding-agent session already in use."""
+    workdir = _workdir()
+    chain = EvidenceChain.for_workdir(workdir)
+    records = chain.verify()
+    entries, endorsed, unendorsed = _active_delegation_entries(workdir, records)
+    related = (
+        _select_related_entries(workdir, args.task, args.expand, args.related_limit)
+        if args.with_related
+        else []
+    )
+    current_policies = chain_ingestion_policies(records)
+    prepared = DelegateRunner(None, workdir).prepare(
+        args.task,
+        entries,
+        unendorsed_ids=unendorsed,
+        endorsed_ids=endorsed,
+        expansion=args.expand,
+        related=related,
+        ingestion_policies=current_policies,
+        mode="session",
+    )
+    payload = _completion_payload(
+        prepared.run_id,
+        args.task,
+        prepared.pack.entry_ids,
+        prepared.base_commits,
+        prepared.repository_roots,
+        prepared.pack.related_ids,
+        current_policies,
+    )
+    payload["mode"] = "session"
+    chain.append("delegation_prepared", payload)
+    _print_context_pack_notes(prepared.pack, endorsed)
+    print("# LoreLoop current-session run")
+    print()
+    print(f"Run ID: {prepared.run_id}")
+    print()
+    print(prepared.prompt)
+    print(
+        f"[LoreLoop] current session prepared with {len(prepared.pack.entry_ids)} entries. "
+        f"After implementation, ask the operator before running "
+        f"`loreloop complete {prepared.run_id} --confirm`.",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def cmd_complete(args: argparse.Namespace) -> int:
+    """End a prepared current-session run without trusting its writable trace."""
+    if not args.confirm:
+        raise CLIError(
+            "operator confirmation required",
+            "current-session completion signs the task boundary into the evidence chain",
+            f"ask the operator to confirm completion, then run "
+            f"`loreloop complete {args.run_id} --confirm`",
+        )
+    workdir = _workdir()
+    trace = _run_trace(workdir, args.run_id)
+    if not trace.exists():
+        raise CLIError(
+            "run trace not found",
+            f"no trace found for {args.run_id}",
+            "copy the exact id printed by `loreloop begin`, then retry completion",
+        )
+    # Validate the display trace, but never use its task/context/base values as
+    # completion authority: the coding agent can write everything in-tree.
+    load_run(trace)
+    chain = EvidenceChain.for_workdir(workdir)
+    records = chain.verify()
+    preparations = [
+        record
+        for record in records
+        if record.event == "delegation_prepared" and record.payload.get("run_id") == args.run_id
+    ]
+    if len(preparations) != 1:
+        raise CLIError(
+            "prepared session not found" if not preparations else "ambiguous prepared session",
+            f"expected exactly one signed preparation for {args.run_id}; found {len(preparations)}",
+            "start a fresh current-session run with `loreloop begin <task>`",
+        )
+    completions = [
+        record
+        for record in records
+        if record.event == "delegation_completed" and record.payload.get("run_id") == args.run_id
+    ]
+    if completions:
+        raise CLIError(
+            "run already complete",
+            f"{args.run_id} already has a signed completion record",
+            f"record acceptance evidence, then run `loreloop report {args.run_id}`",
+            exit_code=1,
+        )
+    prepared = preparations[0]
+    payload = dict(prepared.payload)
+    _validate_session_preparation(payload, args.run_id)
+    payload["prepared_chain_hash"] = prepared.chain_hash
+    DelegateRunner(None, workdir).finish(trace, mode="session")
+    chain.append("delegation_completed", payload)
+    print(f"completed current-session run {args.run_id}")
+    print(f"  injected knowledge entries: {len(payload.get('context_entries', []))}")
+    print(
+        f"Next: record evidence with `loreloop check {args.run_id} ...` or "
+        f"`loreloop verify {args.run_id} ...`, then run `loreloop report {args.run_id}`"
+    )
+    return 0
+
+
+def _validate_session_preparation(payload: dict, run_id: str) -> None:
+    context = payload.get("context_entries")
+    base_commits = payload.get("base_commits")
+    roots = payload.get("repository_roots")
+    related = payload.get("related_entries")
+    policies = payload.get("ingestion_policies")
+    valid = (
+        payload.get("run_id") == run_id
+        and payload.get("mode") == "session"
+        and isinstance(payload.get("task"), str)
+        and bool(payload["task"].strip())
+        and isinstance(context, list)
+        and all(isinstance(value, str) for value in context)
+        and isinstance(base_commits, dict)
+        and all(
+            isinstance(name, str) and isinstance(commit, str) and bool(commit)
+            for name, commit in base_commits.items()
+        )
+        and isinstance(roots, dict)
+        and set(roots) == set(base_commits)
+        and all(isinstance(value, str) and bool(value) for value in roots.values())
+        and isinstance(related, list)
+        and all(isinstance(value, str) for value in related)
+        and isinstance(policies, dict)
+        and set(policies) == set(base_commits)
+    )
+    if not valid:
+        raise CLIError(
+            "invalid prepared session",
+            f"the signed preparation metadata for {run_id} is incomplete or malformed",
+            "start a fresh current-session run with `loreloop begin <task>`",
+        )
 
 
 def _select_related_entries(
@@ -852,7 +1021,8 @@ def cmd_report(args: argparse.Namespace) -> int:
             raise CLIError(
                 "run trace not found",
                 f"no trace found for {args.run_id}",
-                "copy the exact id printed by `loreloop run`, or omit RUN_ID to use the latest run",
+                "copy the exact id printed by `loreloop begin` or `loreloop run`, "
+                "or omit RUN_ID to use the latest run",
             )
     else:
         traces = sorted(runs_dir.glob("run-*.jsonl")) if runs_dir.exists() else []
@@ -860,7 +1030,8 @@ def cmd_report(args: argparse.Namespace) -> int:
             raise CLIError(
                 "no runs found",
                 "this project has no delegation trace to report",
-                "run `loreloop run <task>` first",
+                "run `loreloop begin <task>` in the current agent session, or "
+                "`loreloop run <task>` for headless delegation",
             )
         trace = traces[-1]
     from .evidence.artifacts import ArtifactStore
@@ -888,7 +1059,7 @@ def cmd_harvest(args: argparse.Namespace) -> int:
         raise CLIError(
             "run trace not found",
             f"no trace found for {args.run_id}",
-            "copy the exact id printed by `loreloop run`, then retry harvest",
+            "copy the exact id printed by `loreloop begin` or `loreloop run`, then retry harvest",
         )
     run = load_run(trace)
     chain = EvidenceChain.for_workdir(workdir)
@@ -1856,7 +2027,38 @@ def build_parser() -> argparse.ArgumentParser:
     _add_agent_option(p_verify)
     p_verify.set_defaults(func=cmd_verify)
 
-    p_run = sub.add_parser("run", help="delegate a task with injected knowledge")
+    p_begin = sub.add_parser(
+        "begin", help="prepare knowledge for the coding-agent session already in use"
+    )
+    p_begin.add_argument("task", help="development task for the current agent session")
+    p_begin.add_argument(
+        "--expand",
+        default="",
+        metavar="TERMS",
+        help="caller-supplied retrieval terms; never included in the context pack",
+    )
+    p_begin.add_argument(
+        "--with-related",
+        action="store_true",
+        help="include relevant references from registered related projects",
+    )
+    p_begin.add_argument(
+        "--related-limit", type=int, default=5, help="maximum related-project references"
+    )
+    p_begin.set_defaults(func=cmd_begin)
+
+    p_complete = sub.add_parser(
+        "complete", help="mark a prepared current-session implementation complete"
+    )
+    p_complete.add_argument("run_id")
+    p_complete.add_argument(
+        "--confirm",
+        action="store_true",
+        help="confirm that the operator authorized signing session completion",
+    )
+    p_complete.set_defaults(func=cmd_complete)
+
+    p_run = sub.add_parser("run", help="delegate a task in a new coding-agent process")
     p_run.add_argument("task", help="development task to delegate")
     p_run.add_argument(
         "--no-expand",
@@ -2052,9 +2254,11 @@ def main(argv: list[str] | None = None) -> int:
             "init": "run `loreloop doctor`, fix each FAIL check, then retry initialization",
             "demo": "fix the reported prerequisite, then rerun `loreloop demo --help`",
             "ingest": "check the source path/URL and agent setup, then retry ingestion",
+            "begin": "fix the reported trust-state issue, then retry `loreloop begin <task>`",
+            "complete": "use the run id printed by `loreloop begin` and confirm explicitly",
             "run": "run `loreloop doctor`, resolve the reported agent or trust-state issue, then retry",
             "verify": "check Playwright, the URL, and the expectation, then retry verification",
-            "report": "use a run id printed by `loreloop run`, then retry the report",
+            "report": "use a run id printed by `loreloop begin` or `loreloop run`, then retry",
             "harvest": "inspect `loreloop report <run-id>` and resolve the reported blocker",
             "repo": "run `loreloop repo --help` and correct the repository declaration",
             "project": "run `loreloop project --help` and correct the registry operation",
