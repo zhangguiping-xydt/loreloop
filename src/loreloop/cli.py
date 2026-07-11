@@ -35,6 +35,9 @@ from .knowledge.endorsement import (
     chain_supersession_links,
     chain_superseded_ids,
     curate,
+    entry_digest,
+    entry_from_payload,
+    entry_payload,
     record_reingested,
     unendorsed_strong_ids,
 )
@@ -702,6 +705,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "task": args.task,
             "context_entries": result.pack.entry_ids,
             "base_commits": result.base_commits,
+            "repository_roots": result.repository_roots,
             "related_entries": result.pack.related_ids,
             "ingestion_policies": ingestion_policies_payload(
                 current_policies, set(result.base_commits)
@@ -853,7 +857,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 def cmd_harvest(args: argparse.Namespace) -> int:
     from .evidence.artifacts import ArtifactStore
-    from .knowledge.harvest import HarvestError, harvest_run
+    from .knowledge.harvest import HarvestAlreadyCompleted, HarvestError, harvest_run
 
     workdir = _workdir()
     trace = _run_trace(workdir, args.run_id)
@@ -871,6 +875,13 @@ def cmd_harvest(args: argparse.Namespace) -> int:
             result = harvest_run(
                 run, chain, store, _inference_agent(args.agent), workdir, artifacts=artifacts
             )
+        except HarvestAlreadyCompleted as exc:
+            raise CLIError(
+                "harvest already complete",
+                str(exc),
+                "no acceptance work is required; review the current knowledge entries instead",
+                exit_code=1,
+            ) from exc
         except HarvestError as exc:
             raise CLIError(
                 "harvest refused",
@@ -1149,7 +1160,6 @@ def _import_entry(args: argparse.Namespace, store: KnowledgeStore) -> int:
 
 
 def _curate(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
-    target = _resolve_entry(store, args.entry_id)
     from .knowledge.store import InvalidTransition
 
     new = {
@@ -1158,6 +1168,12 @@ def _curate(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> i
         "reopen": Curation.DRAFT,
     }[args.action]
     chain = EvidenceChain.for_workdir(workdir)
+    records = chain.verify()
+    target = (
+        _resolve_or_restore_rejected_entry(store, records, args.entry_id)
+        if args.action == "reopen"
+        else _resolve_entry(store, args.entry_id)
+    )
     try:
         entry = curate(store, chain, target.id, new, datetime.now(timezone.utc))
     except InvalidTransition as exc:
@@ -1531,7 +1547,17 @@ def _supersede(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -
             pending.extend(graph.get(current, ()))
     # Supersession silences an entry at injection time — a trust-affecting
     # act, so it is endorsed on the chain like curation. Chain first.
-    chain.append(SUPERSEDE_EVENT, {"new_id": new.id, "old_id": old.id})
+    chain.append(
+        SUPERSEDE_EVENT,
+        {
+            "new_id": new.id,
+            "old_id": old.id,
+            "new_entry_digest": entry_digest(new),
+            "new_entry": entry_payload(new),
+            "old_entry_digest": entry_digest(old),
+            "old_entry": entry_payload(old),
+        },
+    )
     store.add_link(Link(from_id=new.id, to_id=old.id, link_type=LinkType.SUPERSEDES))
     print(f"superseded: {old.title}  ({old.id[:8]})")
     print(f"        by: {new.title}  ({new.id[:8]})")
@@ -1542,20 +1568,37 @@ def _unsupersede(args: argparse.Namespace, workdir: Path, store: KnowledgeStore)
     from .knowledge.model import LinkType
 
     new = _resolve_entry(store, args.new_entry_id)
-    old = _resolve_entry(store, args.old_entry_id)
+    chain = EvidenceChain.for_workdir(workdir)
+    records = chain.verify()
+    active = chain_supersession_links(records)
+    stored_old = [entry for entry in store.list() if entry.id.startswith(args.old_entry_id)]
+    if stored_old:
+        old = _resolve_entry(store, args.old_entry_id)
+        old_id = old.id
+    else:
+        old_ids = {
+            old_id
+            for new_id, old_id in active
+            if new_id == new.id and old_id.startswith(args.old_entry_id)
+        }
+        if len(old_ids) != 1:
+            _raise_entry_resolution_error(args.old_entry_id, len(old_ids))
+        old_id = next(iter(old_ids))
+        old = None
     if not args.yes:
         raise CLIError(
             "supersession recovery requires confirmation",
-            f"this restores {old.id[:8]} to active knowledge",
+            f"this restores {old_id[:8]} to active knowledge",
             "review both entries, then repeat the command with `--yes`",
         )
-    chain = EvidenceChain.for_workdir(workdir)
-    if (new.id, old.id) not in chain_supersession_links(chain.verify()):
+    if (new.id, old_id) not in active:
         raise CLIError(
             "supersession relationship not found",
             "the specified active relationship does not exist",
             "inspect the entry relationships with `loreloop knowledge show`",
         )
+    if old is None:
+        old = _restore_chain_entry(store, records, old_id)
     chain.append(UNSUPERSEDE_EVENT, {"new_id": new.id, "old_id": old.id})
     store.remove_link(new.id, old.id, LinkType.SUPERSEDES)
     print(f"restored: {old.title}  ({old.id[:8]})")
@@ -1567,11 +1610,59 @@ def _resolve_entry(store: KnowledgeStore, prefix: str):
     matches = [e for e in store.list() if e.id.startswith(prefix)]
     if len(matches) == 1:
         return matches[0]
-    reason = "no entry matches" if not matches else f"{len(matches)} entries match"
+    _raise_entry_resolution_error(prefix, len(matches))
+
+
+def _raise_entry_resolution_error(prefix: str, matches: int) -> None:
+    reason = "no entry matches" if not matches else f"{matches} entries match"
     raise CLIError(
         "knowledge entry not found",
         f"{reason} id prefix {prefix!r}",
         "run `loreloop knowledge list` and use a unique displayed id prefix",
+    )
+
+
+def _resolve_or_restore_rejected_entry(store: KnowledgeStore, records, prefix: str) -> Entry:
+    stored = [entry for entry in store.list() if entry.id.startswith(prefix)]
+    if stored:
+        return _resolve_entry(store, prefix)
+    rejected = {entry_id for entry_id in chain_rejected_ids(records) if entry_id.startswith(prefix)}
+    if len(rejected) != 1:
+        _raise_entry_resolution_error(prefix, len(rejected))
+    return _restore_chain_entry(store, records, next(iter(rejected)))
+
+
+def _restore_chain_entry(store: KnowledgeStore, records, entry_id: str) -> Entry:
+    snapshot_fields = (
+        ("entry", "entry_digest"),
+        ("old_entry", "old_entry_digest"),
+        ("new_entry", "new_entry_digest"),
+    )
+    for record in reversed(records):
+        for snapshot_field, digest_field in snapshot_fields:
+            snapshot = record.payload.get(snapshot_field)
+            if not isinstance(snapshot, dict) or snapshot.get("id") != entry_id:
+                continue
+            expected = record.payload.get(digest_field)
+            try:
+                restored = entry_from_payload(snapshot)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise CLIError(
+                    "knowledge entry recovery refused",
+                    f"signed snapshot for {entry_id[:8]} is invalid: {exc}",
+                    "restore knowledge.db from backup or re-ingest the source under review",
+                ) from exc
+            if not isinstance(expected, str) or entry_digest(restored) != expected:
+                raise CLIError(
+                    "knowledge entry recovery refused",
+                    f"signed snapshot for {entry_id[:8]} does not match its digest",
+                    "restore knowledge.db from backup or re-ingest the source under review",
+                )
+            return store.restore(restored)
+    raise CLIError(
+        "knowledge entry recovery unavailable",
+        f"the active chain record for {entry_id[:8]} has no recoverable entry snapshot",
+        "restore knowledge.db from backup or re-ingest the source under review",
     )
 
 
@@ -1891,7 +1982,7 @@ def main(argv: list[str] | None = None) -> int:
     from .knowledge.repos import RepoConfigError
     from .knowledge.code_reverse import ExtractionError
     from .knowledge.endorsement import TrustProjectionError
-    from .knowledge.store import SchemaVersionError
+    from .knowledge.store import InvalidKnowledgeProjection, SchemaVersionError
     from .paths import StatePathError
     from .webexplore.browser import BrowserError, BrowserUnavailable
 
@@ -1918,6 +2009,7 @@ def main(argv: list[str] | None = None) -> int:
         OperatorBoundaryError,
         RegistryError,
         RepoConfigError,
+        InvalidKnowledgeProjection,
         SchemaVersionError,
         StatePathError,
         RunTraceError,

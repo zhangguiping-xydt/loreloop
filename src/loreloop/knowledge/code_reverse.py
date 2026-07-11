@@ -373,7 +373,10 @@ def drifted_code_entry_ids(
 ) -> set[str]:
     """IDs of code-channel entries whose anchored file changed since capture.
 
-    Freshness is judged at read time against the anchor, never stored. An
+    Freshness is judged at read time against the anchor, never stored, and is
+    intentionally independent of the latest ingestion policy: include/exclude
+    controls what may be newly extracted, not whether an existing anchor may
+    hide source drift. An
     anchor commit that git no longer knows (rebased away, shallow clone)
     counts as drifted, and so does a code entry with no anchor at all:
     freshness that cannot be proven must not be assumed.
@@ -409,8 +412,7 @@ def drifted_code_entry_ids(
             drifted.update(entry.id for entry, _ in anchored)
             continue
         changed = set(_decode_nul(result.stdout))
-        repo_policy = (policies or {}).get(repo_name, policy or IngestionPolicy())
-        changed.update(dirty_source_files(repo, policy=repo_policy))
+        changed.update(_dirty_paths(repo))
         for entry, relpath in anchored:
             if relpath in changed:
                 drifted.add(entry.id)
@@ -424,12 +426,18 @@ def dirty_source_files(
     policy: IngestionPolicy | None = None,
 ) -> list[str]:
     """Source files with uncommitted changes (staged, unstaged or untracked)."""
+    paths = _dirty_paths(repo)
+    policy = policy or IngestionPolicy()
+    return sorted(path for path in paths if _matches_policy(path, policy, extensions))
+
+
+def _dirty_paths(repo: Path) -> set[str]:
+    """All uncommitted repository paths except LoreLoop's mutable state."""
     paths: set[str] = set()
     paths.update(_git_paths(repo, "diff", "--name-only", "-z"))
     paths.update(_git_paths(repo, "diff", "--cached", "--name-only", "-z"))
     paths.update(_git_paths(repo, "ls-files", "--others", "--exclude-standard", "-z"))
-    policy = policy or IngestionPolicy()
-    return sorted(path for path in paths if _matches_policy(path, policy, extensions))
+    return {path for path in paths if not _is_loreloop_state(path)}
 
 
 def _is_loreloop_state(relpath: str) -> bool:

@@ -424,6 +424,11 @@ def test_delegate_traces_heads_for_all_declared_repositories(tmp_path):
         "backend": head_of(backend),
     }
     assert result.base_commits == event["base_commits"]
+    assert event["repository_roots"] == {
+        ".": str(workdir.resolve()),
+        "backend": str(backend.resolve()),
+    }
+    assert result.repository_roots == event["repository_roots"]
 
 
 def test_agent_runner_profiles_use_explicit_least_privilege_modes(tmp_path):

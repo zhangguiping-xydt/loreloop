@@ -142,6 +142,21 @@ def test_curate_rejection_revokes_endorsement(env):
     assert unendorsed_strong_ids([strong(entry)], chain.verify()) == {entry.id}
 
 
+def test_reopen_does_not_restore_verification_from_before_rejection(env):
+    store, chain = env
+    entry = store.add(strong(make_entry()))
+    chain.append("entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)})
+
+    curate(store, chain, entry.id, Curation.REJECTED, NOW)
+    curate(store, chain, entry.id, Curation.DRAFT, NOW)
+
+    reopened = store.get(entry.id)
+    assert reopened.trust.curation is Curation.DRAFT
+    assert reopened.trust.verification is Verification.VERIFIED
+    assert chain_endorsed_strong_ids([reopened], chain.verify()) == set()
+    assert unendorsed_strong_ids([reopened], chain.verify()) == {entry.id}
+
+
 def test_curate_invalid_transition_writes_no_chain_record(env):
     store, chain = env
     entry = store.add(make_entry())
@@ -377,9 +392,9 @@ def test_chain_rejected_ids_replays_latest_curation(env):
 
 def test_rejection_survives_db_curation_flip(env):
     # The attack: entry is verified (endorsed digest on chain), the human
-    # rejects it, the agent flips the DB curation back to draft. The digest
-    # endorsement survives rejection — rejection is curation, not
-    # contradiction — so only the chain-rejected replay keeps it out.
+    # rejects it, and the agent flips the DB curation back to draft. Rejection
+    # revokes the older digest endorsement, while chain curation independently
+    # keeps the forged SQLite row retired.
     store, chain = env
     entry = store.add(make_entry())
     chain.append("entry_verified", {"entry_id": entry.id, "entry_digest": entry_digest(entry)})
@@ -394,7 +409,5 @@ def test_rejection_survives_db_curation_flip(env):
     resurrected = store.get(entry.id)
 
     assert resurrected.is_strong_evidence()
-    # digest check alone would let it back in as strong…
-    assert unendorsed_strong_ids([resurrected], chain.verify()) == set()
-    # …the chain-rejected set is what keeps it retired
+    assert unendorsed_strong_ids([resurrected], chain.verify()) == {entry.id}
     assert chain_rejected_ids(chain.verify()) == {entry.id}

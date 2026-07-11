@@ -83,6 +83,12 @@ def start_run(repo, chain, run_id, base_commit, finished=True, ingestion_policie
             "context_entries": [],
             **base_field,
         }
+        if isinstance(base_commit, dict):
+            from loreloop.knowledge.repos import resolve_repo
+
+            payload["repository_roots"] = {
+                name: str(resolve_repo(repo, name)) for name in base_commit
+            }
         if ingestion_policies is not None:
             payload["ingestion_policies"] = ingestion_policies
         chain.append(
@@ -514,6 +520,44 @@ def test_harvest_is_idempotent_via_chain(env):
 
     events = [r.event for r in chain.verify()]
     assert events.count("knowledge_harvested") == 1
+
+
+def test_old_harvest_does_not_overwrite_later_chain_backed_verification(env):
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from loreloop.knowledge.endorsement import entry_digest
+
+    repo, store, chain, artifacts = env
+    trace = start_run(repo, chain, "run-old", head_of(repo))
+    record_browser_check(chain, "run-old", artifacts=artifacts)
+    minted = harvest_run(
+        load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts
+    ).minted[0]
+
+    later = replace(minted, source=replace(minted.source, snapshot_ref="later-snapshot"))
+    chain.append(
+        "entry_verified",
+        {
+            "run_id": "run-later",
+            "entry_id": minted.id,
+            "entry_digest": entry_digest(later),
+        },
+    )
+    store.set_verification(
+        minted.id,
+        Verification.VERIFIED,
+        "run-later",
+        datetime.now(timezone.utc),
+        snapshot_ref="later-snapshot",
+    )
+
+    with pytest.raises(HarvestError, match="already harvested"):
+        harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    preserved = store.get(minted.id)
+    assert preserved.source.snapshot_ref == "later-snapshot"
+    assert preserved.trust.verified_by == "run-later"
 
 
 def test_harvest_resumes_db_materialization_after_chain_first_crash(env):
@@ -1007,6 +1051,57 @@ def test_harvest_refuses_when_any_member_repository_is_dirty(tmp_path):
     try:
         with pytest.raises(HarvestError, match="repository 'backend'.*uncommitted"):
             harvest_run(load_run(trace), chain, store, FakeRunner([]), workdir, artifacts=artifacts)
+    finally:
+        store.close()
+
+
+def test_harvest_refuses_repository_alias_swap_to_same_base_clone(tmp_path):
+    from loreloop.knowledge.repos import save_repos
+
+    workdir = tmp_path / "workdir"
+    backend = tmp_path / "backend"
+    replacement = tmp_path / "replacement"
+    workdir.mkdir()
+    backend.mkdir()
+    make_repo(workdir)
+    make_repo(backend)
+    (workdir / ".loreloop").mkdir()
+    save_repos(workdir, {"backend": backend})
+    store = KnowledgeStore(workdir / ".loreloop/knowledge.db")
+    chain = EvidenceChain.for_workdir(workdir)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    bases = {".": head_of(workdir), "backend": head_of(backend)}
+    trace = start_run(workdir, chain, "run-alias-swap", bases)
+    record_browser_check(chain, "run-alias-swap", artifacts=artifacts)
+
+    subprocess.run(
+        ["git", "clone", str(backend), str(replacement)], check=True, capture_output=True
+    )
+    git(replacement, "config", "user.email", "t@t")
+    git(replacement, "config", "user.name", "t")
+    (replacement / "api.py").write_text("def upload(): return 599\n")
+    git(replacement, "add", "api.py")
+    git(replacement, "commit", "-m", "alternate implementation")
+    save_repos(workdir, {"backend": replacement})
+    runner = FakeRunner(
+        [
+            json.dumps(
+                [
+                    {
+                        "claim": "Backend upload returns 599.",
+                        "title": "Alternate backend",
+                        "file": "api.py",
+                    }
+                ]
+            ),
+            json.dumps([{"id": 0, "kind": "interface"}]),
+        ]
+    )
+
+    try:
+        with pytest.raises(HarvestError, match="repository 'backend'.*identity changed"):
+            harvest_run(load_run(trace), chain, store, runner, workdir, artifacts=artifacts)
+        assert runner.prompts == []
     finally:
         store.close()
 

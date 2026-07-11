@@ -18,15 +18,18 @@ from ..paths import ensure_private_directory, ensure_state_root, secure_append_t
 from .context_pack import ContextPack, render, select
 
 
-def _heads(workdir: Path) -> dict[str, str]:
+def _repository_snapshot(workdir: Path) -> tuple[dict[str, str], dict[str, str]]:
     heads: dict[str, str] = {}
+    roots: dict[str, str] = {}
     for name, repo in {".": workdir.resolve(), **load_repos(workdir)}.items():
+        resolved = repo.resolve()
         result = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+            ["git", "rev-parse", "HEAD"], cwd=resolved, capture_output=True, text=True
         )
         if result.returncode == 0:
             heads[name] = result.stdout.strip()
-    return heads
+            roots[name] = str(resolved)
+    return heads, roots
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,7 @@ class DelegationResult:
     trace_path: Path
     pack: ContextPack
     base_commits: dict[str, str]
+    repository_roots: dict[str, str]
 
     @property
     def base_commit(self) -> str | None:
@@ -61,7 +65,7 @@ class DelegateRunner:
     ) -> DelegationResult:
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
         trace_path = self._runs_dir / f"{run_id}.jsonl"
-        base_commits = _heads(self._workdir)
+        base_commits, repository_roots = _repository_snapshot(self._workdir)
         drifted = (
             drifted_code_entry_ids(self._workdir, entries, policies=ingestion_policies)
             if base_commits
@@ -89,6 +93,7 @@ class DelegateRunner:
             chain_endorsed_entries=sorted(pack.endorsed_ids & set(pack.entry_ids)),
             query_expansion=expansion,
             base_commits=base_commits,
+            repository_roots=repository_roots,
             ingestion_policies={
                 name: (ingestion_policies or {}).get(name, IngestionPolicy()).payload()
                 for name in sorted(base_commits)
@@ -110,6 +115,7 @@ class DelegateRunner:
             trace_path=trace_path,
             pack=pack,
             base_commits=base_commits,
+            repository_roots=repository_roots,
         )
 
     def _trace(self, path: Path, event: str, **fields) -> None:

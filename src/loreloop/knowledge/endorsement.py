@@ -28,7 +28,7 @@ import json
 from datetime import datetime
 
 from ..evidence.chain import EvidenceChain, EvidenceRecord
-from .model import CURATION_TRANSITIONS, Curation, Entry
+from .model import CURATION_TRANSITIONS, Channel, Curation, Entry, Kind, Source
 from .store import InvalidTransition, KnowledgeStore
 
 CURATION_EVENT = "curation_changed"
@@ -87,6 +87,12 @@ def endorsed_strong_digests(records: list[EvidenceRecord]) -> dict[str, set[str]
                 approved[entry_id] = (digest, rec.index)
             else:
                 approved.pop(entry_id, None)
+                if payload.get("curation") == Curation.REJECTED.value:
+                    # Rejection retires the whole trust decision, including a
+                    # verification that predates it. A later reopen returns
+                    # the entry to draft; it must not unmask the old machine
+                    # endorsement and immediately make the row strong again.
+                    verified.pop(entry_id, None)
         elif rec.event == "entry_verified":
             entry_id = payload.get("entry_id")
             digest = payload.get("entry_digest")
@@ -295,7 +301,7 @@ def curate(
             "entry_id": entry_id,
             "curation": new.value,
             "entry_digest": entry_digest(entry),
-            "entry": _entry_payload(entry),
+            "entry": entry_payload(entry),
         },
     )
     return store.project_curation(entry_id, new, now)
@@ -307,12 +313,12 @@ def record_reingested(chain: EvidenceChain, entry: Entry) -> EvidenceRecord:
         {
             "entry_id": entry.id,
             "entry_digest": entry_digest(entry),
-            "entry": _entry_payload(entry),
+            "entry": entry_payload(entry),
         },
     )
 
 
-def _entry_payload(entry: Entry) -> dict:
+def entry_payload(entry: Entry) -> dict:
     return {
         "id": entry.id,
         "title": entry.title,
@@ -328,3 +334,32 @@ def _entry_payload(entry: Entry) -> dict:
             "excerpt": entry.source.excerpt,
         },
     }
+
+
+def entry_from_payload(data: object) -> Entry:
+    """Rebuild an untrusted SQLite projection from a signed chain snapshot.
+
+    Trust is deliberately reset to draft/unverified. The caller verifies the
+    reconstructed substance against the digest carried by the same record
+    before persisting it.
+    """
+    if not isinstance(data, dict):
+        raise TypeError("entry snapshot must be an object")
+    source = data["source"]
+    if not isinstance(source, dict):
+        raise TypeError("entry source snapshot must be an object")
+    return Entry(
+        id=data["id"],
+        title=data["title"],
+        content=data["content"],
+        kind=Kind(data["kind"]),
+        source=Source(
+            channel=Channel(source["channel"]),
+            locator=source["locator"],
+            snapshot_ref=source.get("snapshot_ref"),
+            symbol=source.get("symbol"),
+            line_start=source.get("line_start"),
+            line_end=source.get("line_end"),
+            excerpt=source.get("excerpt"),
+        ),
+    )

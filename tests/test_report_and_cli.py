@@ -546,6 +546,46 @@ def test_cli_invalid_curation_transition_exits_cleanly(workdir, capsys):
     assert len([r for r in records if r.event == "curation_changed"]) == 1
 
 
+def test_cli_reports_invalid_sqlite_enum_without_traceback(workdir, capsys):
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
+
+    db = workdir / ".loreloop/knowledge.db"
+    db.parent.mkdir(parents=True)
+    entry = Entry(
+        title="Corrupt projection",
+        content="The cache contains an invalid enum.",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.MANUAL, locator="manual:corrupt"),
+    )
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+        store._conn.execute("UPDATE entries SET curation = 'invalid' WHERE id = ?", (entry.id,))
+        store._conn.commit()
+
+    assert main(["knowledge", "list"]) == 2
+    error = capsys.readouterr().err
+    assert "invalid knowledge projection" in error
+    assert "reason:" in error
+    assert "next:" in error
+    assert "Traceback" not in error
+
+
+def test_cli_duplicate_harvest_says_no_acceptance_work_is_needed(workdir, capsys):
+    run_id = "run-already-harvested"
+    write_trace(workdir, run_id=run_id)
+    EvidenceChain.for_workdir(workdir).append(
+        "knowledge_harvested",
+        {"run_id": run_id, "minted": [], "reversed": []},
+    )
+
+    assert main(["harvest", run_id]) == 1
+    error = capsys.readouterr().err
+    assert "already harvested" in error
+    assert "no acceptance work is required" in error
+    assert "satisfy every acceptance check" not in error
+
+
 def test_cli_report_and_harvest_reject_path_traversal_run_ids(workdir, capsys):
     assert main(["report", "../../../etc/passwd"]) == 2
     assert "invalid run id" in capsys.readouterr().err
@@ -1245,6 +1285,7 @@ def test_report_escapes_markdown_table_breakers(workdir):
 
 
 def test_cli_supersede_links_and_hides_old_entry(workdir, capsys):
+    from loreloop.knowledge.endorsement import entry_digest
     from loreloop.knowledge.model import Channel, Entry, Kind, Source
     from loreloop.knowledge.store import KnowledgeStore
 
@@ -1272,7 +1313,13 @@ def test_cli_supersede_links_and_hides_old_entry(workdir, capsys):
     # supersession silences an entry — endorsed on the chain like curation
     records = EvidenceChain.for_workdir(workdir).verify()
     assert records[-1].event == "entry_superseded"
-    assert records[-1].payload == {"new_id": new.id, "old_id": old.id}
+    payload = records[-1].payload
+    assert payload["new_id"] == new.id
+    assert payload["old_id"] == old.id
+    assert payload["new_entry"]["id"] == new.id
+    assert payload["old_entry"]["id"] == old.id
+    assert payload["new_entry_digest"] == entry_digest(new)
+    assert payload["old_entry_digest"] == entry_digest(old)
 
     assert main(["knowledge", "list"]) == 0
     out = capsys.readouterr().out
@@ -1418,6 +1465,36 @@ def test_cli_curation_transition_uses_chain_state_not_sqlite_cache(workdir, caps
         assert store.get(entry.id).trust.curation is Curation.DRAFT
 
 
+def test_cli_reopen_restores_rejected_entry_deleted_from_sqlite(workdir, capsys):
+    from loreloop.knowledge.model import Channel, Curation, Entry, Kind, Source, Verification
+    from loreloop.knowledge.store import KnowledgeStore
+
+    db = workdir / ".loreloop/knowledge.db"
+    db.parent.mkdir(parents=True)
+    entry = Entry(
+        title="Deleted rejected policy",
+        content="The signed policy remains recoverable.",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.MANUAL, locator="manual:deleted-rejected"),
+    )
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+
+    assert main(["knowledge", "reject", entry.id[:8]]) == 0
+    capsys.readouterr()
+    with KnowledgeStore(db) as store:
+        store._conn.execute("DELETE FROM entries WHERE id = ?", (entry.id,))
+        store._conn.commit()
+
+    assert main(["knowledge", "reopen", entry.id[:8]]) == 0
+    assert "reopened: Deleted rejected policy" in capsys.readouterr().out
+    with KnowledgeStore(db) as store:
+        restored = store.get(entry.id)
+        assert restored.content == entry.content
+        assert restored.trust.curation is Curation.DRAFT
+        assert restored.trust.verification is Verification.UNVERIFIED
+
+
 def test_cli_run_pins_per_repository_ingestion_policies(workdir, monkeypatch, capsys):
     import subprocess
 
@@ -1468,6 +1545,10 @@ def test_cli_run_pins_per_repository_ingestion_policies(workdir, monkeypatch, ca
     capsys.readouterr()
 
     completed = next(record for record in chain.verify() if record.event == "delegation_completed")
+    assert completed.payload["repository_roots"] == {
+        ".": str(workdir.resolve()),
+        "backend": str(backend.resolve()),
+    }
     assert completed.payload["ingestion_policies"] == {
         ".": {"include": ["*.avsc"], "exclude": [], "max_file_bytes": 123_456},
         "backend": {
@@ -1502,6 +1583,10 @@ def test_cli_unsupersede_restores_entry_and_records_recovery(workdir, capsys):
 
     assert main(["knowledge", "supersede", new.id[:8], old.id[:8], "--yes"]) == 0
     capsys.readouterr()
+    with KnowledgeStore(db) as store:
+        store._conn.execute("DELETE FROM links WHERE to_id = ?", (old.id,))
+        store._conn.execute("DELETE FROM entries WHERE id = ?", (old.id,))
+        store._conn.commit()
     assert main(["knowledge", "unsupersede", new.id[:8], old.id[:8], "--yes"]) == 0
     assert "restored" in capsys.readouterr().out
 

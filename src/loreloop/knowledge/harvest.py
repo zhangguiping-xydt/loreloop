@@ -56,6 +56,10 @@ class HarvestError(Exception):
     pass
 
 
+class HarvestAlreadyCompleted(HarvestError):
+    pass
+
+
 @dataclass(frozen=True)
 class HarvestResult:
     minted: list[Entry]
@@ -110,11 +114,23 @@ def harvest_run(
     # record, never from the trace: the trace lives in the agent-writable
     # tree, and a forged base_commit there would steer which files get
     # re-reversed and which entries get flagged stale.
+    completed = evaluation.completed
+    if completed is None:
+        raise HarvestError("accepted run has no signed completion record")
     base_commits = evaluation.base_commits
+    pinned_roots = completed.payload.get("repository_roots")
+    if pinned_roots is None:
+        if any(name != "." for name in base_commits):
+            raise HarvestError(
+                "accepted run has no signed repository identity for its declared repositories"
+            )
+    elif (
+        not isinstance(pinned_roots, dict)
+        or set(pinned_roots) != set(base_commits)
+        or any(not isinstance(value, str) or not value for value in pinned_roots.values())
+    ):
+        raise HarvestError("accepted run has invalid signed repository identities")
     try:
-        completed = evaluation.completed
-        if completed is None:
-            raise ExtractionError("accepted run has no signed completion record")
         pinned = completed.payload.get("ingestion_policies")
         if pinned is not None:
             ingestion_policies = parse_ingestion_policies_payload(
@@ -137,6 +153,11 @@ def harvest_run(
             ) from exc
         if not repo.is_dir() or not (repo / ".git").exists():
             raise HarvestError(f"repository {name!r} from the run is not a git root: {repo}")
+        if pinned_roots is not None and str(repo.resolve()) != pinned_roots[name]:
+            raise HarvestError(
+                f"repository {name!r} identity changed since delegation; "
+                "restore the original repository mapping or start a new run"
+            )
         repos[name] = repo
         try:
             dirty = dirty_source_files(repo, policy=ingestion_policies[name])
@@ -261,7 +282,7 @@ def _resume_harvest(
     raw_rows = record.payload.get("minted_entries")
     expected = record.payload.get("minted")
     if not isinstance(raw_rows, list) or not isinstance(expected, dict):
-        raise HarvestError(f"run {run.run_id} was already harvested")
+        raise HarvestAlreadyCompleted(f"run {run.run_id} was already harvested")
     try:
         minted = [_deserialize_minted(item) for item in raw_rows]
     except (KeyError, TypeError, ValueError) as exc:
@@ -287,38 +308,38 @@ def _resume_harvest(
         ):
             raise HarvestError("recorded harvest recovery data does not match its signed digests")
 
-    minted_complete = all(
-        (stored := store.get(entry.id)) is not None and entry_digest(stored) == expected[entry.id]
-        for entry in minted
-    )
+    later_digests = _recorded_entry_digests(records[record.index + 1 :])
+
+    def materialized(entry_id: str, original_digest: str) -> bool:
+        stored = store.get(entry_id)
+        if stored is None:
+            return False
+        current = entry_digest(stored)
+        return current == original_digest or current in later_digests.get(entry_id, set())
+
+    minted_complete = all(materialized(entry.id, expected[entry.id]) for entry in minted)
     reversed_complete = all(
-        (stored := store.get(entry.id)) is not None
-        and entry_digest(stored) == expected_reversed[entry.id]
-        for entry in reversed_entries
+        materialized(entry.id, expected_reversed[entry.id]) for entry in reversed_entries
     )
     if minted_complete and reversed_complete:
-        raise HarvestError(f"run {run.run_id} was already harvested")
+        raise HarvestAlreadyCompleted(f"run {run.run_id} was already harvested")
     for entry in minted:
-        stored = store.get(entry.id)
-        if stored is None or entry_digest(stored) != expected[entry.id]:
+        if not materialized(entry.id, expected[entry.id]):
             _persist_minted(
                 store,
                 entry,
                 entry.trust.verified_by or run.run_id,
                 entry.trust.verified_at or datetime.now(timezone.utc),
             )
-        restored = store.get(entry.id)
-        if restored is None or entry_digest(restored) != expected[entry.id]:
+        if not materialized(entry.id, expected[entry.id]):
             raise HarvestError(
                 f"cannot restore minted entry {entry.id[:8]} to its chain-endorsed content"
             )
 
     for entry in reversed_entries:
-        stored = store.get(entry.id)
-        if stored is None or entry_digest(stored) != expected_reversed[entry.id]:
+        if not materialized(entry.id, expected_reversed[entry.id]):
             _persist_reanchored(store, entry)
-        restored = store.get(entry.id)
-        if restored is None or entry_digest(restored) != expected_reversed[entry.id]:
+        if not materialized(entry.id, expected_reversed[entry.id]):
             raise HarvestError(
                 f"cannot restore reversed entry {entry.id[:8]} to its chain-recorded content"
             )
@@ -338,6 +359,31 @@ def _resume_harvest(
         head_commits=dict(record.payload.get("head_commits", {})),
         resumed=True,
     )
+
+
+def _recorded_entry_digests(records: list[EvidenceRecord]) -> dict[str, set[str]]:
+    """Entry projections authorized after an older harvest record.
+
+    Recovery may restore missing or unexplained SQLite rows, but it must not
+    rewind a row whose current digest was recorded by a later signed event.
+    Trust events carry ``entry_digest``; ingestion and harvest events carry
+    digest maps for the projections they materialize.
+    """
+    recorded: dict[str, set[str]] = {}
+    for record in records:
+        entry_id = record.payload.get("entry_id")
+        digest = record.payload.get("entry_digest")
+        if isinstance(entry_id, str) and isinstance(digest, str) and digest:
+            recorded.setdefault(entry_id, set()).add(digest)
+        for digest_field in ("minted", "reversed"):
+            values = record.payload.get(digest_field)
+            if not isinstance(values, dict):
+                continue
+            for projected_id, projected_digest in values.items():
+                if isinstance(projected_id, str) and isinstance(projected_digest, str):
+                    if projected_digest:
+                        recorded.setdefault(projected_id, set()).add(projected_digest)
+    return recorded
 
 
 def _entries_from_ids(store: KnowledgeStore, values) -> list[Entry]:

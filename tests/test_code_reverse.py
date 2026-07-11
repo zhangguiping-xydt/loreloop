@@ -355,6 +355,26 @@ def test_drift_detection_flags_changed_files_only(repo):
     assert drifted_code_entry_ids(repo, [changed, untouched, web]) == {changed.id}
 
 
+def test_drift_detection_ignores_latest_exclude_for_existing_anchors(repo):
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    entry = code_entry("app.py", base)
+    (repo / "app.py").write_text("def upload():\n    return 500\n")
+
+    drifted = drifted_code_entry_ids(
+        repo,
+        [entry],
+        policies={".": IngestionPolicy(exclude=("app.py",))},
+    )
+
+    assert drifted == {entry.id}
+
+
 def test_drift_detection_treats_unknown_anchor_as_drifted(repo):
     ghost = code_entry("app.py", "0000000000000000000000000000000000000000")
     assert drifted_code_entry_ids(repo, [ghost]) == {ghost.id}

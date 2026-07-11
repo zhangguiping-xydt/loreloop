@@ -64,6 +64,10 @@ class SchemaVersionError(RuntimeError):
     pass
 
 
+class InvalidKnowledgeProjection(RuntimeError):
+    """SQLite contains a row that cannot be decoded into the knowledge model."""
+
+
 def migration_backup_path(db_path: str | Path, version: int) -> Path:
     """Stable pre-upgrade backup path that an older release can reopen."""
     path = Path(db_path)
@@ -174,6 +178,46 @@ class KnowledgeStore:
                 ),
             )
         return entry
+
+    def restore(self, entry: Entry) -> Entry:
+        """Restore one exact chain-authorized projection by id.
+
+        Unlike ``add``, recovery must not deduplicate onto a different row:
+        supersession and curation events refer to the original signed id.
+        Callers are responsible for validating the entry against the chain
+        digest before invoking this method.
+        """
+        existing = self.get(entry.id)
+        if existing is not None:
+            return existing
+        with self._conn:
+            self._conn.execute(
+                """INSERT INTO entries (
+                    id, title, content, kind, channel, locator, snapshot_ref,
+                    source_symbol, source_line_start, source_line_end, source_excerpt,
+                    curation, verification, verified_at, verified_by, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    entry.id,
+                    entry.title,
+                    entry.content,
+                    entry.kind.value,
+                    entry.source.channel.value,
+                    entry.source.locator,
+                    entry.source.snapshot_ref,
+                    entry.source.symbol,
+                    entry.source.line_start,
+                    entry.source.line_end,
+                    entry.source.excerpt,
+                    entry.trust.curation.value,
+                    entry.trust.verification.value,
+                    _iso(entry.trust.verified_at),
+                    entry.trust.verified_by,
+                    _iso(entry.created_at),
+                    _iso(entry.updated_at),
+                ),
+            )
+        return self._require(entry.id)
 
     def add_or_refresh(self, entry: Entry) -> tuple[Entry, bool]:
         """Insert a new assertion or refresh an exact claim's source anchor.
@@ -504,31 +548,37 @@ def _locator_key(channel: Channel, locator: str) -> str | tuple[str, str]:
 
 
 def _to_entry(row: sqlite3.Row) -> Entry:
-    return Entry(
-        id=row["id"],
-        title=row["title"],
-        content=row["content"],
-        kind=Kind(row["kind"]),
-        source=Source(
-            channel=Channel(row["channel"]),
-            locator=row["locator"],
-            snapshot_ref=row["snapshot_ref"],
-            symbol=_row_value(row, "source_symbol"),
-            line_start=_row_value(row, "source_line_start"),
-            line_end=_row_value(row, "source_line_end"),
-            excerpt=_row_value(row, "source_excerpt"),
-        ),
-        trust=Trust(
-            curation=Curation(row["curation"]),
-            verification=Verification(row["verification"]),
-            verified_at=(
-                datetime.fromisoformat(row["verified_at"]) if row["verified_at"] else None
+    try:
+        return Entry(
+            id=row["id"],
+            title=row["title"],
+            content=row["content"],
+            kind=Kind(row["kind"]),
+            source=Source(
+                channel=Channel(row["channel"]),
+                locator=row["locator"],
+                snapshot_ref=row["snapshot_ref"],
+                symbol=_row_value(row, "source_symbol"),
+                line_start=_row_value(row, "source_line_start"),
+                line_end=_row_value(row, "source_line_end"),
+                excerpt=_row_value(row, "source_excerpt"),
             ),
-            verified_by=row["verified_by"],
-        ),
-        created_at=datetime.fromisoformat(row["created_at"]),
-        updated_at=datetime.fromisoformat(row["updated_at"]),
-    )
+            trust=Trust(
+                curation=Curation(row["curation"]),
+                verification=Verification(row["verification"]),
+                verified_at=(
+                    datetime.fromisoformat(row["verified_at"]) if row["verified_at"] else None
+                ),
+                verified_by=row["verified_by"],
+            ),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        entry_id = row["id"] if "id" in row.keys() else "unknown"
+        raise InvalidKnowledgeProjection(
+            f"invalid knowledge projection for entry {str(entry_id)[:8]}: {exc}"
+        ) from exc
 
 
 def _row_value(row: sqlite3.Row, column: str):
