@@ -52,6 +52,7 @@ packages = ["src/loreloop"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+extend-exclude = ["artifacts"]
 
 [tool.ruff.format]
 quote-style = "double"

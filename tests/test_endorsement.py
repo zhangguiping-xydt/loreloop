@@ -351,6 +351,14 @@ def test_chain_superseded_ids_replays_supersede_events(env):
     assert chain_superseded_ids(chain.verify()) == {"o1", "o2"}
 
 
+def test_chain_superseded_ids_replays_explicit_recovery(env):
+    _, chain = env
+    chain.append("entry_superseded", {"new_id": "n1", "old_id": "o1"})
+    chain.append("entry_supersession_reverted", {"new_id": "n1", "old_id": "o1"})
+
+    assert chain_superseded_ids(chain.verify()) == set()
+
+
 def test_chain_rejected_ids_replays_latest_curation(env):
     # Round-5 H2 (resurrection direction): rejection lives on the chain; the
     # DB curation column is a cache. The latest curation event decides.

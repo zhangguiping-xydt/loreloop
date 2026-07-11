@@ -905,7 +905,7 @@ def test_cli_run_ignores_deleted_supersede_link(workdir, monkeypatch, capsys):
         store.add(old)
         store.add(new)
     assert main(["knowledge", "approve", old.id[:8]]) == 0
-    assert main(["knowledge", "supersede", new.id[:8], old.id[:8]]) == 0
+    assert main(["knowledge", "supersede", new.id[:8], old.id[:8], "--yes"]) == 0
     capsys.readouterr()
 
     with KnowledgeStore(db) as store:
@@ -1266,7 +1266,7 @@ def test_cli_supersede_links_and_hides_old_entry(workdir, capsys):
         store.add(old)
         store.add(new)
 
-    assert main(["knowledge", "supersede", new.id[:8], old.id[:8]]) == 0
+    assert main(["knowledge", "supersede", new.id[:8], old.id[:8], "--yes"]) == 0
     assert "superseded: Old upload contract" in capsys.readouterr().out
 
     # supersession silences an entry — endorsed on the chain like curation
@@ -1290,6 +1290,442 @@ def test_cli_supersede_rejects_ambiguous_or_missing_prefix(workdir, capsys):
     assert main(["knowledge", "supersede", "deadbeef", "cafebabe"]) == 2
     assert "no entry matches" in capsys.readouterr().err
     assert main(["knowledge", "supersede", "deadbeef"]) == 2
+
+
+def test_cli_supersede_requires_confirmation_and_rejects_retired_endpoints(workdir, capsys):
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
+
+    db = workdir / ".loreloop/knowledge.db"
+    db.parent.mkdir(parents=True)
+    entries = [
+        Entry(
+            title=title,
+            content=f"{title} content",
+            kind=Kind.CONSTRAINT,
+            source=Source(channel=Channel.MANUAL, locator=f"manual:{title}"),
+        )
+        for title in ("A", "B", "C")
+    ]
+    with KnowledgeStore(db) as store:
+        for entry in entries:
+            store.add(entry)
+    a, b, c = entries
+
+    assert main(["knowledge", "supersede", a.id[:8], b.id[:8]]) == 2
+    assert "--yes" in capsys.readouterr().err
+    assert main(["knowledge", "supersede", a.id[:8], b.id[:8], "--yes"]) == 0
+    capsys.readouterr()
+
+    assert main(["knowledge", "supersede", b.id[:8], c.id[:8], "--yes"]) == 2
+    assert "already retired" in capsys.readouterr().err
+    assert main(["knowledge", "supersede", c.id[:8], b.id[:8], "--yes"]) == 2
+    assert "already retired" in capsys.readouterr().err
+
+
+def test_cli_rejected_entry_cannot_supersede_and_is_not_active(workdir, capsys):
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
+
+    db = workdir / ".loreloop/knowledge.db"
+    db.parent.mkdir(parents=True)
+    replacement = Entry(
+        title="Rejected replacement",
+        content="Rejected replacement content",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.MANUAL, locator="manual:replacement"),
+    )
+    old = Entry(
+        title="Active old knowledge",
+        content="Active old content",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.MANUAL, locator="manual:old"),
+    )
+    with KnowledgeStore(db) as store:
+        store.add(replacement)
+        store.add(old)
+
+    assert main(["knowledge", "reject", replacement.id[:8]]) == 0
+    capsys.readouterr()
+    assert main(["knowledge", "supersede", replacement.id[:8], old.id[:8], "--yes"]) == 2
+    assert "already retired" in capsys.readouterr().err
+
+    assert main(["knowledge", "list", "--active"]) == 0
+    output = capsys.readouterr().out
+    assert "Active old knowledge" in output
+    assert "Rejected replacement" not in output
+
+
+def test_cli_status_filters_use_chain_curation_and_disclose_cache_mismatch(workdir, capsys):
+    from loreloop.knowledge.model import Channel, Curation, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
+
+    db = workdir / ".loreloop/knowledge.db"
+    db.parent.mkdir(parents=True)
+    entry = Entry(
+        title="Approved policy",
+        content="The policy is approved.",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.MANUAL, locator="manual:policy"),
+    )
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+    assert main(["knowledge", "approve", entry.id[:8]]) == 0
+    capsys.readouterr()
+    with KnowledgeStore(db) as store:
+        store._conn.execute(
+            "UPDATE entries SET curation = ? WHERE id = ?", (Curation.DRAFT.value, entry.id)
+        )
+        store._conn.commit()
+
+    assert main(["knowledge", "list", "--status", "approved"]) == 0
+    assert "Approved policy" in capsys.readouterr().out
+    assert main(["knowledge", "review", "--status", "draft"]) == 0
+    assert "Approved policy" not in capsys.readouterr().out
+    assert main(["knowledge", "show", entry.id[:8]]) == 0
+    shown = capsys.readouterr().out
+    assert "Effective curation: approved" in shown
+    assert "Stored curation: draft (cache mismatch)" in shown
+
+
+def test_cli_curation_transition_uses_chain_state_not_sqlite_cache(workdir, capsys):
+    from loreloop.knowledge.model import Channel, Curation, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
+
+    db = workdir / ".loreloop/knowledge.db"
+    db.parent.mkdir(parents=True)
+    entry = Entry(
+        title="Recoverable policy",
+        content="The policy can be recovered.",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.MANUAL, locator="manual:recoverable"),
+    )
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+    assert main(["knowledge", "reject", entry.id[:8]]) == 0
+    capsys.readouterr()
+    with KnowledgeStore(db) as store:
+        store._conn.execute(
+            "UPDATE entries SET curation = ? WHERE id = ?", (Curation.DRAFT.value, entry.id)
+        )
+        store._conn.commit()
+
+    assert main(["knowledge", "reopen", entry.id[:8]]) == 0
+    assert "reopened: Recoverable policy" in capsys.readouterr().out
+    records = EvidenceChain.for_workdir(workdir).verify()
+    assert records[-1].payload["curation"] == Curation.DRAFT.value
+    with KnowledgeStore(db) as store:
+        assert store.get(entry.id).trust.curation is Curation.DRAFT
+
+
+def test_cli_run_pins_per_repository_ingestion_policies(workdir, monkeypatch, capsys):
+    import subprocess
+
+    import loreloop.cli as cli
+    from loreloop.knowledge.repos import save_repos
+
+    class FakeAgent:
+        def run(self, _prompt):
+            return "done"
+
+    subprocess.run(["git", "init"], cwd=workdir, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=workdir, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=workdir, check=True)
+    (workdir / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "add", "app.py"], cwd=workdir, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=workdir, check=True)
+    backend = workdir.parent / "backend-policy"
+    backend.mkdir()
+    subprocess.run(["git", "init"], cwd=backend, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=backend, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=backend, check=True)
+    (backend / "api.py").write_text("value = 2\n")
+    subprocess.run(["git", "add", "api.py"], cwd=backend, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=backend, check=True)
+    save_repos(workdir, {"backend": backend})
+    chain = EvidenceChain.for_workdir(workdir)
+    chain.append(
+        "code_ingestion_policy_set",
+        {
+            "repo_name": ".",
+            "policy": {"include": ["*.avsc"], "exclude": [], "max_file_bytes": 123_456},
+        },
+    )
+    chain.append(
+        "code_ingestion_policy_set",
+        {
+            "repo_name": "backend",
+            "policy": {
+                "include": ["*.proto"],
+                "exclude": ["vendor/**"],
+                "max_file_bytes": 654_321,
+            },
+        },
+    )
+    monkeypatch.setattr(cli, "_agent", lambda _name: FakeAgent())
+
+    assert main(["run", "--no-expand", "inspect upload contract"]) == 0
+    capsys.readouterr()
+
+    completed = next(record for record in chain.verify() if record.event == "delegation_completed")
+    assert completed.payload["ingestion_policies"] == {
+        ".": {"include": ["*.avsc"], "exclude": [], "max_file_bytes": 123_456},
+        "backend": {
+            "include": ["*.proto"],
+            "exclude": ["vendor/**"],
+            "max_file_bytes": 654_321,
+        },
+    }
+
+
+def test_cli_unsupersede_restores_entry_and_records_recovery(workdir, capsys):
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
+
+    db = workdir / ".loreloop/knowledge.db"
+    db.parent.mkdir(parents=True)
+    old = Entry(
+        title="Old",
+        content="Old content",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.MANUAL, locator="manual:old"),
+    )
+    new = Entry(
+        title="New",
+        content="New content",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.MANUAL, locator="manual:new"),
+    )
+    with KnowledgeStore(db) as store:
+        store.add(old)
+        store.add(new)
+
+    assert main(["knowledge", "supersede", new.id[:8], old.id[:8], "--yes"]) == 0
+    capsys.readouterr()
+    assert main(["knowledge", "unsupersede", new.id[:8], old.id[:8], "--yes"]) == 0
+    assert "restored" in capsys.readouterr().out
+
+    records = EvidenceChain.for_workdir(workdir).verify()
+    assert records[-1].event == "entry_supersession_reverted"
+    with KnowledgeStore(db) as store:
+        assert {entry.id for entry in store.list_active()} == {old.id, new.id}
+
+
+def test_cli_superseded_approved_entry_displays_as_reference(workdir, capsys):
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
+
+    db = workdir / ".loreloop/knowledge.db"
+    db.parent.mkdir(parents=True)
+    old = Entry(
+        title="Old",
+        content="Old content",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.MANUAL, locator="manual:old"),
+    )
+    new = Entry(
+        title="New",
+        content="New content",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.MANUAL, locator="manual:new"),
+    )
+    with KnowledgeStore(db) as store:
+        store.add(old)
+        store.add(new)
+    assert main(["knowledge", "approve", old.id[:8]]) == 0
+    capsys.readouterr()
+    assert main(["knowledge", "supersede", new.id[:8], old.id[:8], "--yes"]) == 0
+    capsys.readouterr()
+
+    assert main(["knowledge", "list"]) == 0
+    line = next(line for line in capsys.readouterr().out.splitlines() if old.id[:8] in line)
+    assert "[ref   ]" in line
+    assert "[superseded]" in line
+
+
+def test_cli_ingest_chain_failure_leaves_refreshed_projection_untouched(
+    workdir, monkeypatch, capsys
+):
+    import subprocess
+
+    import loreloop.cli as cli
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
+
+    subprocess.run(["git", "init"], cwd=workdir, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=workdir, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=workdir, check=True)
+    (workdir / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "add", "app.py"], cwd=workdir, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=workdir, check=True)
+    old = Entry(
+        title="Old title",
+        content="The value is one.",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.CODE, locator="app.py@old", snapshot_ref="old"),
+    )
+    db = workdir / ".loreloop/knowledge.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    with KnowledgeStore(db) as store:
+        store.add(old)
+    assert main(["knowledge", "approve", old.id[:8]]) == 0
+    capsys.readouterr()
+    refreshed = Entry(
+        title="New title",
+        content=old.content,
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.CODE, locator="app.py@new", snapshot_ref="new"),
+    )
+    monkeypatch.setattr(cli, "_inference_agent", lambda _name: object())
+    monkeypatch.setattr(cli, "reverse_code", lambda *_args, **_kwargs: [refreshed])
+    monkeypatch.setattr(
+        cli,
+        "record_reingested",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    assert main(["ingest", "--from", "code", "."]) == 2
+    with KnowledgeStore(db) as store:
+        stored = store.get(old.id)
+    assert stored.title == "Old title"
+    assert stored.source.locator == "app.py@old"
+
+
+def test_cli_ingest_applies_include_and_exclude_to_dirty_check(workdir, monkeypatch, capsys):
+    import subprocess
+
+    import loreloop.cli as cli
+
+    subprocess.run(["git", "init"], cwd=workdir, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=workdir, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=workdir, check=True)
+    (workdir / "app.py").write_text("value = 1\n")
+    (workdir / "README.md").write_text("baseline\n")
+    (workdir / "upload.avsc").write_text('{"limit": 5}\n')
+    subprocess.run(["git", "add", "-A"], cwd=workdir, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=workdir, check=True)
+    (workdir / "README.md").write_text("uncommitted docs\n")
+    (workdir / "upload.avsc").write_text('{"limit": 8}\n')
+    monkeypatch.setattr(cli, "_inference_agent", lambda _name: object())
+    monkeypatch.setattr(cli, "reverse_code", lambda *_args, **_kwargs: [])
+
+    assert main(["ingest", "--from", "code", ".", "--include", "*.avsc"]) == 2
+    assert "upload.avsc" in capsys.readouterr().err
+
+    (workdir / "upload.avsc").write_text('{"limit": 5}\n')
+    assert main(["ingest", "--from", "code", ".", "--exclude", "README.md"]) == 0
+    capsys.readouterr()
+    policy = next(
+        record
+        for record in EvidenceChain.for_workdir(workdir).verify()
+        if record.event == "code_ingestion_policy_set"
+    )
+    assert policy.payload["repo_name"] == "."
+    assert policy.payload["policy"]["exclude"] == ["README.md"]
+
+
+def test_cli_show_review_and_list_filters_expose_complete_evidence(workdir, capsys):
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
+
+    db = workdir / ".loreloop/knowledge.db"
+    db.parent.mkdir(parents=True)
+    entry = Entry(
+        title="Upload ceiling",
+        content="Uploads are limited to 50 MiB.",
+        kind=Kind.CONSTRAINT,
+        source=Source(
+            channel=Channel.CODE,
+            locator="api.py@abc",
+            snapshot_ref="abc",
+            symbol="MAX_UPLOAD_MIB",
+            line_start=7,
+            line_end=7,
+            excerpt="MAX_UPLOAD_MIB = 50",
+        ),
+    )
+    other = Entry(
+        title="Manual note",
+        content="An operator note.",
+        kind=Kind.REQUIREMENT,
+        source=Source(channel=Channel.MANUAL, locator="operator:note"),
+    )
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+        store.add(other)
+
+    assert main(["knowledge", "show", entry.id[:8]]) == 0
+    shown = capsys.readouterr().out
+    assert "Uploads are limited to 50 MiB." in shown
+    assert "Source locator: api.py@abc" in shown
+    assert "Source lines: 7-7" in shown
+    assert "Source symbol: MAX_UPLOAD_MIB" in shown
+    assert "Source excerpt: MAX_UPLOAD_MIB = 50" in shown
+
+    assert main(["knowledge", "review", "--channel", "code", "--limit", "1"]) == 0
+    reviewed = capsys.readouterr().out
+    assert "Upload ceiling" in reviewed
+    assert "Manual note" not in reviewed
+    assert "loreloop knowledge approve" in reviewed
+
+    assert main(["knowledge", "list", "--kind", "requirement", "--offset", "0"]) == 0
+    listed = capsys.readouterr().out
+    assert "Manual note" in listed
+    assert "Upload ceiling" not in listed
+
+
+def test_cli_stale_review_recommends_replacement_not_reapproval(workdir, capsys):
+    import subprocess
+
+    from loreloop.knowledge.model import Channel, Entry, Kind, Source
+    from loreloop.knowledge.store import KnowledgeStore
+
+    subprocess.run(["git", "init"], cwd=workdir, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=workdir, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=workdir, check=True)
+    (workdir / "app.py").write_text("LIMIT = 5\n")
+    subprocess.run(["git", "add", "app.py"], cwd=workdir, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=workdir, check=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=workdir,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    entry = Entry(
+        title="Old limit",
+        content="The limit is 5.",
+        kind=Kind.CONSTRAINT,
+        source=Source(channel=Channel.CODE, locator=f"app.py@{base}", snapshot_ref=base),
+    )
+    db = workdir / ".loreloop/knowledge.db"
+    db.parent.mkdir(parents=True)
+    with KnowledgeStore(db) as store:
+        store.add(entry)
+    (workdir / "app.py").write_text("LIMIT = 8\n")
+    subprocess.run(["git", "add", "app.py"], cwd=workdir, check=True)
+    subprocess.run(["git", "commit", "-m", "raise limit"], cwd=workdir, check=True)
+
+    assert main(["knowledge", "review", "--stale"]) == 0
+    output = capsys.readouterr().out
+    assert "knowledge approve" not in output
+    assert "knowledge supersede" in output
+    assert "knowledge reject" in output
+
+
+def test_cli_report_uses_structured_verdict_for_next_step(workdir, capsys):
+    trace = write_trace(workdir, run_id="run-verdict-text")
+    chain = EvidenceChain.for_workdir(workdir)
+    endorse_run(chain, trace.stem, task="Document the phrase Verdict: ACCEPTED")
+    record_check(chain, trace.stem, "still failing", passed=False)
+
+    assert main(["report", trace.stem]) == 0
+
+    output = capsys.readouterr().out
+    assert "Verdict: NOT ACCEPTED" in output
+    assert "Next: loreloop harvest" not in output
+    assert "satisfy the missing checks" in output
 
 
 def test_cli_list_stale_flags_drifted_code_anchors(workdir, capsys):

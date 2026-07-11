@@ -11,7 +11,7 @@ from pathlib import Path
 
 from ..agents import AgentRunner
 from ..federation.reader import ForeignEntry
-from ..knowledge.code_reverse import drifted_code_entry_ids
+from ..knowledge.code_reverse import IngestionPolicy, drifted_code_entry_ids
 from ..knowledge.model import Entry
 from ..knowledge.repos import load_repos
 from ..paths import ensure_private_directory, ensure_state_root, secure_append_text, state_path
@@ -57,11 +57,16 @@ class DelegateRunner:
         endorsed_ids: set[str] | frozenset[str] = frozenset(),
         expansion: str = "",
         related: list[ForeignEntry] | None = None,
+        ingestion_policies: dict[str, IngestionPolicy] | None = None,
     ) -> DelegationResult:
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
         trace_path = self._runs_dir / f"{run_id}.jsonl"
         base_commits = _heads(self._workdir)
-        drifted = drifted_code_entry_ids(self._workdir, entries) if base_commits else set()
+        drifted = (
+            drifted_code_entry_ids(self._workdir, entries, policies=ingestion_policies)
+            if base_commits
+            else set()
+        )
         pack = select(
             task,
             entries,
@@ -84,6 +89,10 @@ class DelegateRunner:
             chain_endorsed_entries=sorted(pack.endorsed_ids & set(pack.entry_ids)),
             query_expansion=expansion,
             base_commits=base_commits,
+            ingestion_policies={
+                name: (ingestion_policies or {}).get(name, IngestionPolicy()).payload()
+                for name in sorted(base_commits)
+            },
             related_entries=pack.related_ids,
         )
         try:

@@ -13,7 +13,11 @@ from ..evidence.chain import (
     EvidenceRecord,
     FederatedTrustUnavailable,
 )
-from ..knowledge.code_reverse import drifted_code_entry_ids
+from ..knowledge.code_reverse import (
+    ExtractionError,
+    chain_ingestion_policies,
+    drifted_code_entry_ids,
+)
 from ..knowledge.endorsement import chain_rejected_ids, chain_superseded_ids, entry_digest
 from ..knowledge.model import Channel, Curation, Entry
 from ..knowledge.repos import RepoConfigError, load_repos
@@ -67,11 +71,15 @@ def read_project(project_id: str, path: Path) -> tuple[list[ForeignEntry], list[
     try:
         declared = load_repos(workdir)
         drifted = (
-            drifted_code_entry_ids(workdir, entries)
+            drifted_code_entry_ids(
+                workdir,
+                entries,
+                policies=chain_ingestion_policies(records) if records is not None else None,
+            )
             if (workdir / ".git").exists() or declared
             else set()
         )
-    except RepoConfigError as exc:
+    except (ExtractionError, RepoConfigError) as exc:
         drifted = {entry.id for entry in entries if entry.source.channel is Channel.CODE}
         warnings.append(
             FederationWarning(project_id, f"repository configuration is invalid: {exc}")

@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -155,7 +156,12 @@ def run_demo(workspace: Path, *, agent: str, offline: bool) -> Path:
         os.chdir(project)
         _step(cli.main, ["init", "--no-skill"])
         _step(cli.main, ["--agent", agent, "ingest", "--from", "code", "."])
-        _step(cli.main, ["knowledge", "list"])
+        from loreloop.knowledge.store import KnowledgeStore
+
+        with KnowledgeStore(project / ".loreloop/knowledge.db") as store:
+            original = store.list()[0]
+        _step(cli.main, ["knowledge", "show", original.id[:8]])
+        _step(cli.main, ["knowledge", "approve", original.id[:8]])
         _step(
             cli.main,
             [
@@ -183,7 +189,29 @@ def run_demo(workspace: Path, *, agent: str, offline: bool) -> Path:
         _step(cli.main, ["--agent", agent, "verify", run_id, url, "contains:Upload limit: 8 MiB"])
         _step(cli.main, ["report", run_id])
         _step(cli.main, ["--agent", agent, "harvest", run_id])
+        _step(cli.main, ["knowledge", "review", "--stale"])
+        with KnowledgeStore(project / ".loreloop/knowledge.db") as store:
+            updated = next(
+                entry
+                for entry in store.list()
+                if entry.source.channel.value == "code" and "8 MiB" in entry.content
+            )
+            acceptance = next(entry for entry in store.list() if entry.kind.value == "acceptance")
+        _step(cli.main, ["knowledge", "show", updated.id[:8]])
+        _step(cli.main, ["knowledge", "approve", updated.id[:8]])
+        _step(cli.main, ["knowledge", "show", acceptance.id[:8]])
+        _step(cli.main, ["knowledge", "approve", acceptance.id[:8]])
+        _step(
+            cli.main,
+            ["knowledge", "supersede", updated.id[:8], original.id[:8], "--yes"],
+        )
+        _step(cli.main, ["knowledge", "list", "--active"])
+        _step(cli.main, ["knowledge", "review", "--status", "draft"])
         print(f"\nComplete: the reproducible demo workspace is {project}")
+        print("Continue with:")
+        print(f"  cd {shlex.quote(str(project))}")
+        print(f"  export LORELOOP_KEY_DIR={shlex.quote(str(workspace / 'keys'))}")
+        print("  loreloop knowledge review --status draft")
         return project
     finally:
         if server is not None:

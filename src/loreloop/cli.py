@@ -15,13 +15,24 @@ from .delegate.runner import DelegateRunner
 from .evidence.chain import ChainVerificationError, EvidenceChain
 from .federation.reader import ForeignEntry
 from .federation.registry import Project
-from .knowledge.code_reverse import dirty_source_files, reverse_code
+from .knowledge.code_reverse import (
+    IngestionPolicy,
+    chain_ingestion_policies,
+    dirty_source_files,
+    ingestion_policies_payload,
+    record_ingestion_policy,
+    reverse_code,
+    scan_repo_manifest,
+)
 from .knowledge.endorsement import (
     SUPERSEDE_EVENT,
+    UNSUPERSEDE_EVENT,
     assert_trust_projection,
     chain_contradicted_ids,
     chain_endorsed_strong_ids,
+    chain_effective_curation,
     chain_rejected_ids,
+    chain_supersession_links,
     chain_superseded_ids,
     curate,
     record_reingested,
@@ -30,7 +41,7 @@ from .knowledge.endorsement import (
 from .knowledge.model import Curation, Entry
 from .knowledge.store import KnowledgeStore
 from .paths import StatePathError, ensure_state_root, key_directory, state_path, state_root
-from .report.acceptance import RunTraceError, load_run, record_check, render_report
+from .report.acceptance import RunTraceError, evaluate_run, load_run, record_check, render_report
 
 # run ids are used to build filesystem paths; a strict shape rules out
 # traversal like "../../etc/passwd" without any path canonicalization games.
@@ -99,6 +110,25 @@ def _add_agent_option(parser: argparse.ArgumentParser) -> None:
         default=argparse.SUPPRESS,
         help="override the coding-agent CLI for this action",
     )
+
+
+def _add_knowledge_filters(parser: argparse.ArgumentParser) -> None:
+    from .knowledge.model import Channel, Kind
+
+    parser.add_argument(
+        "--status",
+        choices=[value.value for value in Curation],
+        help="filter by curation status",
+    )
+    parser.add_argument(
+        "--channel", choices=[value.value for value in Channel], help="filter by source channel"
+    )
+    parser.add_argument(
+        "--kind", choices=[value.value for value in Kind], help="filter by knowledge kind"
+    )
+    parser.add_argument("--active", action="store_true", help="exclude all chain-retired entries")
+    parser.add_argument("--limit", type=int, default=50, help="maximum entries to display")
+    parser.add_argument("--offset", type=int, default=0, help="entries to skip before display")
 
 
 def _run_trace(workdir: Path, run_id: str) -> Path | None:
@@ -297,16 +327,59 @@ def _probe_writable_directory(path: Path, *, create: bool = False) -> tuple[bool
 
 def cmd_ingest(args: argparse.Namespace) -> int:
     workdir = _workdir()
+    code_policy = None
     if args.source == "code":
         repo_name, repo = _resolve_ingest_repo(workdir, args.target)
-        dirty = dirty_source_files(repo)
+        try:
+            code_policy = IngestionPolicy(
+                include=tuple(args.include),
+                exclude=tuple(args.exclude),
+                max_file_bytes=args.max_file_bytes,
+            )
+        except ValueError as exc:
+            raise CLIError(
+                "invalid ingestion policy",
+                str(exc),
+                "fix --include/--exclude patterns or set --max-file-bytes to a positive integer",
+            ) from exc
+        dirty = dirty_source_files(repo, policy=code_policy)
         if dirty:
             raise CLIError(
                 "code source is not clean",
                 "uncommitted source files cannot be anchored to Git HEAD: " + ", ".join(dirty[:10]),
                 "commit or discard those source changes, then rerun `loreloop ingest`",
             )
-        entries = reverse_code(_inference_agent(args.agent), repo, repo_name=repo_name)
+        try:
+            manifest = scan_repo_manifest(repo, policy=code_policy)
+        except ValueError as exc:
+            raise CLIError(
+                "invalid ingestion limits",
+                str(exc),
+                "set `--max-file-bytes` to a positive integer",
+            ) from exc
+        strict_skips = {
+            reason: paths for reason, paths in manifest.skipped.items() if reason != "excluded"
+        }
+        if args.strict and strict_skips:
+            detail = ", ".join(
+                f"{reason}={len(paths)}" for reason, paths in sorted(strict_skips.items())
+            )
+            raise CLIError(
+                "code ingestion coverage is incomplete",
+                detail,
+                "add explicit --include/--exclude rules or adjust --max-file-bytes, then retry",
+            )
+        entries = reverse_code(
+            _inference_agent(args.agent), repo, files=manifest.files, repo_name=repo_name
+        )
+        skipped = ", ".join(
+            f"{reason}={len(paths)}" for reason, paths in sorted(manifest.skipped.items())
+        )
+        print(
+            f"ingestion manifest: tracked={manifest.tracked}, scanned={len(manifest.files)}, "
+            f"skipped={manifest.skipped_count}" + (f" ({skipped})" if skipped else ""),
+            file=sys.stderr,
+        )
     else:
         from .webexplore.browser import PlaywrightBrowser
         from .webexplore.explorer import Explorer
@@ -347,14 +420,20 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             browser.close()
     refreshed = 0
     chain = EvidenceChain.for_workdir(workdir)
+    if code_policy is not None:
+        record_ingestion_policy(chain, repo_name, code_policy)
     with _store(workdir) as store:
         for entry in entries:
-            stored, was_refreshed = store.add_or_refresh(entry)
+            stored, was_refreshed = store.plan_add_or_refresh(entry)
             if was_refreshed:
                 record_reingested(chain, stored)
+                store.apply_refresh(stored)
                 refreshed += 1
+            else:
+                store.add(stored)
     suffix = f" ({refreshed} source anchor(s) refreshed)" if refreshed else ""
     print(f"ingested {len(entries)} knowledge entries from {args.target}{suffix}")
+    print("Next: loreloop knowledge review --status draft")
     return 0
 
 
@@ -596,6 +675,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         if args.with_related
         else []
     )
+    current_policies = chain_ingestion_policies(records)
     result = runner.run(
         args.task,
         entries,
@@ -603,6 +683,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         endorsed_ids=endorsed,
         expansion=expansion,
         related=related,
+        ingestion_policies=current_policies,
     )
     chain_only = [e for e in result.pack.strong if e.id in endorsed and not e.is_strong_evidence()]
     if chain_only:
@@ -622,12 +703,21 @@ def cmd_run(args: argparse.Namespace) -> int:
             "context_entries": result.pack.entry_ids,
             "base_commits": result.base_commits,
             "related_entries": result.pack.related_ids,
+            "ingestion_policies": ingestion_policies_payload(
+                current_policies, set(result.base_commits)
+            ),
         },
     )
     print(result.output)
     print(
         f"\n[LoreLoop] run {result.run_id}: injected {len(result.pack.entry_ids)} entries, "
         f"trace at {result.trace_path}",
+        file=sys.stderr,
+    )
+    print(
+        f"[LoreLoop] next: record live proof with `loreloop check {result.run_id} ...` "
+        f"or `loreloop verify {result.run_id} ...`, then run "
+        f"`loreloop report {result.run_id}`",
         file=sys.stderr,
     )
     strong_web = [e for e in result.pack.strong if e.source.channel is Channel.WEB]
@@ -647,7 +737,6 @@ def cmd_run(args: argparse.Namespace) -> int:
 def _select_related_entries(
     workdir: Path, task: str, expansion: str, limit: int
 ) -> list[ForeignEntry]:
-    from .delegate.context_pack import rank_entries
     from .federation.reader import read_project
     from .federation.registry import RegistryError, load_projects, related_projects
 
@@ -655,7 +744,7 @@ def _select_related_entries(
         raise RegistryError("related limit must be at least 1")
     projects = load_projects()
     overlap = dict(related_projects(workdir))
-    candidates = []
+    foreign: list[ForeignEntry] = []
     seen_paths: set[Path] = set()
     for project_id, _ in sorted(overlap.items(), key=lambda item: (-item[1], item[0])):
         project = projects[project_id]
@@ -665,19 +754,14 @@ def _select_related_entries(
         entries, warnings = read_project(project_id, project.path)
         for warning in warnings:
             print(f"warning [{warning.project_id}]: {warning.message}", file=sys.stderr)
-        by_id = {item.entry.id: item for item in entries}
-        ranked = rank_entries(
-            task,
-            [item.entry for item in entries],
-            limit=max(limit * 2, limit),
-            drifted_ids={item.entry.id for item in entries if item.drifted_there},
-            endorsed_ids={item.entry.id for item in entries if item.strong_there},
-            expansion=expansion,
-        )
-        for ranked_entry in ranked:
-            candidates.append(
-                (overlap[project_id], ranked_entry.adjusted_score, by_id[ranked_entry.entry.id])
-            )
+        foreign.extend(entries)
+    ranked = _rank_foreign_entries(
+        task,
+        foreign,
+        limit=max(len(foreign), limit),
+        expansion=expansion,
+    )
+    candidates = [(overlap[item.project_id], score, item) for score, item in ranked]
     candidates.sort(key=lambda item: (-item[0], -item[1], item[2].project_id, item[2].entry.id))
     return [item for _, _, item in candidates[:limit]]
 
@@ -754,12 +838,16 @@ def cmd_report(args: argparse.Namespace) -> int:
         trace = traces[-1]
     from .evidence.artifacts import ArtifactStore
 
-    report = render_report(
-        load_run(trace),
-        EvidenceChain.for_workdir(workdir),
-        artifacts=ArtifactStore.for_workdir(workdir),
-    )
+    run = load_run(trace)
+    chain = EvidenceChain.for_workdir(workdir)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    evaluation = evaluate_run(run, chain, artifacts)
+    report = render_report(run, chain, artifacts=artifacts)
     print(report)
+    if evaluation.accepted:
+        print(f"Next: loreloop harvest {trace.stem}")
+    else:
+        print(f"Next: satisfy the missing checks, then rerun `loreloop report {trace.stem}`")
     return 0
 
 
@@ -804,7 +892,7 @@ def cmd_harvest(args: argparse.Namespace) -> int:
     if result.stale:
         print(
             f"  {len(result.stale)} existing entries anchored before this run "
-            f"touch changed files — review with `loreloop knowledge list --stale`:"
+            f"touch changed files — review with `loreloop knowledge review --stale`:"
         )
         for entry in result.stale:
             print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})")
@@ -825,6 +913,7 @@ def cmd_harvest(args: argparse.Namespace) -> int:
         )
         for entry in result.demoted:
             print(f"    {entry.id[:8]}  {entry.title}  ({entry.source.locator})", file=sys.stderr)
+    print("Next: loreloop knowledge review --status draft")
     return 0
 
 
@@ -833,6 +922,10 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
     with _store(workdir) as store:
         if args.action == "list":
             return _list_entries(args, workdir, store)
+        elif args.action == "show":
+            return _show_entry(args, workdir, store)
+        elif args.action == "review":
+            return _review_entries(args, workdir, store)
         elif args.action == "search":
             return _search_entries(args, workdir, store)
         elif args.action == "import":
@@ -843,6 +936,8 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
             return _curate(args, workdir, store)
         elif args.action == "supersede":
             return _supersede(args, workdir, store)
+        elif args.action == "unsupersede":
+            return _unsupersede(args, workdir, store)
         elif args.action == "verify":
             return _verify_entries(args, workdir, store)
         elif args.action == "usage":
@@ -888,7 +983,6 @@ def _knowledge_usage(workdir: Path, store: KnowledgeStore) -> int:
 
 
 def _search_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
-    from .delegate.context_pack import rank_entries
     from .federation.reader import grade_local_entries, read_project
     from .federation.registry import load_projects
 
@@ -918,7 +1012,7 @@ def _search_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
         local_entries = store.list()
         groups.append(
             grade_local_entries(
-                ".", local_entries, records, _drifted_entries(workdir, local_entries)
+                ".", local_entries, records, _drifted_entries(workdir, local_entries, records)
             )
         )
     seen_paths: set[Path] = set()
@@ -934,18 +1028,11 @@ def _search_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
     for warning in warnings:
         print(f"warning [{warning.project_id}]: {warning.message}", file=sys.stderr)
 
-    ranked: list[tuple[float, ForeignEntry]] = []
-    for group in groups:
-        candidates = [item.entry for item in group]
-        by_id = {item.entry.id: item for item in group}
-        group_ranked = rank_entries(
-            query,
-            candidates,
-            limit=max(args.limit * 2, args.limit),
-            drifted_ids={item.entry.id for item in group if item.drifted_there},
-            endorsed_ids={item.entry.id for item in group if item.strong_there},
-        )
-        ranked.extend((item.adjusted_score, by_id[item.entry.id]) for item in group_ranked)
+    ranked = _rank_foreign_entries(
+        query,
+        [item for group in groups for item in group],
+        limit=max(args.limit * 2, args.limit),
+    )
     ranked.sort(key=lambda pair: (-pair[0], pair[1].project_id, pair[1].entry.id))
     for _, item in ranked[: args.limit]:
         print(
@@ -955,6 +1042,41 @@ def _search_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
     if not ranked:
         print("no matching knowledge entries")
     return 0
+
+
+def _rank_foreign_entries(
+    query: str,
+    items: list[ForeignEntry],
+    *,
+    limit: int,
+    expansion: str = "",
+) -> list[tuple[float, ForeignEntry]]:
+    """Rank every project in one corpus so BM25 scores are comparable."""
+    from dataclasses import replace
+
+    from .delegate.context_pack import rank_entries
+
+    prepared = []
+    by_synthetic_id: dict[str, ForeignEntry] = {}
+    drifted: set[str] = set()
+    endorsed: set[str] = set()
+    for index, item in enumerate(items):
+        synthetic_id = f"federated-{index}-{item.entry.id}"
+        prepared.append(replace(item.entry, id=synthetic_id))
+        by_synthetic_id[synthetic_id] = item
+        if item.drifted_there:
+            drifted.add(synthetic_id)
+        if item.strong_there:
+            endorsed.add(synthetic_id)
+    ranked = rank_entries(
+        query,
+        prepared,
+        limit=limit,
+        drifted_ids=drifted,
+        endorsed_ids=endorsed,
+        expansion=expansion,
+    )
+    return [(row.adjusted_score, by_synthetic_id[row.entry.id]) for row in ranked]
 
 
 def _resolve_project_selector(selector: str, projects: dict[str, Project]) -> Project:
@@ -1058,18 +1180,33 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
     records = EvidenceChain.for_workdir(workdir).verify()
     superseded = chain_superseded_ids(records)
     rejected = chain_rejected_ids(records)
+    effective_curation = chain_effective_curation(records)
     contradicted = chain_contradicted_ids(records)
     assert_trust_projection(entries, records, retired_ids=superseded | rejected)
     endorsed = chain_endorsed_strong_ids(entries, records)
     unendorsed = unendorsed_strong_ids(entries, records)
-    drifted = _drifted_entries(workdir, entries)
+    drifted = _drifted_entries(workdir, entries, records)
+    entries = _filter_knowledge_entries(
+        entries,
+        args,
+        drifted,
+        superseded | rejected,
+        effective_curation,
+    )
     if args.stale:
         entries = [e for e in entries if e.id in drifted and e.id not in superseded]
         if not entries:
             print("no stale entries: every code anchor matches the current tree")
             return 0
+    entries = entries[args.offset : args.offset + args.limit]
     for e in entries:
-        demoted = e.id in unendorsed or e.id in rejected or e.id in contradicted or e.id in drifted
+        demoted = (
+            e.id in unendorsed
+            or e.id in rejected
+            or e.id in contradicted
+            or e.id in drifted
+            or e.id in superseded
+        )
         chain_backed = e.id in endorsed
         strong = "strong" if (e.is_strong_evidence() or chain_backed) and not demoted else "ref"
         flags = ""
@@ -1085,8 +1222,169 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
             flags += "  [superseded]"
         if e.id in drifted:
             flags += "  [stale: source changed since capture]"
+        effective = effective_curation.get(e.id, Curation.DRAFT)
+        if e.trust.curation is not effective:
+            flags += (
+                f"  [curation cache mismatch: stored={e.trust.curation.value}, "
+                f"effective={effective.value}]"
+            )
         print(f"{e.id[:8]}  [{e.kind.value:<12}] [{strong:<6}] {e.title}{flags}")
     return 0
+
+
+def _filter_knowledge_entries(
+    entries: list[Entry],
+    args: argparse.Namespace,
+    drifted: set[str],
+    retired: set[str],
+    effective_curation: dict[str, Curation],
+) -> list[Entry]:
+    if args.status:
+        entries = [
+            entry
+            for entry in entries
+            if effective_curation.get(entry.id, Curation.DRAFT).value == args.status
+        ]
+    if args.channel:
+        entries = [entry for entry in entries if entry.source.channel.value == args.channel]
+    if args.kind:
+        entries = [entry for entry in entries if entry.kind.value == args.kind]
+    if getattr(args, "stale", False):
+        entries = [entry for entry in entries if entry.id in drifted]
+    if getattr(args, "active", False):
+        entries = [entry for entry in entries if entry.id not in retired]
+    if args.limit < 1:
+        raise CLIError("invalid pagination", "--limit must be at least 1", "use a positive limit")
+    if args.offset < 0:
+        raise CLIError("invalid pagination", "--offset cannot be negative", "use zero or greater")
+    return entries
+
+
+def _knowledge_state(workdir: Path, store: KnowledgeStore):
+    entries = store.list()
+    records = EvidenceChain.for_workdir(workdir).verify()
+    superseded = chain_superseded_ids(records)
+    rejected = chain_rejected_ids(records)
+    contradicted = chain_contradicted_ids(records)
+    assert_trust_projection(entries, records, retired_ids=superseded | rejected)
+    return {
+        "entries": entries,
+        "records": records,
+        "superseded": superseded,
+        "rejected": rejected,
+        "contradicted": contradicted,
+        "curation": chain_effective_curation(records),
+        "endorsed": chain_endorsed_strong_ids(entries, records),
+        "unendorsed": unendorsed_strong_ids(entries, records),
+        "drifted": _drifted_entries(workdir, entries, records),
+        "links": chain_supersession_links(records),
+    }
+
+
+def _show_entry(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
+    entry = _resolve_entry(store, args.entry_id)
+    state = _knowledge_state(workdir, store)
+    _print_entry_details(entry, state)
+    return 0
+
+
+def _review_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
+    state = _knowledge_state(workdir, store)
+    entries = state["entries"]
+    if not args.status and not args.stale:
+        args.status = Curation.DRAFT.value
+    entries = _filter_knowledge_entries(
+        entries,
+        args,
+        state["drifted"],
+        state["superseded"] | state["rejected"],
+        state["curation"],
+    )
+    entries = entries[args.offset : args.offset + args.limit]
+    if not entries:
+        print("no knowledge entries require review for the selected filters")
+        return 0
+    for index, entry in enumerate(entries):
+        if index:
+            print("\n" + "-" * 72)
+        _print_entry_details(entry, state)
+        if entry.id in state["drifted"]:
+            print(
+                "Next: inspect new drafts with `loreloop knowledge review --status draft`, "
+                f"then run `loreloop knowledge supersede <new-id> {entry.id[:8]} --yes` "
+                "or reject it with "
+                f"`loreloop knowledge reject {entry.id[:8]}`"
+            )
+        elif entry.id not in state["superseded"] and entry.id not in state["rejected"]:
+            print(
+                "Next: "
+                f"loreloop knowledge approve {entry.id[:8]}  |  "
+                f"loreloop knowledge reject {entry.id[:8]}"
+            )
+    return 0
+
+
+def _print_entry_details(entry: Entry, state: dict) -> None:
+    demoted = (
+        entry.id in state["unendorsed"]
+        or entry.id in state["rejected"]
+        or entry.id in state["contradicted"]
+        or entry.id in state["drifted"]
+        or entry.id in state["superseded"]
+    )
+    chain_backed = entry.id in state["endorsed"]
+    strength = (
+        "strong" if (entry.is_strong_evidence() or chain_backed) and not demoted else "reference"
+    )
+    by_id = {item.id: item for item in state["entries"]}
+    flags = [
+        name
+        for name, present in (
+            ("unendorsed", entry.id in state["unendorsed"]),
+            ("rejected", entry.id in state["rejected"]),
+            ("contradicted", entry.id in state["contradicted"]),
+            ("superseded", entry.id in state["superseded"]),
+            ("stale", entry.id in state["drifted"]),
+        )
+        if present
+    ]
+    print(f"ID: {entry.id}")
+    print(f"Title: {entry.title}")
+    print(f"Kind: {entry.kind.value}")
+    print(f"Content: {entry.content}")
+    print(f"Effective trust: {strength}" + (f" ({', '.join(flags)})" if flags else ""))
+    effective_curation = state["curation"].get(entry.id, Curation.DRAFT)
+    print(f"Effective curation: {effective_curation.value}")
+    stored_curation = entry.trust.curation.value
+    mismatch = " (cache mismatch)" if entry.trust.curation is not effective_curation else ""
+    print(f"Stored curation: {stored_curation}{mismatch}")
+    print(f"Verification: {entry.trust.verification.value}")
+    print(f"Verified at: {entry.trust.verified_at.isoformat() if entry.trust.verified_at else '-'}")
+    print(f"Verified by: {entry.trust.verified_by or '-'}")
+    print(f"Source channel: {entry.source.channel.value}")
+    print(f"Source locator: {entry.source.locator}")
+    print(f"Source snapshot: {entry.source.snapshot_ref or '-'}")
+    print(f"Source symbol: {entry.source.symbol or '-'}")
+    line_range = (
+        f"{entry.source.line_start}-{entry.source.line_end}"
+        if entry.source.line_start is not None
+        else "-"
+    )
+    print(f"Source lines: {line_range}")
+    print(f"Source excerpt: {entry.source.excerpt or '-'}")
+    print(f"Created at: {entry.created_at.isoformat()}")
+    print(f"Updated at: {entry.updated_at.isoformat()}")
+    relations = []
+    for new_id, old_id in sorted(state["links"]):
+        if new_id == entry.id:
+            target = by_id.get(old_id)
+            relations.append(f"supersedes {old_id[:8]} ({target.title if target else 'missing'})")
+        elif old_id == entry.id:
+            source = by_id.get(new_id)
+            relations.append(
+                f"superseded by {new_id[:8]} ({source.title if source else 'missing'})"
+            )
+    print(f"Relations: {', '.join(relations) if relations else '-'}")
 
 
 def _export_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
@@ -1098,7 +1396,8 @@ def _export_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
     assert_trust_projection(entries, records, retired_ids=superseded | rejected)
     endorsed = chain_endorsed_strong_ids(entries, records)
     unendorsed = unendorsed_strong_ids(entries, records)
-    drifted = _drifted_entries(workdir, entries)
+    drifted = _drifted_entries(workdir, entries, records)
+    effective_curation = chain_effective_curation(records)
     if args.stale:
         entries = [e for e in entries if e.id in drifted and e.id not in superseded]
 
@@ -1117,6 +1416,7 @@ def _export_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
             or entry.id in rejected
             or entry.id in contradicted
             or entry.id in drifted
+            or entry.id in superseded
         )
         chain_backed = entry.id in endorsed
         strength = (
@@ -1141,7 +1441,8 @@ def _export_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
             f"- ID: `{entry.id}`",
             f"- Kind: `{entry.kind.value}`",
             f"- Strength: `{strength}`",
-            f"- Curation: `{entry.trust.curation.value}`",
+            f"- Effective curation: `{effective_curation.get(entry.id, Curation.DRAFT).value}`",
+            f"- Stored curation: `{entry.trust.curation.value}`",
             f"- Verification: `{entry.trust.verification.value}`",
             f"- Source: `{entry.source.channel.value}` `{_md_escape(entry.source.locator)}`",
             f"- Snapshot: `{entry.source.snapshot_ref or ''}`",
@@ -1165,13 +1466,16 @@ def _md_escape(text: str) -> str:
     return text.replace("\r", " ").replace("\n", " ")
 
 
-def _drifted_entries(workdir: Path, entries: list[Entry]) -> set[str]:
+def _drifted_entries(workdir: Path, entries: list[Entry], records=None) -> set[str]:
     from .knowledge.code_reverse import drifted_code_entry_ids
     from .knowledge.repos import load_repos
 
     if not (workdir / ".git").exists() and not load_repos(workdir):
         return set()
-    return drifted_code_entry_ids(workdir, entries)
+    policies = chain_ingestion_policies(
+        records if records is not None else EvidenceChain.for_workdir(workdir).verify()
+    )
+    return drifted_code_entry_ids(workdir, entries, policies=policies)
 
 
 def _supersede(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
@@ -1179,12 +1483,83 @@ def _supersede(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -
 
     new = _resolve_entry(store, args.new_entry_id)
     old = _resolve_entry(store, args.old_entry_id)
+    if not args.yes:
+        raise CLIError(
+            "supersession requires confirmation",
+            f"this retires {old.id[:8]} from knowledge injection until explicitly restored",
+            "review both entries, then repeat the command with `--yes`",
+        )
+    if new.id == old.id:
+        raise CLIError(
+            "invalid supersession",
+            "an entry cannot supersede itself",
+            "choose two different knowledge entries",
+        )
+    chain = EvidenceChain.for_workdir(workdir)
+    records = chain.verify()
+    active = chain_supersession_links(records)
+    retired = chain_superseded_ids(records) | chain_rejected_ids(records)
+    if new.id in retired or old.id in retired:
+        target = new if new.id in retired else old
+        raise CLIError(
+            "invalid supersession",
+            f"entry {target.id[:8]} is already retired",
+            "restore it with `loreloop knowledge unsupersede` or choose an active entry",
+        )
+    edge = (new.id, old.id)
+    if edge in active:
+        raise CLIError(
+            "invalid supersession",
+            "that supersession relationship is already active",
+            "inspect the entries with `loreloop knowledge show`",
+        )
+    graph: dict[str, set[str]] = {}
+    for source, target in active:
+        graph.setdefault(source, set()).add(target)
+    pending = [old.id]
+    visited: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current == new.id:
+            raise CLIError(
+                "invalid supersession",
+                "the relationship would create a supersession cycle",
+                "restore or revise the existing relationship before adding this one",
+            )
+        if current not in visited:
+            visited.add(current)
+            pending.extend(graph.get(current, ()))
     # Supersession silences an entry at injection time — a trust-affecting
     # act, so it is endorsed on the chain like curation. Chain first.
-    EvidenceChain.for_workdir(workdir).append(SUPERSEDE_EVENT, {"new_id": new.id, "old_id": old.id})
+    chain.append(SUPERSEDE_EVENT, {"new_id": new.id, "old_id": old.id})
     store.add_link(Link(from_id=new.id, to_id=old.id, link_type=LinkType.SUPERSEDES))
     print(f"superseded: {old.title}  ({old.id[:8]})")
     print(f"        by: {new.title}  ({new.id[:8]})")
+    return 0
+
+
+def _unsupersede(args: argparse.Namespace, workdir: Path, store: KnowledgeStore) -> int:
+    from .knowledge.model import LinkType
+
+    new = _resolve_entry(store, args.new_entry_id)
+    old = _resolve_entry(store, args.old_entry_id)
+    if not args.yes:
+        raise CLIError(
+            "supersession recovery requires confirmation",
+            f"this restores {old.id[:8]} to active knowledge",
+            "review both entries, then repeat the command with `--yes`",
+        )
+    chain = EvidenceChain.for_workdir(workdir)
+    if (new.id, old.id) not in chain_supersession_links(chain.verify()):
+        raise CLIError(
+            "supersession relationship not found",
+            "the specified active relationship does not exist",
+            "inspect the entry relationships with `loreloop knowledge show`",
+        )
+    chain.append(UNSUPERSEDE_EVENT, {"new_id": new.id, "old_id": old.id})
+    store.remove_link(new.id, old.id, LinkType.SUPERSEDES)
+    print(f"restored: {old.title}  ({old.id[:8]})")
+    print(f" removed: superseded by {new.title}  ({new.id[:8]})")
     return 0
 
 
@@ -1291,8 +1666,33 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_ingest = sub.add_parser("ingest", help="reverse-engineer knowledge from a source")
     p_ingest.add_argument("--from", dest="source", choices=["code", "web"], required=True)
-    p_ingest.add_argument("target")
+    p_ingest.add_argument("target", help="Git repository path/name or starting web URL")
     p_ingest.add_argument("--max-pages", type=int, default=20)
+    p_ingest.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="include an additional tracked-file glob; may be repeated",
+    )
+    p_ingest.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="exclude a tracked-file glob; may be repeated",
+    )
+    p_ingest.add_argument(
+        "--max-file-bytes",
+        type=int,
+        default=256_000,
+        help="maximum bytes read from one code file (default: 256000)",
+    )
+    p_ingest.add_argument(
+        "--strict",
+        action="store_true",
+        help="fail when tracked files are skipped without an explicit --exclude",
+    )
     p_ingest.add_argument(
         "--headed", action="store_true", help="show the browser window (needed for login handover)"
     )
@@ -1343,14 +1743,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.set_defaults(func=cmd_verify)
 
     p_run = sub.add_parser("run", help="delegate a task with injected knowledge")
-    p_run.add_argument("task")
+    p_run.add_argument("task", help="development task to delegate")
     p_run.add_argument(
         "--no-expand",
         action="store_true",
         help="skip LLM query expansion; retrieve with the task text only",
     )
-    p_run.add_argument("--with-related", action="store_true")
-    p_run.add_argument("--related-limit", type=int, default=5)
+    p_run.add_argument(
+        "--with-related",
+        action="store_true",
+        help="include relevant references from registered related projects",
+    )
+    p_run.add_argument(
+        "--related-limit", type=int, default=5, help="maximum related-project references"
+    )
     _add_agent_option(p_run)
     p_run.set_defaults(func=cmd_run)
 
@@ -1384,7 +1790,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_knowledge_list.add_argument(
         "--stale", action="store_true", help="only entries whose code anchor drifted"
     )
+    _add_knowledge_filters(p_knowledge_list)
     p_knowledge_list.set_defaults(func=cmd_knowledge)
+
+    p_knowledge_show = knowledge_sub.add_parser(
+        "show", help="show one entry's full assertion, trust, evidence and relationships"
+    )
+    p_knowledge_show.add_argument("entry_id", metavar="ENTRY_ID")
+    p_knowledge_show.set_defaults(func=cmd_knowledge)
+
+    p_knowledge_review = knowledge_sub.add_parser(
+        "review", help="review filtered entries with complete source evidence"
+    )
+    p_knowledge_review.add_argument(
+        "--stale", action="store_true", help="only entries whose code anchor drifted"
+    )
+    _add_knowledge_filters(p_knowledge_review)
+    p_knowledge_review.set_defaults(func=cmd_knowledge)
 
     p_knowledge_search = knowledge_sub.add_parser(
         "search", help="search local or federated knowledge"
@@ -1429,7 +1851,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_knowledge_supersede.add_argument("new_entry_id", metavar="NEW_ENTRY_ID")
     p_knowledge_supersede.add_argument("old_entry_id", metavar="OLD_ENTRY_ID")
+    p_knowledge_supersede.add_argument(
+        "--yes", action="store_true", help="confirm retirement of the old entry"
+    )
     p_knowledge_supersede.set_defaults(func=cmd_knowledge)
+
+    p_knowledge_unsupersede = knowledge_sub.add_parser(
+        "unsupersede", help="restore an entry retired by a supersession relationship"
+    )
+    p_knowledge_unsupersede.add_argument("new_entry_id", metavar="NEW_ENTRY_ID")
+    p_knowledge_unsupersede.add_argument("old_entry_id", metavar="OLD_ENTRY_ID")
+    p_knowledge_unsupersede.add_argument(
+        "--yes", action="store_true", help="confirm restoration of the old entry"
+    )
+    p_knowledge_unsupersede.set_defaults(func=cmd_knowledge)
 
     p_knowledge_verify = knowledge_sub.add_parser(
         "verify", help="recheck web knowledge against live pages"

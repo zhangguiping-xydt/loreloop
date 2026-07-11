@@ -329,6 +329,18 @@ def test_agent_runner_uses_utf8_for_cross_platform_subprocess_io(monkeypatch):
     assert captured["errors"] == "replace"
 
 
+def test_agent_runner_surfaces_stdout_when_cli_exits_without_stderr(monkeypatch):
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args[0], 1, stdout="provider connection failed", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(AgentError, match="provider connection failed"):
+        AgentRunner(command=("agent",)).run("extract")
+
+
 def test_delegate_traces_unendorsed_entries(tmp_path):
     agent = FakeAgent()
     result = DelegateRunner(agent, tmp_path).run(
@@ -436,6 +448,44 @@ def test_agent_runner_profiles_use_explicit_least_privilege_modes(tmp_path):
 
     codex_delegation = delegation_runner("codex", tmp_path)
     assert ("--sandbox", "workspace-write") == codex_delegation.command[2:4]
+
+
+def test_codex_inference_inherits_only_connection_config(tmp_path, monkeypatch):
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        """
+model = "configured-model"
+model_reasoning_effort = "xhigh"
+model_provider = "company-relay"
+
+[model_providers.company-relay]
+name = "Company Relay"
+base_url = "https://relay.example/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+supports_websockets = false
+http_headers = { Authorization = "must-not-leak" }
+
+[mcp_servers.private]
+url = "https://private.example/mcp"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("LORELOOP_CODEX_REASONING_EFFORT", "low")
+
+    command = inference_runner("codex").command
+    rendered = " ".join(command)
+
+    assert "--ignore-user-config" in command
+    assert 'model="configured-model"' in command
+    assert 'model_reasoning_effort="low"' in command
+    assert 'model_provider="company-relay"' in command
+    assert 'model_providers.company-relay.base_url="https://relay.example/v1"' in command
+    assert 'model_providers.company-relay.env_key="OPENAI_API_KEY"' in command
+    assert "must-not-leak" not in rendered
+    assert "mcp_servers" not in rendered
 
 
 def test_agent_runner_strips_operator_capabilities_and_isolates_inference(

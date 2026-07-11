@@ -183,45 +183,26 @@ class KnowledgeStore:
         that was actually read. Chain replay will demote any old endorsement
         until the operator explicitly re-approves the refreshed digest.
         """
-        with self._conn:
-            self._conn.execute("BEGIN IMMEDIATE")
-            existing = self.find_duplicate(entry)
-            if existing is None:
-                self._conn.execute(
-                    """INSERT INTO entries (
-                        id, title, content, kind, channel, locator, snapshot_ref,
-                        source_symbol, source_line_start, source_line_end, source_excerpt,
-                        curation, verification, verified_at, verified_by, created_at, updated_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        entry.id,
-                        entry.title,
-                        entry.content,
-                        entry.kind.value,
-                        entry.source.channel.value,
-                        entry.source.locator,
-                        entry.source.snapshot_ref,
-                        entry.source.symbol,
-                        entry.source.line_start,
-                        entry.source.line_end,
-                        entry.source.excerpt,
-                        entry.trust.curation.value,
-                        entry.trust.verification.value,
-                        _iso(entry.trust.verified_at),
-                        entry.trust.verified_by,
-                        _iso(entry.created_at),
-                        _iso(entry.updated_at),
-                    ),
-                )
-                return entry, False
+        prospective, refreshed = self.plan_add_or_refresh(entry)
+        if refreshed:
+            self.apply_refresh(prospective)
+        else:
+            self.add(prospective)
+        return prospective, refreshed
 
-            if (
-                entry.title == existing.title
-                and entry.kind is existing.kind
-                and entry.source == existing.source
-            ):
-                return existing, False
-            refreshed = Entry(
+    def plan_add_or_refresh(self, entry: Entry) -> tuple[Entry, bool]:
+        """Compute the row ingestion would leave without mutating SQLite."""
+        existing = self.find_duplicate(entry)
+        if existing is None:
+            return entry, False
+        if (
+            entry.title == existing.title
+            and entry.kind is existing.kind
+            and entry.source == existing.source
+        ):
+            return existing, False
+        return (
+            Entry(
                 id=existing.id,
                 title=entry.title,
                 content=entry.content,
@@ -230,7 +211,14 @@ class KnowledgeStore:
                 trust=existing.trust,
                 created_at=existing.created_at,
                 updated_at=entry.updated_at,
-            )
+            ),
+            True,
+        )
+
+    def apply_refresh(self, refreshed: Entry) -> Entry:
+        """Atomically materialize a previously planned refresh."""
+        self._require(refreshed.id)
+        with self._conn:
             self._conn.execute(
                 """UPDATE entries SET
                     title = ?, kind = ?, locator = ?, snapshot_ref = ?,
@@ -250,7 +238,7 @@ class KnowledgeStore:
                     refreshed.id,
                 ),
             )
-            return refreshed, True
+        return self._require(refreshed.id)
 
     def _migrate(self) -> None:
         """Apply ordered migrations with a pre-upgrade backup and rollback.
@@ -319,6 +307,16 @@ class KnowledgeStore:
         entry = self._require(entry_id)
         if new not in CURATION_TRANSITIONS[entry.trust.curation]:
             raise InvalidTransition(f"{entry.trust.curation.value} -> {new.value}")
+        with self._conn:
+            self._conn.execute(
+                "UPDATE entries SET curation = ?, updated_at = ? WHERE id = ?",
+                (new.value, _iso(now), entry_id),
+            )
+        return self._require(entry_id)
+
+    def project_curation(self, entry_id: str, new: Curation, now: datetime) -> Entry:
+        """Materialize a chain-authorized curation without consulting cache state."""
+        self._require(entry_id)
         with self._conn:
             self._conn.execute(
                 "UPDATE entries SET curation = ?, updated_at = ? WHERE id = ?",
@@ -419,6 +417,13 @@ class KnowledgeStore:
             self._conn.execute(
                 "INSERT OR IGNORE INTO links VALUES (?,?,?,?)",
                 (link.from_id, link.to_id, link.link_type.value, _iso(link.created_at)),
+            )
+
+    def remove_link(self, from_id: str, to_id: str, link_type: LinkType) -> None:
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM links WHERE from_id = ? AND to_id = ? AND link_type = ?",
+                (from_id, to_id, link_type.value),
             )
 
     def superseded_ids(self) -> set[str]:

@@ -55,16 +55,26 @@ options:
 
 $ loreloop ingest --help
 usage: loreloop ingest [-h] --from {code,web} [--max-pages MAX_PAGES]
-                       [--headed] [--agent {claude,codex}]
+                       [--include GLOB] [--exclude GLOB]
+                       [--max-file-bytes MAX_FILE_BYTES] [--strict] [--headed]
+                       [--agent {claude,codex}]
                        target
 
 positional arguments:
-  target
+  target                Git repository path/name or starting web URL
 
 options:
   -h, --help            show this help message and exit
   --from {code,web}
   --max-pages MAX_PAGES
+  --include GLOB        include an additional tracked-file glob; may be
+                        repeated
+  --exclude GLOB        exclude a tracked-file glob; may be repeated
+  --max-file-bytes MAX_FILE_BYTES
+                        maximum bytes read from one code file (default:
+                        256000)
+  --strict              fail when tracked files are skipped without an
+                        explicit --exclude
   --headed              show the browser window (needed for login handover)
   --agent {claude,codex}
                         override the coding-agent CLI for this action
@@ -173,14 +183,16 @@ usage: loreloop run [-h] [--no-expand] [--with-related]
                     task
 
 positional arguments:
-  task
+  task                  development task to delegate
 
 options:
   -h, --help            show this help message and exit
   --no-expand           skip LLM query expansion; retrieve with the task text
                         only
-  --with-related
+  --with-related        include relevant references from registered related
+                        projects
   --related-limit RELATED_LIMIT
+                        maximum related-project references
   --agent {claude,codex}
                         override the coding-agent CLI for this action
 
@@ -224,12 +236,15 @@ options:
 
 $ loreloop knowledge --help
 usage: loreloop knowledge [-h]
-                          {list,search,import,export,approve,reject,reopen,supersede,verify,usage}
+                          {list,show,review,search,import,export,approve,reject,reopen,supersede,unsupersede,verify,usage}
                           ...
 
 positional arguments:
-  {list,search,import,export,approve,reject,reopen,supersede,verify,usage}
+  {list,show,review,search,import,export,approve,reject,reopen,supersede,unsupersede,verify,usage}
     list                list knowledge and trust state
+    show                show one entry's full assertion, trust, evidence and
+                        relationships
+    review              review filtered entries with complete source evidence
     search              search local or federated knowledge
     import              copy a foreign entry into the local draft store
     export              export knowledge and effective trust as Markdown
@@ -237,6 +252,8 @@ positional arguments:
     reject              reject one entry and retire it from injection
     reopen              return a rejected entry to draft for renewed review
     supersede           retire an old entry in favor of a new entry
+    unsupersede         restore an entry retired by a supersession
+                        relationship
     verify              recheck web knowledge against live pages
     usage               show injection and accepted-run correlation
 
@@ -245,10 +262,52 @@ options:
 
 $ loreloop knowledge list --help
 usage: loreloop knowledge list [-h] [--stale]
+                               [--status {draft,approved,rejected}]
+                               [--channel {code,web,image,manual,evidence}]
+                               [--kind {requirement,interface,architecture,behavior,constraint,acceptance}]
+                               [--active] [--limit LIMIT] [--offset OFFSET]
+
+options:
+  -h, --help            show this help message and exit
+  --stale               only entries whose code anchor drifted
+  --status {draft,approved,rejected}
+                        filter by curation status
+  --channel {code,web,image,manual,evidence}
+                        filter by source channel
+  --kind {requirement,interface,architecture,behavior,constraint,acceptance}
+                        filter by knowledge kind
+  --active              exclude all chain-retired entries
+  --limit LIMIT         maximum entries to display
+  --offset OFFSET       entries to skip before display
+
+$ loreloop knowledge show --help
+usage: loreloop knowledge show [-h] ENTRY_ID
+
+positional arguments:
+  ENTRY_ID
 
 options:
   -h, --help  show this help message and exit
-  --stale     only entries whose code anchor drifted
+
+$ loreloop knowledge review --help
+usage: loreloop knowledge review [-h] [--stale]
+                                 [--status {draft,approved,rejected}]
+                                 [--channel {code,web,image,manual,evidence}]
+                                 [--kind {requirement,interface,architecture,behavior,constraint,acceptance}]
+                                 [--active] [--limit LIMIT] [--offset OFFSET]
+
+options:
+  -h, --help            show this help message and exit
+  --stale               only entries whose code anchor drifted
+  --status {draft,approved,rejected}
+                        filter by curation status
+  --channel {code,web,image,manual,evidence}
+                        filter by source channel
+  --kind {requirement,interface,architecture,behavior,constraint,acceptance}
+                        filter by knowledge kind
+  --active              exclude all chain-retired entries
+  --limit LIMIT         maximum entries to display
+  --offset OFFSET       entries to skip before display
 
 $ loreloop knowledge search --help
 usage: loreloop knowledge search [-h] [--all | --project PROJECT] [--tag TAG]
@@ -311,7 +370,7 @@ options:
   -h, --help  show this help message and exit
 
 $ loreloop knowledge supersede --help
-usage: loreloop knowledge supersede [-h] NEW_ENTRY_ID OLD_ENTRY_ID
+usage: loreloop knowledge supersede [-h] [--yes] NEW_ENTRY_ID OLD_ENTRY_ID
 
 positional arguments:
   NEW_ENTRY_ID
@@ -319,6 +378,18 @@ positional arguments:
 
 options:
   -h, --help    show this help message and exit
+  --yes         confirm retirement of the old entry
+
+$ loreloop knowledge unsupersede --help
+usage: loreloop knowledge unsupersede [-h] [--yes] NEW_ENTRY_ID OLD_ENTRY_ID
+
+positional arguments:
+  NEW_ENTRY_ID
+  OLD_ENTRY_ID
+
+options:
+  -h, --help    show this help message and exit
+  --yes         confirm restoration of the old entry
 
 $ loreloop knowledge verify --help
 usage: loreloop knowledge verify [-h] [--headed] [--agent {claude,codex}]

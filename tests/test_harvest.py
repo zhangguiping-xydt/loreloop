@@ -67,7 +67,7 @@ def write_trace(workdir, run_id, base_commit, finished=True):
     return path
 
 
-def start_run(repo, chain, run_id, base_commit, finished=True):
+def start_run(repo, chain, run_id, base_commit, finished=True, ingestion_policies=None):
     """Trace file plus — when the run really completed — the chain-endorsed
     delegation_completed record that report/harvest treat as authority."""
     trace = write_trace(repo, run_id, base_commit, finished=finished)
@@ -77,14 +77,17 @@ def start_run(repo, chain, run_id, base_commit, finished=True):
             if isinstance(base_commit, dict)
             else {"base_commit": base_commit}
         )
+        payload = {
+            "run_id": run_id,
+            "task": "fix upload",
+            "context_entries": [],
+            **base_field,
+        }
+        if ingestion_policies is not None:
+            payload["ingestion_policies"] = ingestion_policies
         chain.append(
             "delegation_completed",
-            {
-                "run_id": run_id,
-                "task": "fix upload",
-                "context_entries": [],
-                **base_field,
-            },
+            payload,
         )
     return trace
 
@@ -538,6 +541,70 @@ def test_harvest_resumes_db_materialization_after_chain_first_crash(env):
     assert [record.event for record in chain.verify()].count("knowledge_harvested") == 1
 
 
+def test_harvest_resumes_signed_materialization_before_rechecking_acceptance(env):
+    repo, store, chain, artifacts = env
+    trace = start_run(repo, chain, "run-resume-late-failure", head_of(repo))
+    check = "upload rejects files over 50MB"
+    record_browser_check(chain, "run-resume-late-failure", check=check, artifacts=artifacts)
+    original_add = store.add
+    store.add = lambda _entry: (_ for _ in ()).throw(OSError("DB unavailable"))
+
+    with pytest.raises(OSError, match="DB unavailable"):
+        harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    chain.append(
+        "check_failed",
+        {"run_id": "run-resume-late-failure", "check": check, "detail": "later regression"},
+    )
+    store.add = original_add
+
+    resumed = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    assert resumed.resumed
+    assert len(resumed.minted) == 1
+
+
+def test_harvest_reuses_signed_custom_ingestion_policy_for_changed_files(env):
+    repo, store, chain, artifacts = env
+    (repo / "upload.avsc").write_text('{"limit": 5}\n')
+    git(repo, "add", "upload.avsc")
+    git(repo, "commit", "-m", "add avro contract")
+    base = head_of(repo)
+    pinned = {".": {"include": ["*.avsc"], "exclude": [], "max_file_bytes": 256_000}}
+    trace = start_run(repo, chain, "run-avsc", base, ingestion_policies=pinned)
+    record_browser_check(chain, "run-avsc", artifacts=artifacts)
+    chain.append(
+        "code_ingestion_policy_set",
+        {
+            "repo_name": ".",
+            "policy": {"include": [], "exclude": [], "max_file_bytes": 256_000},
+        },
+    )
+    (repo / "upload.avsc").write_text('{"limit": 8}\n')
+    git(repo, "add", "upload.avsc")
+    git(repo, "commit", "-m", "raise avro limit")
+    runner = FakeRunner(
+        [
+            json.dumps(
+                [
+                    {
+                        "claim": "The Avro upload limit is 8.",
+                        "title": "Avro upload limit",
+                        "file": "upload.avsc",
+                    }
+                ]
+            ),
+            json.dumps([{"id": 0, "kind": "constraint"}]),
+        ]
+    )
+
+    result = harvest_run(load_run(trace), chain, store, runner, repo, artifacts=artifacts)
+
+    assert [entry.source.locator.split("@")[0] for entry in result.reversed_entries] == [
+        "upload.avsc"
+    ]
+
+
 def test_harvest_dedupes_repeated_checks(env):
     repo, store, chain, artifacts = env
     trace = start_run(repo, chain, "run-x", head_of(repo))
@@ -710,6 +777,51 @@ def test_harvest_chain_failure_leaves_existing_draft_untouched(env):
     stored = store.get(draft.id)
     assert stored.trust.verification is Verification.UNVERIFIED
     assert not stored.is_strong_evidence()
+
+
+def test_harvest_chain_failure_leaves_existing_code_anchor_untouched(env):
+    from datetime import datetime, timezone
+
+    from loreloop.knowledge.endorsement import curate
+
+    repo, store, chain, artifacts = env
+    base = head_of(repo)
+    existing = Entry(
+        title="Upload contract",
+        content="POST /upload returns 201.",
+        kind=Kind.INTERFACE,
+        source=Source(channel=Channel.CODE, locator=f"api.py@{base}", snapshot_ref=base),
+    )
+    store.add(existing)
+    curate(store, chain, existing.id, Curation.APPROVED, datetime.now(timezone.utc))
+    trace = start_run(repo, chain, "run-reanchor-failure", base)
+    record_browser_check(chain, "run-reanchor-failure", artifacts=artifacts)
+    (repo / "api.py").write_text("def upload(): return 201\n# current\n")
+    git(repo, "add", "api.py")
+    git(repo, "commit", "-m", "update source")
+    extract = json.dumps([{"claim": existing.content, "title": existing.title, "file": "api.py"}])
+    classify = json.dumps([{"id": 0, "kind": "interface"}])
+    original_append = chain.append
+
+    def broken_append(event, payload):
+        if event == "knowledge_harvested":
+            raise OSError("disk full")
+        return original_append(event, payload)
+
+    chain.append = broken_append
+    with pytest.raises(OSError):
+        harvest_run(
+            load_run(trace),
+            chain,
+            store,
+            FakeRunner([extract, classify]),
+            repo,
+            artifacts=artifacts,
+        )
+
+    stored = store.get(existing.id)
+    assert stored.source.snapshot_ref == base
+    assert stored.source.locator == f"api.py@{base}"
 
 
 def test_harvest_lists_prior_strong_entries_on_minted_pages_for_review(env):

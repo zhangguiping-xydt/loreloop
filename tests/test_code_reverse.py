@@ -6,6 +6,7 @@ import pytest
 
 from loreloop.knowledge.code_reverse import (
     ExtractionError,
+    IngestionPolicy,
     RawAssertion,
     classify_assertions,
     dirty_source_files,
@@ -13,6 +14,7 @@ from loreloop.knowledge.code_reverse import (
     extract_assertions,
     reverse_code,
     scan_repo,
+    scan_repo_manifest,
 )
 from loreloop.knowledge.model import Channel, Curation, Entry, Kind, Source, Verification
 from loreloop.knowledge.repos import save_repos
@@ -81,6 +83,36 @@ def test_scan_repo_rejects_tracked_symlink_escape(repo):
     assert link not in scan_repo(repo)
 
 
+def test_scan_manifest_covers_contract_files_and_reports_every_skip(repo):
+    (repo / "schema.proto").write_text("message Upload {}\n")
+    (repo / "Dockerfile").write_text("FROM python:3.12\n")
+    (repo / "custom.contract").write_text("upload=enabled\n")
+    (repo / "oversize.md").write_text("x" * 100)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "contracts"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+    manifest = scan_repo_manifest(
+        repo,
+        include=("*.contract",),
+        exclude=("notes.txt",),
+        max_file_bytes=80,
+    )
+
+    assert {path.name for path in manifest.files} >= {
+        "app.py",
+        "schema.proto",
+        "Dockerfile",
+        "custom.contract",
+    }
+    assert manifest.skipped["excluded"] == ["notes.txt"]
+    assert manifest.skipped["too-large"] == ["oversize.md"]
+
+
 def test_dirty_source_files_includes_staged_unstaged_and_untracked(repo):
     (repo / "app.py").write_text("def upload():\n    return 202\n")
     (repo / "policy.yaml").write_text("max_upload: 50\n")
@@ -88,6 +120,15 @@ def test_dirty_source_files_includes_staged_unstaged_and_untracked(repo):
     (repo / "fresh.ts").write_text("export const enabled = true;\n")
 
     assert dirty_source_files(repo) == ["app.py", "fresh.ts", "policy.yaml"]
+
+
+def test_dirty_source_files_uses_the_same_custom_ingestion_policy(repo):
+    (repo / "contract.avsc").write_text('{"limit": 8}\n')
+    (repo / "README.md").write_text("changed documentation\n")
+
+    policy = IngestionPolicy(include=("*.avsc",), exclude=("README.md",))
+
+    assert dirty_source_files(repo, policy=policy) == ["contract.avsc"]
 
 
 def test_reverse_code_splits_batches_by_total_source_bytes(repo):
@@ -138,6 +179,13 @@ def test_reverse_code_produces_anchored_entries(repo):
     assert e.source.excerpt == "def upload():\n    return 201"
     assert e.trust.curation is Curation.DRAFT
     assert e.trust.verification is Verification.UNVERIFIED
+
+
+def test_extraction_rejects_non_string_claim_fields(repo):
+    runner = FakeRunner([json.dumps([{"claim": 123, "title": "Value", "file": "app.py"}])])
+
+    with pytest.raises(ExtractionError, match="claim must be a non-empty string"):
+        extract_assertions(runner, repo, [repo / "app.py"])
 
 
 def test_reverse_code_prefixes_declared_repository(repo):

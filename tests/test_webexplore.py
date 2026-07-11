@@ -310,6 +310,13 @@ def test_extract_web_rejects_unknown_url():
         extract_web_assertions(FakeRunner([out]), [UPLOAD])
 
 
+def test_extract_web_rejects_non_string_assertion_fields():
+    out = json.dumps([{"claim": 50, "title": "Upload limit", "url": UPLOAD.url}])
+
+    with pytest.raises(ExtractionError, match="claim must be a non-empty string"):
+        extract_web_assertions(FakeRunner([out]), [UPLOAD])
+
+
 def test_web_reverse_marks_page_content_as_nonce_delimited_untrusted_data():
     poisoned = Observation(
         url="http://app.local/upload",

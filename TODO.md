@@ -92,3 +92,18 @@ model correctly in their own words.
 
 Acceptance: local release artifacts and automation are auditable; external publishing is not
 considered complete until provider-side and hosting-side configuration is verified.
+
+## 8. Knowledge governance audit follow-up
+
+- [x] Add full entry inspection, filtered/paginated review queues, and complete source evidence.
+- [x] Make supersession reversible, confirmation-gated, cycle-safe, and always demoted in views.
+- [x] Make ingest refresh and harvest re-anchoring chain-first with signed recovery material.
+- [x] Report ingestion coverage, sign per-repository include/exclude/size policy, and pin the
+      complete policy map to each run before harvest.
+- [x] Rank federated and related-project candidates in one comparable BM25 corpus.
+- [x] Preserve demo key continuation instructions and finish the post-harvest curation loop.
+- [x] Drive status filters and active-entry decisions from chain-replayed effective curation.
+- [x] Authorize curation transitions from chain state and use SQLite only as projection.
+- [x] Resume an already signed harvest before considering later acceptance-check changes.
+- [ ] Complete the three-person zero-context usability study in section 6; automated agents and
+      fixture demos must not be reported as human-participant evidence.

@@ -16,11 +16,19 @@ import secrets
 import stat
 import subprocess
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 
 from ..agents import AgentRunner
+from ..evidence.chain import EvidenceChain, EvidenceRecord
 from .model import Channel, Entry, Kind, Source
-from .repos import RepoConfigError, format_code_locator, load_repos, parse_code_locator
+from .repos import (
+    RepoConfigError,
+    format_code_locator,
+    load_repos,
+    parse_code_locator,
+    validate_repo_name,
+)
 
 DEFAULT_EXTENSIONS = (
     ".py",
@@ -53,10 +61,19 @@ DEFAULT_EXTENSIONS = (
     ".yaml",
     ".yml",
     ".toml",
+    ".json",
+    ".json5",
+    ".proto",
+    ".graphql",
+    ".gql",
+    ".md",
+    ".mdx",
 )
-_MAX_FILE_BYTES = 60_000
+DEFAULT_FILENAMES = ("Dockerfile", "Containerfile")
+_MAX_FILE_BYTES = 256_000
 _MAX_BATCH_FILES = 8
 _MAX_BATCH_BYTES = 180_000
+INGESTION_POLICY_EVENT = "code_ingestion_policy_set"
 EXTRACT_PROMPT_VERSION = "code-extract-v3"
 CLASSIFY_PROMPT_VERSION = "claim-classify-v2"
 
@@ -133,6 +150,114 @@ class ExtractionError(Exception):
 
 
 @dataclass(frozen=True)
+class IngestionPolicy:
+    include: tuple[str, ...] = ()
+    exclude: tuple[str, ...] = ()
+    max_file_bytes: int = _MAX_FILE_BYTES
+
+    def __post_init__(self) -> None:
+        for label, patterns in (("include", self.include), ("exclude", self.exclude)):
+            if any(
+                not isinstance(pattern, str) or not pattern or "\x00" in pattern
+                for pattern in patterns
+            ):
+                raise ValueError(f"{label} patterns must be non-empty strings")
+        if self.max_file_bytes < 1:
+            raise ValueError("max_file_bytes must be at least 1")
+
+    def payload(self) -> dict:
+        return {
+            "include": list(self.include),
+            "exclude": list(self.exclude),
+            "max_file_bytes": self.max_file_bytes,
+        }
+
+
+def record_ingestion_policy(chain: EvidenceChain, repo_name: str, policy: IngestionPolicy) -> None:
+    _validate_policy_repo_name(repo_name)
+    chain.append(
+        INGESTION_POLICY_EVENT,
+        {"repo_name": repo_name, "policy": policy.payload()},
+    )
+
+
+def _policy_from_payload(payload: object) -> IngestionPolicy:
+    if not isinstance(payload, dict):
+        raise ExtractionError("signed code ingestion policy is invalid")
+    include = payload.get("include")
+    exclude = payload.get("exclude")
+    max_file_bytes = payload.get("max_file_bytes")
+    if (
+        not isinstance(include, list)
+        or not isinstance(exclude, list)
+        or not isinstance(max_file_bytes, int)
+        or isinstance(max_file_bytes, bool)
+    ):
+        raise ExtractionError("signed code ingestion policy is invalid")
+    try:
+        return IngestionPolicy(tuple(include), tuple(exclude), max_file_bytes)
+    except ValueError as exc:
+        raise ExtractionError(f"signed code ingestion policy is invalid: {exc}") from exc
+
+
+def _validate_policy_repo_name(repo_name: str) -> None:
+    if repo_name == ".":
+        return
+    try:
+        validate_repo_name(repo_name)
+    except RepoConfigError as exc:
+        raise ExtractionError(f"invalid repository in ingestion policy: {repo_name!r}") from exc
+
+
+def chain_ingestion_policies(records: list[EvidenceRecord]) -> dict[str, IngestionPolicy]:
+    policies: dict[str, IngestionPolicy] = {}
+    for record in records:
+        if record.event != INGESTION_POLICY_EVENT:
+            continue
+        payload = record.payload
+        if "repo_name" in payload or "policy" in payload:
+            repo_name = payload.get("repo_name")
+            if not isinstance(repo_name, str):
+                raise ExtractionError("signed code ingestion policy repository is invalid")
+            _validate_policy_repo_name(repo_name)
+            policies[repo_name] = _policy_from_payload(payload.get("policy"))
+        else:
+            # Compatibility with the first policy event format, which applied
+            # only to the root repository.
+            policies["."] = _policy_from_payload(payload)
+    return policies
+
+
+def chain_ingestion_policy(records: list[EvidenceRecord], repo_name: str = ".") -> IngestionPolicy:
+    return chain_ingestion_policies(records).get(repo_name, IngestionPolicy())
+
+
+def ingestion_policies_payload(
+    policies: dict[str, IngestionPolicy], repo_names: set[str] | list[str]
+) -> dict[str, dict]:
+    return {
+        repo_name: policies.get(repo_name, IngestionPolicy()).payload()
+        for repo_name in sorted(repo_names)
+    }
+
+
+def parse_ingestion_policies_payload(
+    payload: object, *, required_repos: set[str] | None = None
+) -> dict[str, IngestionPolicy]:
+    if not isinstance(payload, dict):
+        raise ExtractionError("signed run ingestion policies are invalid")
+    policies: dict[str, IngestionPolicy] = {}
+    for repo_name, raw_policy in payload.items():
+        if not isinstance(repo_name, str):
+            raise ExtractionError("signed run ingestion policy repository is invalid")
+        _validate_policy_repo_name(repo_name)
+        policies[repo_name] = _policy_from_payload(raw_policy)
+    if required_repos is not None and set(policies) != required_repos:
+        raise ExtractionError("signed run ingestion policies do not match its repositories")
+    return policies
+
+
+@dataclass(frozen=True)
 class RawAssertion:
     claim: str
     title: str
@@ -143,17 +268,59 @@ class RawAssertion:
     excerpt: str | None = None
 
 
+@dataclass(frozen=True)
+class ScanManifest:
+    tracked: int
+    files: list[Path]
+    skipped: dict[str, list[str]]
+
+    @property
+    def skipped_count(self) -> int:
+        return sum(len(paths) for paths in self.skipped.values())
+
+
 def scan_repo(repo: Path, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS) -> list[Path]:
+    return scan_repo_manifest(repo, extensions=extensions).files
+
+
+def scan_repo_manifest(
+    repo: Path,
+    *,
+    extensions: tuple[str, ...] = DEFAULT_EXTENSIONS,
+    include: tuple[str, ...] = (),
+    exclude: tuple[str, ...] = (),
+    max_file_bytes: int = _MAX_FILE_BYTES,
+    policy: IngestionPolicy | None = None,
+) -> ScanManifest:
+    policy = policy or IngestionPolicy(include, exclude, max_file_bytes)
     repo = repo.resolve()
     tracked = _git_paths(repo, "ls-files", "-z")
-    files = []
+    files: list[Path] = []
+    skipped: dict[str, list[str]] = {}
+
+    def skip(reason: str, relpath: str) -> None:
+        skipped.setdefault(reason, []).append(relpath)
+
     for relpath in tracked:
-        if not relpath.endswith(extensions):
+        if _is_loreloop_state(relpath):
+            continue
+        if any(fnmatch(relpath, pattern) for pattern in policy.exclude):
+            skip("excluded", relpath)
+            continue
+        supported = relpath.endswith(extensions) or Path(relpath).name in DEFAULT_FILENAMES
+        if policy.include:
+            supported = supported or any(fnmatch(relpath, pattern) for pattern in policy.include)
+        if not supported:
+            skip("unsupported", relpath)
             continue
         path = _safe_regular_source(repo, relpath)
-        if path is not None and path.stat().st_size <= _MAX_FILE_BYTES:
+        if path is None:
+            skip("unsafe-or-non-regular", relpath)
+        elif path.stat().st_size > policy.max_file_bytes:
+            skip("too-large", relpath)
+        else:
             files.append(path)
-    return files
+    return ScanManifest(tracked=len(tracked), files=files, skipped=skipped)
 
 
 def repo_head(repo: Path) -> str:
@@ -163,7 +330,11 @@ def repo_head(repo: Path) -> str:
 
 
 def changed_paths(
-    repo: Path, base: str, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS
+    repo: Path,
+    base: str,
+    extensions: tuple[str, ...] = DEFAULT_EXTENSIONS,
+    *,
+    policy: IngestionPolicy | None = None,
 ) -> list[str]:
     """All source paths changed between ``base`` and HEAD — including files
     that no longer exist (deleted, or renamed away). Use for staleness
@@ -171,23 +342,35 @@ def changed_paths(
     sides of a rename: detection would collapse it to the new path only,
     hiding exactly the old entries that need review."""
     lines = _git_paths(repo, "diff", "--name-only", "-z", "--no-renames", f"{base}..HEAD")
-    return [line for line in lines if line.endswith(extensions)]
+    policy = policy or IngestionPolicy()
+    return [line for line in lines if _matches_policy(line, policy, extensions)]
 
 
 def changed_files(
-    repo: Path, base: str, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS
+    repo: Path,
+    base: str,
+    extensions: tuple[str, ...] = DEFAULT_EXTENSIONS,
+    *,
+    policy: IngestionPolicy | None = None,
 ) -> list[Path]:
     """Changed source files that still exist, filtered like scan_repo —
     the reversal targets."""
+    policy = policy or IngestionPolicy()
     return [
         path
-        for p in changed_paths(repo, base, extensions)
+        for p in changed_paths(repo, base, extensions, policy=policy)
         if (path := _safe_regular_source(repo, p)) is not None
-        and path.stat().st_size <= _MAX_FILE_BYTES
+        and path.stat().st_size <= policy.max_file_bytes
     ]
 
 
-def drifted_code_entry_ids(workdir: Path, entries: list[Entry]) -> set[str]:
+def drifted_code_entry_ids(
+    workdir: Path,
+    entries: list[Entry],
+    *,
+    policy: IngestionPolicy | None = None,
+    policies: dict[str, IngestionPolicy] | None = None,
+) -> set[str]:
     """IDs of code-channel entries whose anchored file changed since capture.
 
     Freshness is judged at read time against the anchor, never stored. An
@@ -226,20 +409,43 @@ def drifted_code_entry_ids(workdir: Path, entries: list[Entry]) -> set[str]:
             drifted.update(entry.id for entry, _ in anchored)
             continue
         changed = set(_decode_nul(result.stdout))
-        changed.update(dirty_source_files(repo))
+        repo_policy = (policies or {}).get(repo_name, policy or IngestionPolicy())
+        changed.update(dirty_source_files(repo, policy=repo_policy))
         for entry, relpath in anchored:
             if relpath in changed:
                 drifted.add(entry.id)
     return drifted
 
 
-def dirty_source_files(repo: Path, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS) -> list[str]:
+def dirty_source_files(
+    repo: Path,
+    extensions: tuple[str, ...] = DEFAULT_EXTENSIONS,
+    *,
+    policy: IngestionPolicy | None = None,
+) -> list[str]:
     """Source files with uncommitted changes (staged, unstaged or untracked)."""
     paths: set[str] = set()
     paths.update(_git_paths(repo, "diff", "--name-only", "-z"))
     paths.update(_git_paths(repo, "diff", "--cached", "--name-only", "-z"))
     paths.update(_git_paths(repo, "ls-files", "--others", "--exclude-standard", "-z"))
-    return sorted(path for path in paths if path.endswith(extensions))
+    policy = policy or IngestionPolicy()
+    return sorted(path for path in paths if _matches_policy(path, policy, extensions))
+
+
+def _is_loreloop_state(relpath: str) -> bool:
+    return relpath == ".loreloop" or relpath.startswith(".loreloop/")
+
+
+def _matches_policy(
+    relpath: str, policy: IngestionPolicy, extensions: tuple[str, ...] = DEFAULT_EXTENSIONS
+) -> bool:
+    if _is_loreloop_state(relpath) or any(fnmatch(relpath, pattern) for pattern in policy.exclude):
+        return False
+    return (
+        relpath.endswith(extensions)
+        or Path(relpath).name in DEFAULT_FILENAMES
+        or any(fnmatch(relpath, pattern) for pattern in policy.include)
+    )
 
 
 def extract_assertions(
@@ -283,6 +489,7 @@ def extract_assertions(
     items = parse_json_array(raw, required_keys={"claim", "title", "file"})
     assertions = []
     for item in items:
+        validate_nonempty_string_fields(item, ("claim", "title", "file"))
         if item["file"] not in valid_paths:
             raise ExtractionError(f"extraction referenced unknown file: {item['file']!r}")
         evidence = item.get("evidence") or {}
@@ -350,8 +557,14 @@ def classify_claims(runner: AgentRunner, claims: list[str]) -> list[Kind]:
         )
     kinds: dict[int, Kind] = {}
     for item in items:
+        if (
+            not isinstance(item["id"], int)
+            or isinstance(item["id"], bool)
+            or not isinstance(item["kind"], str)
+        ):
+            raise ExtractionError(f"invalid classification item: {item!r}")
         try:
-            kinds[int(item["id"])] = Kind(item["kind"])
+            kinds[item["id"]] = Kind(item["kind"])
         except (ValueError, KeyError) as exc:
             raise ExtractionError(f"invalid classification item: {item!r}") from exc
     if set(kinds) != set(range(len(claims))):
@@ -499,3 +712,9 @@ def parse_json_array(raw: str, required_keys: set[str]) -> list[dict]:
         if not isinstance(item, dict) or not required_keys.issubset(item):
             raise ExtractionError(f"item missing required keys {required_keys}: {item!r}")
     return data
+
+
+def validate_nonempty_string_fields(item: dict, fields: tuple[str, ...]) -> None:
+    for field in fields:
+        if not isinstance(item[field], str) or not item[field].strip():
+            raise ExtractionError(f"{field} must be a non-empty string: {item[field]!r}")

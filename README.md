@@ -117,7 +117,9 @@ loreloop demo --agent codex
 ```
 
 It creates a disposable Git repository and visibly runs
-`init -> ingest -> run -> verify -> report -> harvest`. Use `--agent claude`
+`init -> ingest -> review/approve -> run -> verify -> report -> harvest -> review/approve/supersede`.
+The final output prints the exact `LORELOOP_KEY_DIR` export needed to continue
+using the retained workspace. Use `--agent claude`
 if preferred. A credential-free plumbing mode used by CI is also available:
 
 ```bash
@@ -138,7 +140,9 @@ loreloop init                            # set up .loreloop/; offers to install 
                                          # companion skill into Claude Code/Codex
 loreloop ingest --from code .            # implementation view: reverse the codebase
 loreloop ingest --from web http://localhost:3000   # behavior view: explore the running app
-loreloop knowledge list                  # inspect entries; approve/reject to curate
+loreloop knowledge list --status draft --channel code --limit 50
+loreloop knowledge show <entry-id>       # full assertion, trust, source span and relations
+loreloop knowledge review --stale        # detailed stale/draft curation queue
 loreloop knowledge export --output loreloop-knowledge.md  # export knowledge as Markdown
 loreloop run "add rate limiting to the upload endpoint"   # delegate with injected knowledge
 loreloop verify <run-id> http://localhost:3000/upload \
@@ -202,10 +206,24 @@ Notes:
   `.loreloop/evidence/artifacts/` and records its hash on the tamper-evident
   chain. Script checks additionally save the script and replay trace artifacts,
   so verdicts can be re-audited after the live page changes.
-- Curation stays human: `knowledge list --stale` shows entries whose anchored
-  source changed since capture; `knowledge supersede <new-id> <old-id>` links
-  a replacement — the old entry stays in the store as history but is no
-  longer injected into runs. LoreLoop never auto-supersedes.
+- Curation stays human: `knowledge review --stale` shows complete assertions,
+  source spans, excerpts and relationships for entries whose anchor changed.
+  `knowledge supersede <new-id> <old-id> --yes` links a replacement after DAG
+  and active-entry validation; the old entry stays as history but is no longer
+  injected. `knowledge unsupersede <new-id> <old-id> --yes` records an explicit
+  recovery event. LoreLoop never auto-supersedes.
+- Code ingestion prints a coverage manifest with tracked, scanned and skipped
+  counts grouped by reason. Common contract files (Proto, GraphQL, JSON,
+  Markdown, Dockerfile) are included by default; use `--include`, `--exclude`,
+  `--max-file-bytes`, or `--strict` to make coverage policy explicit. The latest
+  per-repository policy is signed onto the evidence chain and reused by
+  dirty-tree checks and drift detection. Every delegated run pins the complete
+  repository-policy map in its signed completion record, so later ingestion
+  cannot retroactively alter that run's harvest scope.
+- Status filters and review queues use chain-replayed effective curation, never
+  the agent-writable SQLite cache. `knowledge show` displays both effective and
+  stored curation when they differ. Curation commands also validate transitions
+  against the chain and treat SQLite updates only as projection.
 
 Tests, linters, CLI probes and API test clients can produce re-auditable command
 evidence without a shell:

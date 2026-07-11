@@ -25,6 +25,8 @@ PUBLIC_HELP_PATHS = [
     ("harvest",),
     ("knowledge",),
     ("knowledge", "list"),
+    ("knowledge", "show"),
+    ("knowledge", "review"),
     ("knowledge", "search"),
     ("knowledge", "import"),
     ("knowledge", "export"),
@@ -32,6 +34,7 @@ PUBLIC_HELP_PATHS = [
     ("knowledge", "reject"),
     ("knowledge", "reopen"),
     ("knowledge", "supersede"),
+    ("knowledge", "unsupersede"),
     ("knowledge", "verify"),
     ("knowledge", "usage"),
 ]
@@ -98,6 +101,12 @@ def test_action_help_uses_specific_positional_names():
         "OLD_ENTRY_ID",
     ):
         assert name in text
+
+
+def test_active_filter_help_describes_all_chain_retired_entries():
+    parser = _subparser(_subparser(build_parser(), "knowledge"), "list")
+
+    assert "exclude all chain-retired entries" in parser.format_help()
 
 
 def test_every_public_help_path_runs_through_cli(capsys):

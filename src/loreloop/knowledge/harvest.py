@@ -32,9 +32,20 @@ from ..evidence.artifacts import ArtifactStore
 from ..evidence.chain import EvidenceChain, EvidenceRecord
 from ..evidence.repository_state import repository_states_match
 from ..report.acceptance import RunSummary, evaluate_run
-from .code_reverse import changed_files, changed_paths, dirty_source_files, repo_head, reverse_code
+from .code_reverse import (
+    ExtractionError,
+    IngestionPolicy,
+    chain_ingestion_policies,
+    changed_files,
+    changed_paths,
+    dirty_source_files,
+    ingestion_policies_payload,
+    parse_ingestion_policies_payload,
+    repo_head,
+    reverse_code,
+)
 from .endorsement import chain_superseded_ids, entry_digest, unendorsed_strong_ids
-from .model import Channel, Entry, Kind, Source, Trust, Verification
+from .model import Channel, Curation, Entry, Kind, Source, Trust, Verification
 from .repos import RepoConfigError, parse_code_locator, resolve_repo
 from .store import KnowledgeStore
 
@@ -71,6 +82,16 @@ def harvest_run(
 ) -> HarvestResult:
     workdir = workdir.resolve()
     records = chain.verify()
+    prior = next(
+        (
+            record
+            for record in records
+            if record.event == HARVEST_EVENT and record.payload.get("run_id") == run.run_id
+        ),
+        None,
+    )
+    if prior is not None:
+        return _resume_harvest(run, store, prior, records)
     evaluation = evaluate_run(run, chain, artifacts)
     if not evaluation.accepted:
         raise HarvestError(
@@ -85,21 +106,27 @@ def harvest_run(
                 f"command evidence for {check.payload.get('check')!r} is stale: {reason}; "
                 "rerun the command check against the current repository state"
             )
-    prior = next(
-        (
-            record
-            for record in records
-            if record.event == HARVEST_EVENT and record.payload.get("run_id") == run.run_id
-        ),
-        None,
-    )
-    if prior is not None:
-        return _resume_harvest(run, store, prior, records)
     # The base commit comes from the chain-endorsed delegation_completed
     # record, never from the trace: the trace lives in the agent-writable
     # tree, and a forged base_commit there would steer which files get
     # re-reversed and which entries get flagged stale.
     base_commits = evaluation.base_commits
+    try:
+        completed = evaluation.completed
+        if completed is None:
+            raise ExtractionError("accepted run has no signed completion record")
+        pinned = completed.payload.get("ingestion_policies")
+        if pinned is not None:
+            ingestion_policies = parse_ingestion_policies_payload(
+                pinned, required_repos=set(base_commits)
+            )
+        else:
+            historical = chain_ingestion_policies(records[: completed.index + 1])
+            ingestion_policies = {
+                name: historical.get(name, IngestionPolicy()) for name in base_commits
+            }
+    except ExtractionError as exc:
+        raise HarvestError(str(exc)) from exc
     repos: dict[str, Path] = {}
     for name in base_commits:
         try:
@@ -112,7 +139,7 @@ def harvest_run(
             raise HarvestError(f"repository {name!r} from the run is not a git root: {repo}")
         repos[name] = repo
         try:
-            dirty = dirty_source_files(repo)
+            dirty = dirty_source_files(repo, policy=ingestion_policies[name])
         except subprocess.CalledProcessError as exc:
             raise HarvestError(f"cannot inspect repository {name!r}: git status failed") from exc
         if dirty:
@@ -143,8 +170,8 @@ def harvest_run(
         if head == base:
             continue
         try:
-            touched = changed_paths(repo, base)
-            files = changed_files(repo, base)
+            touched = changed_paths(repo, base, policy=ingestion_policies[name])
+            files = changed_files(repo, base, policy=ingestion_policies[name])
         except subprocess.CalledProcessError as exc:
             raise HarvestError(
                 f"cannot inspect repository {name!r}: base commit {base!r} is invalid"
@@ -160,9 +187,16 @@ def harvest_run(
             files=files,
             repo_name=name,
         )
-        reversed_entries.extend(_store_reanchored(store, entry, head, now) for entry in raw)
+        reversed_entries.extend(_prospective_reanchored(store, entry, head, now) for entry in raw)
     reversed_entries = _dedupe(reversed_entries)
     stale = _stale_entries(store, touched_by_repo, head_commits)
+    refreshed_ids = {
+        entry.id
+        for entry in reversed_entries
+        if entry.source.snapshot_ref
+        == head_commits.get(parse_code_locator(entry.source.locator)[0])
+    }
+    stale = [entry for entry in stale if entry.id not in refreshed_ids]
     review = _review_candidates(
         store,
         [*minted, *reversed_entries],
@@ -186,16 +220,20 @@ def harvest_run(
             "minted": {e.id: entry_digest(e) for e in minted},
             "minted_entries": [_serialize_minted(entry) for entry in minted],
             "reversed": {e.id: entry_digest(e) for e in reversed_entries},
+            "reversed_entries": [_serialize_entry(entry) for entry in reversed_entries],
             "stale": [e.id for e in stale],
             "unauditable_checks": unauditable,
             "review": [e.id for e in review],
             "injected_entries": list(evaluation.completed.payload.get("context_entries", [])),
             "base_commits": base_commits,
             "head_commits": head_commits,
+            "ingestion_policies": ingestion_policies_payload(ingestion_policies, set(base_commits)),
         },
     )
     for e in minted:
         _persist_minted(store, e, run.run_id, now)
+    for e in reversed_entries:
+        _persist_reanchored(store, e)
     return HarvestResult(
         minted=minted,
         reversed_entries=reversed_entries,
@@ -233,11 +271,32 @@ def _resume_harvest(
     ):
         raise HarvestError("recorded harvest recovery data does not match its signed digests")
 
-    complete = all(
+    raw_reversed = record.payload.get("reversed_entries")
+    expected_reversed = record.payload.get("reversed", {})
+    if raw_reversed is None:
+        reversed_entries: list[Entry] = []
+    elif not isinstance(raw_reversed, list) or not isinstance(expected_reversed, dict):
+        raise HarvestError("recorded harvest recovery data is invalid")
+    else:
+        try:
+            reversed_entries = [_deserialize_entry(item) for item in raw_reversed]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HarvestError("recorded harvest recovery data is invalid") from exc
+        if {entry.id for entry in reversed_entries} != set(expected_reversed) or any(
+            entry_digest(entry) != expected_reversed[entry.id] for entry in reversed_entries
+        ):
+            raise HarvestError("recorded harvest recovery data does not match its signed digests")
+
+    minted_complete = all(
         (stored := store.get(entry.id)) is not None and entry_digest(stored) == expected[entry.id]
         for entry in minted
     )
-    if complete:
+    reversed_complete = all(
+        (stored := store.get(entry.id)) is not None
+        and entry_digest(stored) == expected_reversed[entry.id]
+        for entry in reversed_entries
+    )
+    if minted_complete and reversed_complete:
         raise HarvestError(f"run {run.run_id} was already harvested")
     for entry in minted:
         stored = store.get(entry.id)
@@ -254,7 +313,18 @@ def _resume_harvest(
                 f"cannot restore minted entry {entry.id[:8]} to its chain-endorsed content"
             )
 
-    reversed_entries = _entries_from_ids(store, record.payload.get("reversed", {}))
+    for entry in reversed_entries:
+        stored = store.get(entry.id)
+        if stored is None or entry_digest(stored) != expected_reversed[entry.id]:
+            _persist_reanchored(store, entry)
+        restored = store.get(entry.id)
+        if restored is None or entry_digest(restored) != expected_reversed[entry.id]:
+            raise HarvestError(
+                f"cannot restore reversed entry {entry.id[:8]} to its chain-recorded content"
+            )
+
+    if raw_reversed is None:
+        reversed_entries = _entries_from_ids(store, expected_reversed)
     stale = _entries_from_ids(store, record.payload.get("stale", []))
     review = _entries_from_ids(store, record.payload.get("review", []))
     demoted = _demoted_by_reanchor(reversed_entries, records[: record.index])
@@ -276,6 +346,10 @@ def _entries_from_ids(store: KnowledgeStore, values) -> list[Entry]:
 
 
 def _serialize_minted(entry: Entry) -> dict:
+    return _serialize_entry(entry)
+
+
+def _serialize_entry(entry: Entry) -> dict:
     return {
         "id": entry.id,
         "title": entry.title,
@@ -285,10 +359,17 @@ def _serialize_minted(entry: Entry) -> dict:
             "channel": entry.source.channel.value,
             "locator": entry.source.locator,
             "snapshot_ref": entry.source.snapshot_ref,
+            "symbol": entry.source.symbol,
+            "line_start": entry.source.line_start,
+            "line_end": entry.source.line_end,
+            "excerpt": entry.source.excerpt,
         },
         "trust": {
+            "curation": entry.trust.curation.value,
             "verification": entry.trust.verification.value,
-            "verified_at": entry.trust.verified_at.isoformat(),
+            "verified_at": (
+                entry.trust.verified_at.isoformat() if entry.trust.verified_at is not None else None
+            ),
             "verified_by": entry.trust.verified_by,
         },
         "created_at": entry.created_at.isoformat(),
@@ -297,8 +378,13 @@ def _serialize_minted(entry: Entry) -> dict:
 
 
 def _deserialize_minted(data: dict) -> Entry:
+    return _deserialize_entry(data)
+
+
+def _deserialize_entry(data: dict) -> Entry:
     source = data["source"]
     trust = data["trust"]
+    verified_at = trust.get("verified_at")
     return Entry(
         id=data["id"],
         title=data["title"],
@@ -308,10 +394,15 @@ def _deserialize_minted(data: dict) -> Entry:
             channel=Channel(source["channel"]),
             locator=source["locator"],
             snapshot_ref=source.get("snapshot_ref"),
+            symbol=source.get("symbol"),
+            line_start=source.get("line_start"),
+            line_end=source.get("line_end"),
+            excerpt=source.get("excerpt"),
         ),
         trust=Trust(
+            curation=Curation(trust.get("curation", Curation.DRAFT.value)),
             verification=Verification(trust["verification"]),
-            verified_at=datetime.fromisoformat(trust["verified_at"]),
+            verified_at=datetime.fromisoformat(verified_at) if verified_at is not None else None,
             verified_by=trust["verified_by"],
         ),
         created_at=datetime.fromisoformat(data["created_at"]),
@@ -427,8 +518,8 @@ def _persist_minted(store: KnowledgeStore, entry: Entry, run_id: str, now: datet
     )
 
 
-def _store_reanchored(store: KnowledgeStore, entry: Entry, head: str, now: datetime) -> Entry:
-    """Store a re-reversed entry. If the identical claim already exists for
+def _prospective_reanchored(store: KnowledgeStore, entry: Entry, head: str, now: datetime) -> Entry:
+    """Compute a re-reversed row without writing it. If the claim exists for
     the same file, re-anchor the existing entry to head instead of inserting:
     the claim was just re-derived verbatim from the current source, so leaving
     the old anchor would flag it stale/drifted forever despite being fresh.
@@ -438,16 +529,23 @@ def _store_reanchored(store: KnowledgeStore, entry: Entry, head: str, now: datet
     "verbatim claim" that triggered this could itself be steered LLM output."""
     existing = store.find_duplicate(entry)
     if existing is None:
-        return store.add(entry)
+        return entry
     if existing.source.snapshot_ref == head:
         return existing
-    return store.set_snapshot_ref(
-        existing.id,
-        head,
-        now,
-        locator=entry.source.locator,
-        evidence_source=entry.source,
+    return replace(
+        existing,
+        title=entry.title,
+        kind=entry.kind,
+        source=replace(entry.source, snapshot_ref=head),
+        updated_at=now,
     )
+
+
+def _persist_reanchored(store: KnowledgeStore, entry: Entry) -> None:
+    if store.get(entry.id) is None:
+        store.add(entry)
+    else:
+        store.apply_refresh(entry)
 
 
 def _dedupe(entries: list[Entry]) -> list[Entry]:

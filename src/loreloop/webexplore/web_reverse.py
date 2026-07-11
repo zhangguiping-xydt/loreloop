@@ -13,7 +13,12 @@ import secrets
 from dataclasses import dataclass
 
 from ..agents import AgentRunner
-from ..knowledge.code_reverse import ExtractionError, classify_claims, parse_json_array
+from ..knowledge.code_reverse import (
+    ExtractionError,
+    classify_claims,
+    parse_json_array,
+    validate_nonempty_string_fields,
+)
 from ..knowledge.model import Channel, Entry, Source
 from .browser import Observation
 
@@ -83,6 +88,7 @@ def extract_web_assertions(runner: AgentRunner, pages: list[Observation]) -> lis
     items = parse_json_array(raw, required_keys={"claim", "title", "url"})
     assertions = []
     for item in items:
+        validate_nonempty_string_fields(item, ("claim", "title", "url"))
         if item["url"] not in valid_urls:
             raise ExtractionError(f"extraction referenced unknown url: {item['url']!r}")
         assertions.append(

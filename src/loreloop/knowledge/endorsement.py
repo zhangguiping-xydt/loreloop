@@ -33,6 +33,7 @@ from .store import InvalidTransition, KnowledgeStore
 
 CURATION_EVENT = "curation_changed"
 SUPERSEDE_EVENT = "entry_superseded"
+UNSUPERSEDE_EVENT = "entry_supersession_reverted"
 REINGEST_EVENT = "entry_reingested"
 
 
@@ -217,15 +218,29 @@ def assert_trust_projection(
         )
 
 
+def chain_supersession_links(records: list[EvidenceRecord]) -> set[tuple[str, str]]:
+    """Active ``(new_id, old_id)`` supersession edges after chain replay."""
+    active: set[tuple[str, str]] = set()
+    for rec in records:
+        if rec.event not in (SUPERSEDE_EVENT, UNSUPERSEDE_EVENT):
+            continue
+        new_id = rec.payload.get("new_id")
+        old_id = rec.payload.get("old_id")
+        if not new_id or not old_id:
+            continue
+        edge = (new_id, old_id)
+        if rec.event == SUPERSEDE_EVENT:
+            active.add(edge)
+        else:
+            active.discard(edge)
+    return active
+
+
 def chain_superseded_ids(records: list[EvidenceRecord]) -> set[str]:
     """Superseded set as the chain recorded it. The DB links table is in the
     agent-writable tree: deleting a supersedes row there would resurrect a
     retired entry, so activity decisions use the chain, DB links are cache."""
-    return {
-        rec.payload["old_id"]
-        for rec in records
-        if rec.event == SUPERSEDE_EVENT and rec.payload.get("old_id")
-    }
+    return {old_id for _, old_id in chain_supersession_links(records)}
 
 
 def chain_rejected_ids(records: list[EvidenceRecord]) -> set[str]:
@@ -243,6 +258,19 @@ def chain_rejected_ids(records: list[EvidenceRecord]) -> set[str]:
     return {eid for eid, cur in latest.items() if cur == Curation.REJECTED.value}
 
 
+def chain_effective_curation(records: list[EvidenceRecord]) -> dict[str, Curation]:
+    """Latest signed human curation per entry; absent entries remain draft."""
+    latest: dict[str, Curation] = {}
+    for rec in records:
+        if rec.event != CURATION_EVENT or not rec.payload.get("entry_id"):
+            continue
+        try:
+            latest[rec.payload["entry_id"]] = Curation(rec.payload.get("curation"))
+        except ValueError:
+            continue
+    return latest
+
+
 def curate(
     store: KnowledgeStore,
     chain: EvidenceChain,
@@ -256,8 +284,11 @@ def curate(
     entry = store.get(entry_id)
     if entry is None:
         raise KeyError(entry_id)
-    if new not in CURATION_TRANSITIONS[entry.trust.curation]:
-        raise InvalidTransition(f"{entry.trust.curation.value} -> {new.value}")
+    effective = chain_effective_curation(chain.verify()).get(entry_id, Curation.DRAFT)
+    if new not in CURATION_TRANSITIONS[effective]:
+        if effective is new and entry.trust.curation is not new:
+            return store.project_curation(entry_id, new, now)
+        raise InvalidTransition(f"{effective.value} -> {new.value}")
     chain.append(
         CURATION_EVENT,
         {
@@ -267,7 +298,7 @@ def curate(
             "entry": _entry_payload(entry),
         },
     )
-    return store.set_curation(entry_id, new, now)
+    return store.project_curation(entry_id, new, now)
 
 
 def record_reingested(chain: EvidenceChain, entry: Entry) -> EvidenceRecord:

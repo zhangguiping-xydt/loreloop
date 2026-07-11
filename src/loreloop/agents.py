@@ -6,9 +6,11 @@ user already has, so there is no API key configuration of its own.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,9 +53,8 @@ class AgentRunner:
         except subprocess.TimeoutExpired as exc:
             raise AgentError(f"agent call timed out after {self.timeout}s") from exc
         if proc.returncode != 0:
-            raise AgentError(
-                f"agent exited with code {proc.returncode}: {proc.stderr.strip()[:500]}"
-            )
+            detail = proc.stderr.strip() or proc.stdout.strip() or "no diagnostic output"
+            raise AgentError(f"agent exited with code {proc.returncode}: {detail[:500]}")
         return proc.stdout
 
 
@@ -78,6 +79,7 @@ def inference_runner(name: str, *, timeout: float = 600.0) -> AgentRunner:
                 "--ignore-user-config",
                 "--ignore-rules",
                 "--skip-git-repo-check",
+                *_codex_connection_args(),
                 "-",
             ),
             timeout=timeout,
@@ -102,6 +104,60 @@ def inference_runner(name: str, *, timeout: float = 600.0) -> AgentRunner:
         timeout=timeout,
         isolated=True,
     )
+
+
+def _codex_connection_args() -> tuple[str, ...]:
+    """Preserve only model/provider connectivity while ignoring user capabilities.
+
+    ``--ignore-user-config`` is important for inference isolation: user MCP
+    servers, hooks, rules, and other capabilities must not reach an extraction
+    subprocess. Custom Codex providers are connection metadata rather than a
+    capability, though, and dropping them can silently route requests to an
+    unreachable default endpoint. Read a deliberately small allowlist and
+    replay it through explicit ``-c`` overrides; static headers and all other
+    config remain excluded.
+    """
+    home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+    try:
+        config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        config = {}
+
+    model = os.environ.get("LORELOOP_CODEX_MODEL") or config.get("model")
+    effort = os.environ.get("LORELOOP_CODEX_REASONING_EFFORT") or config.get(
+        "model_reasoning_effort"
+    )
+    provider = os.environ.get("LORELOOP_CODEX_PROVIDER") or config.get("model_provider")
+
+    overrides: list[tuple[str, object]] = []
+    for key, value in (
+        ("model", model),
+        ("model_reasoning_effort", effort),
+        ("model_provider", provider),
+    ):
+        if isinstance(value, (str, bool, int, float)):
+            overrides.append((key, value))
+
+    providers = config.get("model_providers")
+    provider_config = providers.get(provider) if isinstance(providers, dict) else None
+    if isinstance(provider, str) and isinstance(provider_config, dict):
+        for key in (
+            "name",
+            "base_url",
+            "env_key",
+            "wire_api",
+            "requires_openai_auth",
+            "supports_websockets",
+        ):
+            value = provider_config.get(key)
+            if isinstance(value, (str, bool, int, float)):
+                overrides.append((f"model_providers.{provider}.{key}", value))
+
+    args: list[str] = []
+    for key, value in overrides:
+        rendered = json.dumps(value) if isinstance(value, str) else str(value).lower()
+        args.extend(("-c", f"{key}={rendered}"))
+    return tuple(args)
 
 
 def delegation_runner(name: str, workdir: Path, *, timeout: float = 600.0) -> AgentRunner:

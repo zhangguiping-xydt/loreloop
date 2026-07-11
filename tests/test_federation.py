@@ -175,6 +175,29 @@ def test_search_tag_without_all_selects_tagged_projects(tmp_path, monkeypatch, c
     assert "[hr-fund]" in capsys.readouterr().out
 
 
+def test_federated_ranking_uses_one_corpus_even_when_entry_ids_collide():
+    from loreloop.cli import _rank_foreign_entries
+    from loreloop.federation.reader import ForeignEntry
+
+    first = manual_entry("Upload contract", "Upload endpoint accepts 50MB files.")
+    second = Entry(
+        id=first.id,
+        title=first.title,
+        content=first.content,
+        kind=first.kind,
+        source=first.source,
+    )
+    items = [
+        ForeignEntry("small", first, False, False, "draft there"),
+        ForeignEntry("large", second, False, False, "draft there"),
+    ]
+
+    ranked = _rank_foreign_entries("upload endpoint", items, limit=10)
+
+    assert [item.project_id for _, item in ranked] == ["small", "large"]
+    assert ranked[0][0] == ranked[1][0]
+
+
 def test_import_is_always_born_draft_with_foreign_digest_provenance(tmp_path, monkeypatch, capsys):
     current = git_repo(tmp_path / "current")
     foreign = git_repo(tmp_path / "foreign")
