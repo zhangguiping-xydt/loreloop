@@ -244,6 +244,55 @@ def test_extract_rejects_fabricated_evidence_excerpt(repo):
         extract_assertions(FakeRunner([out]), repo, [repo / "app.py"])
 
 
+def test_extract_accepts_qualified_module_symbol_derived_from_file_path(repo):
+    source = repo / "src/loreloop/agents.py"
+    source.parent.mkdir(parents=True)
+    source.write_text('"""Agent adapters."""\n\nENABLED = True\n')
+    out = json.dumps(
+        [
+            {
+                "claim": "Agent adapters are enabled.",
+                "title": "Agent adapters",
+                "file": "src/loreloop/agents.py",
+                "evidence": {
+                    "line_start": 3,
+                    "line_end": 3,
+                    "symbol": "loreloop.agents",
+                    "excerpt": "ENABLED = True",
+                },
+            }
+        ]
+    )
+
+    assertions = extract_assertions(FakeRunner([out]), repo, [source])
+
+    assert assertions[0].symbol == "loreloop.agents"
+
+
+def test_extract_still_rejects_missing_qualified_function_or_class_symbol(repo):
+    source = repo / "src/loreloop/agents.py"
+    source.parent.mkdir(parents=True)
+    source.write_text('"""Agent adapters."""\n\nENABLED = True\n')
+    out = json.dumps(
+        [
+            {
+                "claim": "Agent adapters are enabled.",
+                "title": "Agent adapters",
+                "file": "src/loreloop/agents.py",
+                "evidence": {
+                    "line_start": 3,
+                    "line_end": 3,
+                    "symbol": "loreloop.agents.MissingAgent",
+                    "excerpt": "ENABLED = True",
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(ExtractionError, match="MissingAgent.*does not occur"):
+        extract_assertions(FakeRunner([out]), repo, [source])
+
+
 def test_reverse_retries_once_after_deterministic_evidence_rejection(repo):
     bad = json.dumps(
         [

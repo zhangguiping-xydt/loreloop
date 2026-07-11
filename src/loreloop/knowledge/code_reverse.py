@@ -533,15 +533,20 @@ def extract_assertions(
                 raise ExtractionError(
                     f"evidence excerpt does not match {item['file']}:{line_start}-{line_end}"
                 )
-        symbol_leaf = re.split(r"[.:]+", symbol)[-1] if symbol else None
-        if symbol_leaf and symbol_leaf not in "\n".join(source_lines[item["file"]]):
+        normalized_symbol = symbol.strip() if symbol else ""
+        symbol_leaf = re.split(r"[.:]+", normalized_symbol)[-1] if normalized_symbol else None
+        if (
+            symbol_leaf
+            and not _is_python_module_symbol(normalized_symbol, item["file"])
+            and symbol_leaf not in "\n".join(source_lines[item["file"]])
+        ):
             raise ExtractionError(f"evidence symbol {symbol!r} does not occur in {item['file']}")
         assertions.append(
             RawAssertion(
                 claim=item["claim"],
                 title=item["title"],
                 file=item["file"],
-                symbol=symbol.strip() if symbol and symbol.strip() else None,
+                symbol=normalized_symbol or None,
                 line_start=line_start,
                 line_end=line_end,
                 excerpt=excerpt.strip()[:2000] if excerpt and excerpt.strip() else None,
@@ -646,6 +651,28 @@ def _jaccard(left: set[str], right: set[str]) -> float:
 
 def _normalized_excerpt(text: str) -> str:
     return " ".join(text.split())
+
+
+def _is_python_module_symbol(symbol: str, relpath: str) -> bool:
+    """Whether ``symbol`` names the Python module established by ``relpath``.
+
+    A module's qualified name is path evidence, so it need not be repeated in
+    the module body. Matching only an exact dotted suffix keeps longer
+    function/class symbols on the content-evidence validation path.
+    """
+    path = Path(relpath)
+    if path.suffix not in {".py", ".pyi"}:
+        return False
+    module_parts = list(path.with_suffix("").parts)
+    if module_parts and module_parts[-1] == "__init__":
+        module_parts.pop()
+    symbol_parts = symbol.split(".")
+    return (
+        bool(symbol_parts)
+        and all(part.isidentifier() for part in symbol_parts)
+        and len(symbol_parts) <= len(module_parts)
+        and module_parts[-len(symbol_parts) :] == symbol_parts
+    )
 
 
 def _git_paths(repo: Path, *args: str) -> list[str]:
