@@ -223,7 +223,7 @@ def test_extract_rejects_evidence_lines_outside_file(repo):
         extract_assertions(FakeRunner([out]), repo, [repo / "app.py"])
 
 
-def test_extract_rejects_fabricated_evidence_excerpt(repo):
+def test_extract_first_attempt_rejects_fabricated_evidence_excerpt(repo):
     out = json.dumps(
         [
             {
@@ -333,6 +333,102 @@ def test_reverse_retries_once_after_deterministic_evidence_rejection(repo):
     assert len(runner.prompts) == 3
     assert "failed deterministic validation" in runner.prompts[1]
     assert "excerpt does not match app.py:1-2" in runner.prompts[1]
+
+
+def test_reverse_canonicalizes_mismatched_excerpt_on_retry(repo):
+    first_bad = json.dumps(
+        [
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload status",
+                "file": "app.py",
+                "evidence": {
+                    "line_start": 1,
+                    "line_end": 2,
+                    "symbol": "upload",
+                    "excerpt": "return 500",
+                },
+            }
+        ]
+    )
+    retry_bad = json.dumps(
+        [
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload status",
+                "file": "app.py",
+                "evidence": {
+                    "line_start": 1,
+                    "line_end": 2,
+                    "symbol": "upload",
+                    "excerpt": "return 204",
+                },
+            }
+        ]
+    )
+    classified = json.dumps([{"id": 0, "kind": "interface"}])
+    runner = FakeRunner([first_bad, retry_bad, classified])
+
+    entries = reverse_code(runner, repo)
+
+    assert len(entries) == 1
+    assert entries[0].source.excerpt == "def upload():\n    return 201"
+
+
+@pytest.mark.parametrize(
+    ("item", "message"),
+    [
+        (
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload status",
+                "file": "ghost.py",
+                "evidence": {"line_start": 1, "line_end": 1, "excerpt": "fabricated"},
+            },
+            "unknown file",
+        ),
+        (
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload status",
+                "file": "app.py",
+                "evidence": {"line_start": 1, "line_end": 9, "excerpt": "fabricated"},
+            },
+            "line range",
+        ),
+        (
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload status",
+                "file": "app.py",
+                "evidence": {
+                    "line_start": 1,
+                    "line_end": 2,
+                    "symbol": "missing_symbol",
+                    "excerpt": "fabricated",
+                },
+            },
+            "symbol.*does not occur",
+        ),
+        (
+            {
+                "claim": "POST /upload returns 201.",
+                "title": "Upload status",
+                "file": "app.py",
+                "evidence": {"line_start": 1, "line_end": 2, "excerpt": 201},
+            },
+            "excerpt must be a string or null",
+        ),
+    ],
+)
+def test_retry_excerpt_canonicalization_preserves_other_validation(repo, item, message):
+    with pytest.raises(ExtractionError, match=message):
+        extract_assertions(
+            FakeRunner([json.dumps([item])]),
+            repo,
+            [repo / "app.py"],
+            retry_reason="previous validation failure",
+        )
 
 
 def test_reverse_prompt_prioritizes_high_value_facts_and_versions_it(repo):

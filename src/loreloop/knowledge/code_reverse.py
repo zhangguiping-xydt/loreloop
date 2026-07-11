@@ -476,7 +476,7 @@ def extract_assertions(
         blocks.append(f"=== FILE: {rel} ===\n{numbered}")
     nonce = secrets.token_hex(12)
     repair_note = ""
-    if retry_reason:
+    if retry_reason is not None:
         repair_nonce = secrets.token_hex(12)
         repair_note = (
             "Your previous response failed deterministic validation. Correct the full JSON "
@@ -530,9 +530,13 @@ def extract_assertions(
         if excerpt:
             span = "\n".join(source_lines[item["file"]][line_start - 1 : line_end])
             if _normalized_excerpt(excerpt) not in _normalized_excerpt(span):
-                raise ExtractionError(
-                    f"evidence excerpt does not match {item['file']}:{line_start}-{line_end}"
-                )
+                if retry_reason is None:
+                    raise ExtractionError(
+                        f"evidence excerpt does not match {item['file']}:{line_start}-{line_end}"
+                    )
+                # The source identity, range, and evidence types are valid here;
+                # symbol validation still runs below before this item is accepted.
+                excerpt = span
         normalized_symbol = symbol.strip() if symbol else ""
         symbol_leaf = re.split(r"[.:]+", normalized_symbol)[-1] if normalized_symbol else None
         if (

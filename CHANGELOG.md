@@ -31,7 +31,8 @@
 - `repo`, `project`, and `knowledge` actions are real argparse subcommands with
   action-specific positional names.
 - Code extraction uses prompt version `code-extract-v3` and performs one strict
-  repair attempt after deterministic output/evidence validation fails.
+  repair attempt after deterministic output/evidence validation fails. A repeated
+  excerpt-only mismatch is canonicalized from its validated source span on retry.
 - Interrupted delegations are explicitly traced and can never look completed.
 - Chain-first harvests can resume DB materialization after an interruption,
   while completed harvests remain idempotently protected from duplication.

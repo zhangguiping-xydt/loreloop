@@ -591,10 +591,12 @@ harvest 会输出需要人工关注的集合:
 - 输出必须是合法 JSON。
 - 条目 source 锚定当前 git commit。
 - 输入按行编号并置于随机 nonce 的 untrusted-source 边界内。
-- 每条断言携带 symbol/行区间/excerpt;excerpt 必须与源行实际匹配。
+- 每条断言携带 symbol/行区间/excerpt;首次输出的 excerpt 必须与源行实际匹配。
 - 首次模型输出若未通过 JSON、路径、行号、symbol 或 excerpt 的同一套确定性校验,
   `code-extract-v3` 最多进行一次修复调用;失败原因放在独立随机 nonce 的
-  untrusted 边界中。第二次仍失败则整批拒绝,不会自动改写伪造证据。
+  untrusted 边界中。重试时若只有 excerpt 与已经验证有效的文件和行区间不匹配,
+  系统使用实际源代码区间生成规范 excerpt;路径、行号、symbol、类型或其他校验
+  再次失败时仍整批拒绝。
 - 允许一个文件产出 0 条知识,不再用最低条数驱动模型凑数。
 - 批内近重复断言做保守 Jaccard 去重。
 - 新条目默认 draft/unverified。

@@ -31,8 +31,10 @@ will be declined:
 2. **Never trust LLM output format.** Extraction and classification are
    separate steps. Model output must pass JSON, source-path, line, symbol, and
    verbatim-excerpt validation. One repair call may retry the same strict
-   contract; a second failure rejects the batch (`ExtractionError`). Validation
-   messages are untrusted data too. No inline markers, no "the model will comply".
+   contract. On that retry only, a mismatched excerpt with an otherwise valid
+   file and line range is replaced by the canonical source span; every other
+   validation failure rejects the batch (`ExtractionError`). Validation messages
+   are untrusted data too. No inline markers, no "the model will comply".
 3. **Trust is two explicit axes.** Human curation (draft/approved/rejected)
    and machine verification (unverified/verified/contradicted). Nothing is
    born strong unless a human wrote it and a machine checked it against
