@@ -16,6 +16,7 @@ from .evidence.chain import ChainVerificationError, EvidenceChain
 from .federation.reader import ForeignEntry
 from .federation.registry import Project
 from .knowledge.code_reverse import (
+    CodeIngestionProgress,
     IngestionPolicy,
     chain_ingestion_policies,
     dirty_source_files,
@@ -373,7 +374,11 @@ def cmd_ingest(args: argparse.Namespace) -> int:
                 "add explicit --include/--exclude rules or adjust --max-file-bytes, then retry",
             )
         entries = reverse_code(
-            _inference_agent(args.agent), repo, files=manifest.files, repo_name=repo_name
+            _inference_agent(args.agent),
+            repo,
+            files=manifest.files,
+            repo_name=repo_name,
+            on_progress=_report_code_ingestion_progress,
         )
         skipped = ", ".join(
             f"{reason}={len(paths)}" for reason, paths in sorted(manifest.skipped.items())
@@ -438,6 +443,24 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     print(f"ingested {len(entries)} knowledge entries from {args.target}{suffix}")
     print("Next: loreloop knowledge review --status draft")
     return 0
+
+
+def _report_code_ingestion_progress(progress: CodeIngestionProgress) -> None:
+    if progress.stage == "extract":
+        count = progress.file_count
+        unit = "file" if count == 1 else "files"
+        detail = f"extracting {count} {unit}"
+    else:
+        count = progress.assertion_count
+        if count is None:
+            raise ValueError("classification progress requires an assertion count")
+        unit = "assertion" if count == 1 else "assertions"
+        detail = f"classifying {count} {unit}"
+    print(
+        f"code ingestion: batch {progress.batch_index}/{progress.batch_total}, {detail}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _resolve_ingest_repo(workdir: Path, target: str) -> tuple[str, Path]:

@@ -15,9 +15,11 @@ import re
 import secrets
 import stat
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
+from typing import Literal
 
 from ..agents import AgentRunner
 from ..evidence.chain import EvidenceChain, EvidenceRecord
@@ -266,6 +268,18 @@ class RawAssertion:
     line_start: int | None = None
     line_end: int | None = None
     excerpt: str | None = None
+
+
+@dataclass(frozen=True)
+class CodeIngestionProgress:
+    stage: Literal["extract", "classify"]
+    batch_index: int
+    batch_total: int
+    file_count: int
+    assertion_count: int | None = None
+
+
+ProgressCallback = Callable[[CodeIngestionProgress], None]
 
 
 @dataclass(frozen=True)
@@ -598,18 +612,39 @@ def reverse_code(
     repo: Path,
     files: list[Path] | None = None,
     repo_name: str = ".",
+    on_progress: ProgressCallback | None = None,
 ) -> list[Entry]:
     repo = repo.resolve()
     head = repo_head(repo)
     targets = files if files is not None else scan_repo(repo)
+    batches = _source_batches(targets)
     entries: list[Entry] = []
-    for batch in _source_batches(targets):
+    for batch_index, batch in enumerate(batches, start=1):
+        if on_progress is not None:
+            on_progress(
+                CodeIngestionProgress(
+                    stage="extract",
+                    batch_index=batch_index,
+                    batch_total=len(batches),
+                    file_count=len(batch),
+                )
+            )
         try:
             assertions = extract_assertions(runner, repo, batch)
         except ExtractionError as exc:
             assertions = extract_assertions(runner, repo, batch, retry_reason=str(exc))
         if not assertions:
             continue
+        if on_progress is not None:
+            on_progress(
+                CodeIngestionProgress(
+                    stage="classify",
+                    batch_index=batch_index,
+                    batch_total=len(batches),
+                    file_count=len(batch),
+                    assertion_count=len(assertions),
+                )
+            )
         kinds = classify_assertions(runner, assertions)
         for assertion, kind in zip(assertions, kinds):
             entries.append(

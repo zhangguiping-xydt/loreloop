@@ -143,6 +143,68 @@ def test_reverse_code_splits_batches_by_total_source_bytes(repo):
     assert len(runner.prompts) == 2
 
 
+def test_reverse_code_reports_progress_in_model_call_order(repo):
+    files = []
+    for index in range(9):
+        path = repo / f"batch_{index}.py"
+        path.write_text(f"value = {index}\n")
+        files.append(path)
+    events = []
+
+    class OrderedRunner(FakeRunner):
+        def run(self, prompt: str) -> str:
+            events.append(("model", len(self.prompts) + 1))
+            return super().run(prompt)
+
+    runner = OrderedRunner(
+        [
+            json.dumps(
+                [
+                    {
+                        "claim": "The first value is zero.",
+                        "title": "First value",
+                        "file": "batch_0.py",
+                    }
+                ]
+            ),
+            json.dumps([{"id": 0, "kind": "constraint"}]),
+            "[]",
+        ]
+    )
+
+    reverse_code(
+        runner,
+        repo,
+        files=files,
+        on_progress=lambda progress: events.append(
+            (
+                progress.stage,
+                progress.batch_index,
+                progress.batch_total,
+                progress.file_count,
+                progress.assertion_count,
+            )
+        ),
+    )
+
+    assert events == [
+        ("extract", 1, 2, 8, None),
+        ("model", 1),
+        ("classify", 1, 2, 8, 1),
+        ("model", 2),
+        ("extract", 2, 2, 1, None),
+        ("model", 3),
+    ]
+
+
+def test_reverse_code_without_progress_callback_writes_nothing(repo, capsys):
+    reverse_code(FakeRunner(["[]"]), repo, files=[repo / "app.py"])
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 def test_reverse_code_produces_anchored_entries(repo):
     extract_out = json.dumps(
         [

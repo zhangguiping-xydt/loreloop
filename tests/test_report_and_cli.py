@@ -311,6 +311,37 @@ def test_cli_ingest_rejects_dirty_source_before_inference(workdir, monkeypatch, 
     assert "uncommitted source files" in capsys.readouterr().err
 
 
+def test_cli_ingest_reports_batch_progress_to_stderr(workdir, monkeypatch, capsys):
+    import subprocess
+
+    import loreloop.cli as cli
+    from loreloop.knowledge.code_reverse import CodeIngestionProgress
+
+    subprocess.run(["git", "init"], cwd=workdir, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=workdir, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=workdir, check=True)
+    (workdir / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "add", "app.py"], cwd=workdir, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=workdir, check=True)
+
+    def fake_reverse_code(*_args, on_progress=None, **_kwargs):
+        assert on_progress is not None
+        on_progress(CodeIngestionProgress("extract", 1, 1, 1))
+        on_progress(CodeIngestionProgress("classify", 1, 1, 1, 2))
+        return []
+
+    monkeypatch.setattr(cli, "_inference_agent", lambda _name: object())
+    monkeypatch.setattr(cli, "reverse_code", fake_reverse_code)
+
+    assert main(["ingest", "--from", "code", "."]) == 0
+
+    assert capsys.readouterr().err.splitlines() == [
+        "code ingestion: batch 1/1, extracting 1 file",
+        "code ingestion: batch 1/1, classifying 2 assertions",
+        "ingestion manifest: tracked=1, scanned=1, skipped=0",
+    ]
+
+
 def test_cli_command_check_does_not_invoke_a_shell(workdir, capsys):
     trace = write_trace(workdir)
     run_id = trace.stem

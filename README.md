@@ -154,6 +154,10 @@ loreloop harvest <run-id>                # flow knowledge back from the accepted
 loreloop knowledge usage                 # injected count and accepted-run correlation
 ```
 
+Code ingestion reports each extraction batch and its file count on stderr,
+then reports the assertion count before that batch is classified. This keeps
+long model calls visibly active without mixing progress into command stdout.
+
 If a step fails, the CLI prints exactly one `error`, its `reason`, and the next
 recovery action. See [`docs/troubleshooting.md`](docs/troubleshooting.md) for
 agent, browser, evidence-key, schema-upgrade, interrupted-run, and harvest help.
