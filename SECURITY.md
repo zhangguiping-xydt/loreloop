@@ -119,6 +119,21 @@ These statements are observable behavior, not aspirational documentation:
 | Schema upgrades preserve rollback material | Ordered transaction, pre-upgrade SQLite backup, refusal of newer versions | `tests/test_knowledge_store.py` |
 | Expected failures do not leak tracebacks | argparse and runtime failures share `error`/`reason`/`next` output | `tests/test_cli_help.py`, CLI E2E tests |
 
+## Runtime distribution
+
+The Codex plugin never downloads and executes a remote installer script. Its
+bundled installer downloads `SHA256SUMS`, accepts only a safe versioned
+LoreLoop wheel filename from that manifest, downloads the wheel from the same
+GitHub Release, verifies SHA-256 locally, and only then passes it to `uv` or
+`pipx`. Release wheels, installers, checksums, and SBOMs are attached to the
+GitHub artifact-provenance attestation. PyPI is an additional distribution
+channel, not a trust or availability dependency for GitHub installation.
+
+The public README also offers direct installer-script downloads for operators
+who prefer a standalone shell/PowerShell flow. Review the downloaded script or
+verify its release provenance before execution; the script still independently
+verifies the Runtime wheel before installation.
+
 On POSIX, newly created state, key, trace, database, chain, lock, and artifact
 directories/files use `0700`/`0600` as appropriate and reject symlink
 substitution at their protected paths.

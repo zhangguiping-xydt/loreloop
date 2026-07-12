@@ -1,0 +1,4 @@
+interface:
+  display_name: "LoreLoop"
+  short_description: "Governed project knowledge inside Codex"
+  default_prompt: "Use $loreloop to implement this task with governed project knowledge."

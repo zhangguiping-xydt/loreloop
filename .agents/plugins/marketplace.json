@@ -1,0 +1,20 @@
+{
+  "name": "loreloop",
+  "interface": {
+    "displayName": "LoreLoop"
+  },
+  "plugins": [
+    {
+      "name": "loreloop",
+      "source": {
+        "source": "local",
+        "path": "./plugins/loreloop"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

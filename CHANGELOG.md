@@ -26,6 +26,11 @@
   existing Codex or Claude Code conversation without launching a nested agent;
   preparation metadata is signed before work and completion requires explicit
   operator confirmation.
+- A distributable Codex plugin and repository marketplace. On first use the
+  plugin can, after explicit operator approval, install the Runtime from a
+  checksummed GitHub Release without requiring PyPI.
+- Bundled POSIX and PowerShell Runtime installers, versioned GitHub Release
+  wheel assets, `SHA256SUMS`, SBOM, and provenance coverage for release assets.
 
 ### Changed
 

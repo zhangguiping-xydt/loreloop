@@ -76,17 +76,73 @@ not ingest material you are not authorized to send to the selected provider.
 
 ## Requirements
 
-- Python 3.11–3.14
-- [uv](https://docs.astral.sh/uv/) for source-checkout installation and locked development
 - [Claude Code](https://code.claude.com) (`claude`) or Codex (`codex`) CLI on your PATH
+- For Runtime-only installation: `uv`, `pipx`, or Python 3.11–3.14
+- [uv](https://docs.astral.sh/uv/) for source-checkout development
 - Optional: Playwright for web exploration and browser-verified acceptance
 
 ## Install
 
-Use one of these two supported paths; do not run LoreLoop directly from an
-uninstalled source tree.
+### Codex plugin — recommended
 
-Source checkout (contributors and unreleased builds):
+Keep Codex as the only user-facing entry point:
+
+```bash
+codex plugin marketplace add zhangguiping-xydt/loreloop --ref main
+codex plugin add loreloop@loreloop
+```
+
+Start a new Codex thread and invoke `$loreloop`. If the Runtime is missing,
+the bundled plugin asks for explicit permission, reads the versioned wheel name
+from the GitHub Release `SHA256SUMS`, verifies it, and installs it with
+`uv` or `pipx`. It never executes a remotely downloaded installer script.
+
+### GitHub Release Runtime — no PyPI required
+
+Linux/macOS:
+
+```bash
+curl -fLO https://github.com/zhangguiping-xydt/loreloop/releases/latest/download/install-loreloop.sh
+sh install-loreloop.sh --with-web
+loreloop doctor
+```
+
+Windows PowerShell:
+
+```powershell
+Invoke-WebRequest https://github.com/zhangguiping-xydt/loreloop/releases/latest/download/install-loreloop.ps1 -OutFile install-loreloop.ps1
+.\install-loreloop.ps1 -WithWeb
+loreloop doctor
+```
+
+The release workflow publishes the universal versioned wheel plus
+`SHA256SUMS`, SBOM, and GitHub provenance.
+`--with-web` installs Playwright's Python package; install Chromium separately
+only when web exploration or verification is needed.
+
+### Direct GitHub install — pre-release builds
+
+This path installs directly from a tag, branch, or commit without PyPI:
+
+```bash
+uv tool install \
+  'loreloop[web] @ git+https://github.com/zhangguiping-xydt/loreloop.git@fix/codex-inference-connection'
+loreloop doctor
+```
+
+### PyPI/pipx — optional ecosystem channel
+
+After a published release:
+
+```bash
+pipx install --include-deps 'loreloop[web]'
+playwright install chromium
+loreloop doctor
+```
+
+### Source checkout — contributors
+
+Do not run LoreLoop directly from an uninstalled source tree:
 
 ```bash
 git clone https://github.com/zhangguiping-xydt/loreloop
@@ -94,14 +150,6 @@ cd loreloop
 uv sync --frozen --all-extras
 uv run --frozen playwright install chromium
 uv run --frozen loreloop doctor
-```
-
-Published release (after the first PyPI release):
-
-```bash
-pipx install --include-deps 'loreloop[web]'
-playwright install chromium
-loreloop doctor
 ```
 
 ### Pre-release rename

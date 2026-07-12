@@ -1,0 +1,138 @@
+import hashlib
+import json
+import os
+import subprocess
+import tomllib
+from pathlib import Path
+
+
+ROOT = Path(__file__).parents[1]
+PLUGIN = ROOT / "plugins/loreloop"
+INSTALLER = PLUGIN / "scripts/install-runtime.sh"
+
+
+def test_codex_plugin_manifest_matches_package_and_marketplace():
+    package = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    manifest = json.loads((PLUGIN / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
+    marketplace = json.loads(
+        (ROOT / ".agents/plugins/marketplace.json").read_text(encoding="utf-8")
+    )
+
+    assert manifest["name"] == "loreloop"
+    assert manifest["version"] == package["version"]
+    assert manifest["skills"] == "./skills/"
+    assert marketplace["name"] == "loreloop"
+    assert marketplace["plugins"] == [
+        {
+            "name": "loreloop",
+            "source": {"source": "local", "path": "./plugins/loreloop"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Productivity",
+        }
+    ]
+
+
+def test_plugin_skill_requires_permission_and_uses_bundled_installer():
+    skill = (PLUGIN / "skills/loreloop/SKILL.md").read_text(encoding="utf-8")
+
+    assert "explicit permission" in skill
+    assert "scripts/install-runtime.sh" in skill
+    assert "Never download and execute a remote installer script directly" in skill
+    assert 'Run `loreloop begin "<task>"`' in skill
+
+
+def test_release_workflow_publishes_checksummed_runtime_assets():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+
+    assert "find dist -maxdepth 1 -name 'loreloop-*-py3-none-any.whl'" in workflow
+    assert "release-assets/install-loreloop.sh" in workflow
+    assert "release-assets/install-loreloop.ps1" in workflow
+    assert "SHA256SUMS" in workflow
+    assert "release-assets/*" in workflow
+
+
+def _fake_install_environment(tmp_path: Path, wheel: bytes, *, checksum: str | None = None):
+    release = tmp_path / "release"
+    release.mkdir()
+    wheel_name = "loreloop-0.1.0-py3-none-any.whl"
+    (release / wheel_name).write_bytes(wheel)
+    digest = checksum or hashlib.sha256(wheel).hexdigest()
+    (release / "SHA256SUMS").write_text(f"{digest}  {wheel_name}\n", encoding="utf-8")
+
+    home = tmp_path / "home"
+    local_bin = home / ".local/bin"
+    local_bin.mkdir(parents=True)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.log"
+    runtime_log = tmp_path / "runtime.log"
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        """#!/bin/sh
+set -eu
+printf '%s\\n' "$@" > "$TEST_UV_LOG"
+cat > "$HOME/.local/bin/loreloop" <<'EOF'
+#!/bin/sh
+printf '%s\\n' "$*" >> "$TEST_RUNTIME_LOG"
+exit 0
+EOF
+chmod +x "$HOME/.local/bin/loreloop"
+""",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "PATH": f"{fake_bin}:{local_bin}:/usr/bin:/bin",
+        "LORELOOP_RELEASE_BASE_URL": release.as_uri(),
+        "TEST_UV_LOG": str(uv_log),
+        "TEST_RUNTIME_LOG": str(runtime_log),
+    }
+    return env, uv_log, runtime_log
+
+
+def test_posix_installer_verifies_wheel_before_installing(tmp_path):
+    env, uv_log, runtime_log = _fake_install_environment(tmp_path, b"wheel-content")
+
+    result = subprocess.run(
+        [str(INSTALLER), "--with-web", "--init"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Verified SHA-256" in result.stdout
+    uv_args = uv_log.read_text(encoding="utf-8").splitlines()
+    assert uv_args[:3] == ["tool", "install", "--force"]
+    assert uv_args[3].endswith("loreloop-0.1.0-py3-none-any.whl[web]")
+    assert runtime_log.read_text(encoding="utf-8").splitlines() == ["--help", "init --skill"]
+
+
+def test_posix_installer_refuses_checksum_mismatch(tmp_path):
+    env, uv_log, _ = _fake_install_environment(
+        tmp_path,
+        b"tampered-wheel",
+        checksum="0" * 64,
+    )
+
+    result = subprocess.run(
+        [str(INSTALLER)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "checksum mismatch" in result.stderr
+    assert not uv_log.exists()
+
+
+def test_installers_do_not_pipe_remote_scripts_to_a_shell():
+    shell = INSTALLER.read_text(encoding="utf-8")
+    powershell = (PLUGIN / "scripts/install-runtime.ps1").read_text(encoding="utf-8")
+
+    assert "| sh" not in shell
+    assert "Invoke-Expression" not in powershell
+    assert "Get-FileHash -Algorithm SHA256" in powershell

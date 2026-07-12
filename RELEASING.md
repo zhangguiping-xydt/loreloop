@@ -10,11 +10,15 @@
    `uv run twine check dist/*`.
 3. Create a signed annotated tag matching the package version, for example
    `git tag -s v0.1.0 -m "LoreLoop 0.1.0"`, then push the tag.
-4. The pinned release workflow rebuilds and tests the distributions, generates
-   an SPDX SBOM, creates a GitHub artifact attestation, publishes through PyPI
-   Trusted Publishing, and creates the GitHub release.
-5. Verify the PyPI provenance, install into a fresh environment, run
-   `loreloop --help` and `loreloop demo --offline`, then publish release notes.
+4. The pinned release workflow rebuilds and tests the distributions, publishes
+   the versioned GitHub Runtime wheel, installers and `SHA256SUMS`, generates an
+   SPDX SBOM, creates GitHub artifact attestations, publishes through PyPI
+   Trusted Publishing, and creates the GitHub release. GitHub installation does
+   not depend on the PyPI publishing job succeeding.
+5. Verify the GitHub wheel checksum and provenance, install it with both bundled
+   installers in fresh environments, validate the Codex plugin manifest, then
+   run `loreloop --help` and `loreloop demo --offline`. Verify PyPI provenance
+   separately before publishing release notes.
 
 Repository administrators must first create the protected `pypi` environment
 and configure the matching PyPI Trusted Publisher. Long-lived PyPI API tokens

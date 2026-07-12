@@ -34,6 +34,23 @@ jobs:
       - run: uv run --frozen pytest -q
       - run: uv build
       - run: uv run --frozen twine check dist/*
+      - name: Prepare GitHub Runtime installer assets
+        run: |
+          mkdir -p release-assets
+          WHEEL="$(find dist -maxdepth 1 -name 'loreloop-*-py3-none-any.whl' -print -quit)"
+          test -n "$WHEEL"
+          cp plugins/loreloop/scripts/install-runtime.sh release-assets/install-loreloop.sh
+          cp plugins/loreloop/scripts/install-runtime.ps1 release-assets/install-loreloop.ps1
+          chmod +x release-assets/install-loreloop.sh
+          WHEEL_SHA="$(sha256sum "$WHEEL" | awk '{print $1}')"
+          WHEEL_NAME="$(basename "$WHEEL")"
+          printf '%s  %s\n' "$WHEEL_SHA" "$WHEEL_NAME" > release-assets/SHA256SUMS
+          (
+            cd release-assets
+            sha256sum \
+              install-loreloop.sh \
+              install-loreloop.ps1 >> SHA256SUMS
+          )
       - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           path: dist
@@ -42,7 +59,9 @@ jobs:
           upload-artifact: false
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-path: dist/*
+          subject-path: |
+            dist/*
+            release-assets/*
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-distributions

@@ -1,0 +1,31 @@
+{
+  "name": "loreloop",
+  "version": "0.1.0",
+  "description": "Use LoreLoop's governed project knowledge and evidence loop inside Codex.",
+  "author": {
+    "name": "LoreLoop contributors",
+    "url": "https://github.com/zhangguiping-xydt"
+  },
+  "homepage": "https://github.com/zhangguiping-xydt/loreloop#readme",
+  "repository": "https://github.com/zhangguiping-xydt/loreloop",
+  "license": "MIT",
+  "keywords": ["project-knowledge", "coding-agent", "evidence", "codex"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "LoreLoop",
+    "shortDescription": "Governed project knowledge and evidence-backed delivery.",
+    "longDescription": "Keep working in Codex while LoreLoop prepares trusted project knowledge, records evidence-backed acceptance, and returns accepted outcomes to the knowledge base.",
+    "developerName": "LoreLoop contributors",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Local", "Write"],
+    "websiteURL": "https://github.com/zhangguiping-xydt/loreloop",
+    "privacyPolicyURL": "https://github.com/zhangguiping-xydt/loreloop/blob/main/SECURITY.md",
+    "termsOfServiceURL": "https://github.com/zhangguiping-xydt/loreloop/blob/main/LICENSE",
+    "defaultPrompt": [
+      "Use LoreLoop to implement this task with project knowledge.",
+      "Use LoreLoop to verify this completed change.",
+      "Show the LoreLoop knowledge relevant to this task."
+    ],
+    "brandColor": "#32D296"
+  }
+}
