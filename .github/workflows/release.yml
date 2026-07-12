@@ -34,13 +34,13 @@ jobs:
       - run: uv run --frozen pytest -q
       - run: uv build
       - run: uv run --frozen twine check dist/*
-      - name: Prepare GitHub Runtime installer assets
+      - name: Prepare GitHub LoreLoop installer assets
         run: |
           mkdir -p release-assets
           WHEEL="$(find dist -maxdepth 1 -name 'loreloop-*-py3-none-any.whl' -print -quit)"
           test -n "$WHEEL"
-          cp plugins/loreloop/scripts/install-runtime.sh release-assets/install-loreloop.sh
-          cp plugins/loreloop/scripts/install-runtime.ps1 release-assets/install-loreloop.ps1
+          cp plugins/loreloop/scripts/install-loreloop.sh release-assets/install-loreloop.sh
+          cp plugins/loreloop/scripts/install-loreloop.ps1 release-assets/install-loreloop.ps1
           chmod +x release-assets/install-loreloop.sh
           WHEEL_SHA="$(sha256sum "$WHEEL" | awk '{print $1}')"
           WHEEL_NAME="$(basename "$WHEEL")"

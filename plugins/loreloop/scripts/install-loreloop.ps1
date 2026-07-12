@@ -2,6 +2,7 @@ param(
     [string]$Version = $(if ($env:LORELOOP_VERSION) { $env:LORELOOP_VERSION } else { "latest" }),
     [switch]$WithWeb,
     [switch]$Codex,
+    [switch]$Claude,
     [switch]$OpenCode,
     [switch]$CoMind,
     [switch]$Init
@@ -23,14 +24,14 @@ New-Item -ItemType Directory -Path $TempDir | Out-Null
 $Sums = Join-Path $TempDir "SHA256SUMS"
 
 try {
-    Write-Host "Downloading LoreLoop Runtime from $ReleaseBase"
+    Write-Host "Downloading LoreLoop from $ReleaseBase"
     Invoke-WebRequest -Uri "$ReleaseBase/SHA256SUMS" -OutFile $Sums
 
     $ChecksumLine = Get-Content $Sums | Where-Object {
         $_ -match "^[0-9a-fA-F]{64}\s+(loreloop-[A-Za-z0-9_.+!-]+-py3-none-any\.whl)$"
     } | Select-Object -First 1
     if (-not $ChecksumLine) {
-        throw "SHA256SUMS does not contain a valid LoreLoop wheel filename"
+        throw "SHA256SUMS does not contain a valid LoreLoop package filename"
     }
     $Parts = $ChecksumLine -split "\s+"
     $Expected = $Parts[0].ToLowerInvariant()
@@ -39,7 +40,7 @@ try {
     Invoke-WebRequest -Uri "$ReleaseBase/$WheelName" -OutFile $Wheel
     $Actual = (Get-FileHash -Algorithm SHA256 $Wheel).Hash.ToLowerInvariant()
     if ($Actual -ne $Expected) {
-        throw "LoreLoop wheel checksum mismatch"
+        throw "LoreLoop package checksum mismatch"
     }
     Write-Host "Verified SHA-256: $Actual"
 
@@ -55,41 +56,45 @@ try {
     } elseif ($Pipx) {
         & $Pipx.Source install --force $Spec
     } else {
-        throw "Install uv or pipx, then retry the LoreLoop Runtime installation"
+        throw "Install uv or pipx, then retry LoreLoop installation"
     }
 
-    $Runtime = Get-Command loreloop -ErrorAction SilentlyContinue
-    if (-not $Runtime) {
+    $LoreLoop = Get-Command loreloop -ErrorAction SilentlyContinue
+    if (-not $LoreLoop) {
         $Fallback = Join-Path $HOME ".local\bin\loreloop.exe"
         if (Test-Path $Fallback) {
-            $RuntimePath = $Fallback
+            $LoreLoopPath = $Fallback
         } else {
             throw "Installation completed but loreloop is not discoverable on PATH"
         }
     } else {
-        $RuntimePath = $Runtime.Source
+        $LoreLoopPath = $LoreLoop.Source
     }
 
-    & $RuntimePath --help | Out-Null
-    Write-Host "Installed LoreLoop Runtime: $RuntimePath"
+    & $LoreLoopPath --help | Out-Null
+    Write-Host "Installed LoreLoop: $LoreLoopPath"
 
     if ($Codex) {
-        & $RuntimePath codex install
+        & $LoreLoopPath codex install
+    }
+
+    if ($Claude) {
+        & $LoreLoopPath claude install
     }
 
     if ($OpenCode) {
-        & $RuntimePath opencode install
+        & $LoreLoopPath opencode install
     }
 
     if ($CoMind) {
-        & $RuntimePath comind install
+        & $LoreLoopPath comind install
     }
 
     if ($Init) {
-        & $RuntimePath init --skill
+        & $LoreLoopPath init --skill
     }
 
-    if ($Codex -or $OpenCode -or $CoMind) {
+    if ($Codex -or $Claude -or $OpenCode -or $CoMind) {
         Write-Host "Next: restart the installed coding-agent host, then ask it to use LoreLoop in your project."
     } else {
         Write-Host "Next: run a LoreLoop host integration command or use LoreLoop directly from the terminal."

@@ -10,25 +10,27 @@ evidence engine behind Codex or a Claude-compatible host such as co-mind, not
 a replacement chat entry point. Evidence, not the agent's own account, decides
 acceptance.
 
-## Runtime bootstrap
+## Finish LoreLoop installation
 
 Before the first LoreLoop action, check whether `loreloop` is on `PATH`.
 
 - If it exists, run `loreloop doctor` when the repository has not been checked
   in this session.
-- If it is missing, explain that the local Runtime is required and ask the
-  operator for explicit permission to install it from the checksummed GitHub
-  Release. Never infer permission from silence.
-- After permission, locate this plugin's root (two directories above this
-  `SKILL.md`) and run `scripts/install-runtime.sh` on Linux/macOS or
-  `scripts/install-runtime.ps1` on Windows.
-- After the Runtime installation, run the current host check (`loreloop codex status`
-  in Codex or `loreloop comind status` in co-mind) and `loreloop doctor` before
-  continuing. Do not edit host configuration files directly; use the corresponding
-  LoreLoop integration command if registration is missing.
-- Never download and execute a remote installer script directly. The bundled
-  installer downloads only the release wheel and verifies it against the
-  release `SHA256SUMS` file.
+- If it is missing, finish the LoreLoop installation automatically. Installing
+  and enabling this plugin is already explicit operator authorization; do not
+  ask for a second permission merely because the local `loreloop` command is
+  not present yet.
+- Locate this plugin's root (two directories above this `SKILL.md`) and run
+  `scripts/install-loreloop.sh` on Linux/macOS or `scripts/install-loreloop.ps1`
+  on Windows. These bundled installers fetch only the release package and
+  verify it against the release `SHA256SUMS` file.
+- After installation, run the current host check (`loreloop codex status` in
+  Codex, `loreloop claude status` in Claude Code, or `loreloop comind status`
+  in co-mind) and `loreloop doctor` before continuing. Do not edit host
+  configuration files directly; use the corresponding LoreLoop integration
+  command if registration is missing.
+- Never download and execute a remote installer script directly. Use the
+  installer already bundled with this plugin.
 
 If the current repository has no `.loreloop` directory and the operator
 explicitly invoked LoreLoop or asked to use it for the task, run

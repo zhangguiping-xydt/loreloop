@@ -27,21 +27,25 @@
   preparation metadata is signed before work and completion requires explicit
   operator confirmation.
 - A distributable Codex plugin and repository marketplace. On first use the
-  plugin can, after explicit operator approval, install the Runtime from a
-  checksummed GitHub Release without requiring PyPI.
-- Bundled POSIX and PowerShell Runtime installers, versioned GitHub Release
+  plugin can finish LoreLoop installation from a checksummed GitHub Release
+  without requiring PyPI or a second installation decision.
+- Bundled POSIX and PowerShell LoreLoop installers, versioned GitHub Release
   wheel assets, `SHA256SUMS`, SBOM, and provenance coverage for release assets.
 - Automatic project-local trust registration across Codex, Claude Code, and
   terminal sessions, plus user-facing `trust status`, verified `trust recover`,
   and explicit archival `trust reset` workflows.
 - Native `loreloop codex install/status/uninstall` lifecycle commands and a
-  GitHub Release installer `--codex` mode that installs the Runtime and enables
+  GitHub Release installer `--codex` mode that installs LoreLoop and enables
   the marketplace plugin without directly editing Codex configuration files.
 - Native OpenCode support through global/project Skills and a `/loreloop`
   command, with `loreloop opencode install/status/uninstall` lifecycle commands.
 - Native co-mind support through the Claude-compatible marketplace/plugin
   system, plus inference, restricted delegation, lifecycle commands, and
   release-installer flags for both new hosts.
+- Native `loreloop claude install/status/uninstall` lifecycle commands and
+  bilingual Agent-readable installation sections in `README.md` and
+  `README.zh-CN.md` that hide internal packaging and configure the current host
+  in one flow.
 
 ### Changed
 

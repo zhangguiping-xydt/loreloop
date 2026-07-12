@@ -2239,6 +2239,68 @@ def test_cli_opencode_install_rejects_symlink(tmp_path, monkeypatch, capsys):
     assert not (config / "skills/loreloop/SKILL.md").exists()
 
 
+def test_cli_claude_install_status_and_uninstall_use_native_commands(monkeypatch, capsys):
+    import shutil
+    import subprocess
+
+    calls = []
+    installed = False
+    marketplace = False
+
+    def fake_run(argv, **_kwargs):
+        nonlocal installed, marketplace
+        command = argv[1:]
+        calls.append(command)
+        if command == ["plugin", "marketplace", "list", "--json"]:
+            payload = [{"name": "loreloop", "source": "local"}] if marketplace else []
+        elif command == ["plugin", "list", "--json"]:
+            payload = (
+                [{"id": "loreloop@loreloop", "version": "0.1.0", "enabled": True}]
+                if installed
+                else []
+            )
+        elif command[:3] == ["plugin", "marketplace", "add"]:
+            marketplace = True
+            payload = {}
+        elif command[:2] == ["plugin", "install"]:
+            installed = True
+            payload = {}
+        elif command[:2] == ["plugin", "uninstall"]:
+            installed = False
+            payload = {}
+        elif command[:3] == ["plugin", "marketplace", "remove"]:
+            marketplace = False
+            payload = {}
+        else:
+            raise AssertionError(command)
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert main(["claude", "install", "--source", "/checkout/loreloop"]) == 0
+    assert calls[:3] == [
+        ["plugin", "marketplace", "list", "--json"],
+        [
+            "plugin",
+            "marketplace",
+            "add",
+            "/checkout/loreloop",
+            "--scope",
+            "user",
+        ],
+        ["plugin", "install", "loreloop@loreloop", "--scope", "user"],
+    ]
+    assert "Installed Claude Code plugin" in capsys.readouterr().out
+
+    assert main(["claude", "status"]) == 0
+    assert "Claude Code integration: ready" in capsys.readouterr().out
+
+    assert main(["claude", "uninstall", "--remove-marketplace"]) == 0
+    assert ["plugin", "uninstall", "loreloop@loreloop", "--scope", "user"] in calls
+    assert ["plugin", "marketplace", "remove", "loreloop"] in calls
+
+
 def test_cli_comind_install_status_and_uninstall_use_native_commands(monkeypatch, capsys):
     import shutil
     import subprocess

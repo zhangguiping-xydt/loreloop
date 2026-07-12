@@ -1,16 +1,17 @@
 $ loreloop --help
 usage: loreloop [-h] [--agent {claude,codex,opencode,co-mind}]
-                {doctor,codex,opencode,comind,trust,init,demo,ingest,repo,project,verify,begin,complete,run,check,report,harvest,knowledge}
+                {doctor,codex,opencode,claude,comind,trust,init,demo,ingest,repo,project,verify,begin,complete,run,check,report,harvest,knowledge}
                 ...
 
 Reverse-engineer project knowledge, apply it to coding-agent work, and return
 accepted outcomes to a tamper-evident knowledge loop.
 
 positional arguments:
-  {doctor,codex,opencode,comind,trust,init,demo,ingest,repo,project,verify,begin,complete,run,check,report,harvest,knowledge}
+  {doctor,codex,opencode,claude,comind,trust,init,demo,ingest,repo,project,verify,begin,complete,run,check,report,harvest,knowledge}
     doctor              check prerequisites and writable trust state
     codex               install or inspect the native Codex integration
     opencode            install or inspect the native OpenCode integration
+    claude              install or inspect the native Claude Code integration
     comind              install or inspect the native co-mind integration
     trust               inspect or recover this project's local trust
     init                set up LoreLoop in this project
@@ -105,6 +106,39 @@ usage: loreloop opencode uninstall [-h]
 
 options:
   -h, --help  show this help message and exit
+
+$ loreloop claude --help
+usage: loreloop claude [-h] {status,install,uninstall} ...
+
+positional arguments:
+  {status,install,uninstall}
+    status              show Claude Code plugin readiness
+    install             install and enable LoreLoop through Claude Code's
+                        plugin system
+    uninstall           remove the LoreLoop plugin from Claude Code
+
+options:
+  -h, --help            show this help message and exit
+
+$ loreloop claude status --help
+usage: loreloop claude status [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+$ loreloop claude install --help
+usage: loreloop claude install [-h] [--source SOURCE]
+
+options:
+  -h, --help       show this help message and exit
+  --source SOURCE  GitHub repository or local marketplace root
+
+$ loreloop claude uninstall --help
+usage: loreloop claude uninstall [-h] [--remove-marketplace]
+
+options:
+  -h, --help            show this help message and exit
+  --remove-marketplace  also remove the LoreLoop marketplace registration
 
 $ loreloop comind --help
 usage: loreloop comind [-h] {status,install,uninstall} ...

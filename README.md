@@ -1,5 +1,7 @@
 # LoreLoop
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 **Reverse the lore. Guide the agent. Feed proof back.**
 
 **Lore** is the accumulated knowledge hidden across a project; **Loop** is the
@@ -78,21 +80,41 @@ not ingest material you are not authorized to send to the selected provider.
 
 - One supported coding-agent CLI on PATH: Claude Code (`claude`), Codex
   (`codex`), OpenCode (`opencode`), or co-mind (`co-mind`)
-- For Runtime-only installation: `uv`, `pipx`, or Python 3.11–3.14
+- For installation: `curl`/`wget` plus `uv`, `pipx`, or Python 3.11–3.14
 - [uv](https://docs.astral.sh/uv/) for source-checkout development
 - Optional: Playwright for web exploration and browser-verified acceptance
 
 ## Install
 
+### Let your coding agent install it
+
+Paste this into Codex, Claude Code, OpenCode, or co-mind:
+
+```text
+Install and configure LoreLoop for the coding agent running this conversation.
+Read the Install section in the README completely and follow it instead of only summarizing it:
+https://raw.githubusercontent.com/zhangguiping-xydt/loreloop/main/README.md
+
+Detect the current host, install LoreLoop through its matching host option, run
+loreloop doctor and the matching host status command, and report the result.
+Do not ask me to install a separate execution component. Do not edit .loreloop
+or host configuration files directly, and do not run trust reset, complete,
+harvest, or knowledge curation as part of installation.
+```
+
+The instructions below prefer the checksummed GitHub Release and use the direct
+GitHub source path before the first Release. Users do not need to install or
+understand a separate execution layer.
+
 ### Native host integrations — recommended
 
 Keep your existing coding agent as the only user-facing entry point. LoreLoop
-uses each host's native extension surface and keeps one shared local Runtime:
+uses each host's native extension surface and one shared local installation:
 
 | Host | Native integration | Install flag | In-session entry |
 |---|---|---|---|
 | Codex | marketplace plugin + Skill | `--codex` / `-Codex` | invoke `$loreloop` |
-| Claude Code | project-local Skill | `loreloop init --skill` | invoke `/loreloop` or ask naturally |
+| Claude Code | marketplace plugin + Skill | `--claude` / `-Claude` | invoke `/loreloop` or ask naturally |
 | OpenCode | global Skill + `/loreloop` command | `--opencode` / `-OpenCode` | run `/loreloop <request>` |
 | co-mind | Claude-compatible marketplace plugin | `--comind` / `-CoMind` | ask it to use LoreLoop |
 
@@ -102,31 +124,31 @@ Linux/macOS:
 
 ```bash
 curl -fLO https://github.com/zhangguiping-xydt/loreloop/releases/latest/download/install-loreloop.sh
-sh install-loreloop.sh --codex --opencode --comind
+sh install-loreloop.sh --codex --claude --opencode --comind
 ```
 
 Windows PowerShell:
 
 ```powershell
 Invoke-WebRequest https://github.com/zhangguiping-xydt/loreloop/releases/latest/download/install-loreloop.ps1 -OutFile install-loreloop.ps1
-.\install-loreloop.ps1 -Codex -OpenCode -CoMind
+.\install-loreloop.ps1 -Codex -Claude -OpenCode -CoMind
 ```
 
-If the Runtime is already installed, use `loreloop codex install`, `loreloop
-opencode install`, or `loreloop comind install`. Codex and co-mind registration
-goes through their native plugin CLIs. OpenCode receives only managed Skill and
-command files under its config directory; LoreLoop does not edit
-`opencode.json`. Existing marketplace sources and user-modified OpenCode files
-are preserved rather than silently replaced.
+For an existing installation, use `loreloop codex install`, `loreloop claude
+install`, `loreloop opencode install`, or `loreloop comind install`. Codex,
+Claude Code, and co-mind registration goes through their native plugin CLIs.
+OpenCode receives only managed Skill and command files under its config
+directory; LoreLoop does not edit `opencode.json`. Existing marketplace sources
+and user-modified OpenCode files are preserved rather than silently replaced.
 
-Start a new host session after installation. If someone installed the
-marketplace first without the Runtime, the bundled plugin can still ask for
-permission and install the checksummed GitHub Release wheel with `uv` or
-`pipx`. It never executes a remotely downloaded installer script. In a new
-repository, the explicit `$loreloop` invocation also authorizes automatic
-project initialization; no second confirmation or key setup is required.
+Start a new host session after installation. If a marketplace plugin is
+installed before the local `loreloop` command exists, the plugin finishes the
+checksummed installation automatically on first use; it does not ask the user
+to understand or install a separate component. In a new repository, explicitly
+invoking LoreLoop also authorizes automatic project initialization; no second
+confirmation or credential setup is required.
 
-### GitHub Release Runtime — no PyPI required
+### GitHub Release installer — no PyPI required
 
 Linux/macOS:
 
@@ -149,15 +171,28 @@ The release workflow publishes the universal versioned wheel plus
 `--with-web` installs Playwright's Python package; install Chromium separately
 only when web exploration or verification is needed.
 
-### Direct GitHub install — pre-release builds
+### Direct GitHub install — before the first Release
 
 This path installs directly from a tag, branch, or commit without PyPI:
 
 ```bash
 uv tool install \
-  'loreloop[web] @ git+https://github.com/zhangguiping-xydt/loreloop.git@fix/codex-inference-connection'
+  'loreloop[web] @ git+https://github.com/zhangguiping-xydt/loreloop.git@main'
 loreloop doctor
 ```
+
+Then connect only the host running the current conversation:
+
+```bash
+loreloop codex install --source zhangguiping-xydt/loreloop --ref main
+loreloop claude install --source zhangguiping-xydt/loreloop
+loreloop opencode install
+loreloop comind install --source zhangguiping-xydt/loreloop
+```
+
+Use this source path only when no GitHub Release exists or when the operator
+explicitly requests a pre-release branch. A checksum failure on an existing
+Release is never a reason to fall back to a mutable branch.
 
 ### PyPI/pipx — optional ecosystem channel
 
@@ -181,13 +216,14 @@ uv run --frozen playwright install chromium
 uv run --frozen loreloop doctor
 ```
 
-For local host-integration development, install the Runtime editable and
+For local host-integration development, install LoreLoop editable and
 register the checkout through the host commands. Do not also create manual
 Skill symlinks; duplicate copies can load conflicting instructions:
 
 ```bash
 uv tool install --editable '/absolute/path/to/loreloop[web]'
 loreloop codex install --source /absolute/path/to/loreloop
+loreloop claude install --source /absolute/path/to/loreloop
 loreloop opencode install
 loreloop comind install --source /absolute/path/to/loreloop
 ```
@@ -268,6 +304,7 @@ The complete CLI surface remains available for operators and automation:
 cd your-project
 loreloop doctor                          # preflight Python/Git/agent/local trust/locking
 loreloop codex status                    # native marketplace/plugin integration status
+loreloop claude status                   # native Claude Code marketplace/plugin status
 loreloop opencode status                 # global Skill and command status
 loreloop comind status                   # native co-mind marketplace/plugin status
 loreloop trust status                    # explain local trust readiness without crypto internals

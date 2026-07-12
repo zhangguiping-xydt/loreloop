@@ -65,6 +65,9 @@ _CODEX_MARKETPLACE = "loreloop"
 _CODEX_PLUGIN_ID = "loreloop@loreloop"
 _CODEX_MARKETPLACE_SOURCE = "zhangguiping-xydt/loreloop"
 _CODEX_DEFAULT_REF = f"v{__version__}"
+_CLAUDE_MARKETPLACE = "loreloop"
+_CLAUDE_PLUGIN_ID = "loreloop@loreloop"
+_CLAUDE_MARKETPLACE_SOURCE = "zhangguiping-xydt/loreloop"
 _COMIND_MARKETPLACE = "loreloop"
 _COMIND_PLUGIN_ID = "loreloop@loreloop"
 _COMIND_MARKETPLACE_SOURCE = "zhangguiping-xydt/loreloop"
@@ -553,6 +556,139 @@ def cmd_opencode(args: argparse.Namespace) -> int:
     )
 
 
+def _claude_command(*argv: str) -> str:
+    import shutil
+    import subprocess
+
+    executable = shutil.which("claude")
+    if executable is None:
+        raise CLIError(
+            "Claude Code integration is unavailable",
+            "the Claude Code CLI is not installed or is not on PATH",
+            "install Claude Code, then rerun `loreloop claude install`",
+        )
+    try:
+        result = subprocess.run(
+            [executable, *argv],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        raise CLIError(
+            "Claude Code integration command failed",
+            detail,
+            "run `claude plugin list`, resolve the reported marketplace/plugin issue, then retry",
+        ) from exc
+    return result.stdout
+
+
+def _claude_json(*argv: str) -> object:
+    import json
+
+    output = _claude_command(*argv)
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise CLIError(
+            "Claude Code integration returned invalid output",
+            "the Claude Code CLI did not return the expected JSON response",
+            "upgrade Claude Code, then rerun `loreloop claude status`",
+        ) from exc
+
+
+def _claude_marketplace() -> dict[str, object] | None:
+    payload = _claude_json("plugin", "marketplace", "list", "--json")
+    raw = payload if isinstance(payload, list) else None
+    if raw is None and isinstance(payload, dict):
+        value = payload.get("marketplaces")
+        raw = value if isinstance(value, list) else None
+    if raw is None:
+        return None
+    return next(
+        (
+            item
+            for item in raw
+            if isinstance(item, dict) and item.get("name") == _CLAUDE_MARKETPLACE
+        ),
+        None,
+    )
+
+
+def _claude_plugin() -> dict[str, object] | None:
+    payload = _claude_json("plugin", "list", "--json")
+    raw = payload if isinstance(payload, list) else None
+    if raw is None and isinstance(payload, dict):
+        value = payload.get("installed")
+        raw = value if isinstance(value, list) else None
+    if raw is None:
+        return None
+    return next(
+        (
+            item
+            for item in raw
+            if isinstance(item, dict)
+            and (item.get("pluginId") == _CLAUDE_PLUGIN_ID or item.get("id") == _CLAUDE_PLUGIN_ID)
+        ),
+        None,
+    )
+
+
+def cmd_claude(args: argparse.Namespace) -> int:
+    if args.action == "status":
+        marketplace = _claude_marketplace()
+        if marketplace is None:
+            print("Claude Code integration: not installed")
+            print("Next: loreloop claude install")
+            return 1
+        plugin = _claude_plugin()
+        if plugin is None or plugin.get("enabled") is False:
+            print("Claude Code integration: plugin not installed")
+            print(f"Next: claude plugin install {_CLAUDE_PLUGIN_ID} --scope user")
+            return 1
+        print("Claude Code integration: ready")
+        print(f"Plugin: {_CLAUDE_PLUGIN_ID} {plugin.get('version', '')}".rstrip())
+        print("Entry point: ask Claude Code to use LoreLoop in a new session")
+        return 0
+
+    if args.action == "install":
+        marketplace = _claude_marketplace()
+        if marketplace is None:
+            _claude_command("plugin", "marketplace", "add", args.source, "--scope", "user")
+            print(f"Added Claude Code marketplace: {_CLAUDE_MARKETPLACE}")
+        else:
+            print(
+                f"Using existing Claude Code marketplace: {_CLAUDE_MARKETPLACE} (source preserved)"
+            )
+        _claude_command("plugin", "install", _CLAUDE_PLUGIN_ID, "--scope", "user")
+        print(f"Installed Claude Code plugin: {_CLAUDE_PLUGIN_ID}")
+        print("Next: start a new Claude Code session and ask it to use LoreLoop.")
+        return 0
+
+    if args.action == "uninstall":
+        marketplace = _claude_marketplace()
+        if marketplace is None:
+            print("Claude Code integration: already removed")
+            return 0
+        plugin = _claude_plugin()
+        if plugin is not None:
+            _claude_command("plugin", "uninstall", _CLAUDE_PLUGIN_ID, "--scope", "user")
+            print(f"Removed Claude Code plugin: {_CLAUDE_PLUGIN_ID}")
+        if args.remove_marketplace:
+            _claude_command("plugin", "marketplace", "remove", _CLAUDE_MARKETPLACE)
+            print(f"Removed Claude Code marketplace: {_CLAUDE_MARKETPLACE}")
+        else:
+            print("Marketplace preserved; pass --remove-marketplace to remove it too.")
+        return 0
+
+    raise CLIError(
+        "unsupported Claude Code integration action",
+        f"unknown Claude Code action: {args.action}",
+        "run `loreloop claude --help`",
+    )
+
+
 def _comind_command(*argv: str) -> str:
     import shutil
     import subprocess
@@ -640,7 +776,7 @@ def cmd_comind(args: argparse.Namespace) -> int:
             print("Next: loreloop comind install")
             return 1
         plugin = _comind_plugin()
-        if plugin is None:
+        if plugin is None or plugin.get("enabled") is False:
             print("co-mind integration: plugin not installed")
             print(f"Next: co-mind plugin install {_COMIND_PLUGIN_ID} --scope user")
             return 1
@@ -2472,6 +2608,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_opencode_uninstall.set_defaults(func=cmd_opencode)
 
+    p_claude = sub.add_parser(
+        "claude", help="install or inspect the native Claude Code integration"
+    )
+    claude_sub = p_claude.add_subparsers(dest="action", required=True)
+    p_claude_status = claude_sub.add_parser("status", help="show Claude Code plugin readiness")
+    p_claude_status.set_defaults(func=cmd_claude)
+    p_claude_install = claude_sub.add_parser(
+        "install", help="install and enable LoreLoop through Claude Code's plugin system"
+    )
+    p_claude_install.add_argument(
+        "--source",
+        default=_CLAUDE_MARKETPLACE_SOURCE,
+        help="GitHub repository or local marketplace root",
+    )
+    p_claude_install.set_defaults(func=cmd_claude)
+    p_claude_uninstall = claude_sub.add_parser(
+        "uninstall", help="remove the LoreLoop plugin from Claude Code"
+    )
+    p_claude_uninstall.add_argument(
+        "--remove-marketplace",
+        action="store_true",
+        help="also remove the LoreLoop marketplace registration",
+    )
+    p_claude_uninstall.set_defaults(func=cmd_claude)
+
     p_comind = sub.add_parser("comind", help="install or inspect the native co-mind integration")
     comind_sub = p_comind.add_subparsers(dest="action", required=True)
     p_comind_status = comind_sub.add_parser("status", help="show co-mind plugin readiness")
@@ -2875,6 +3036,7 @@ def main(argv: list[str] | None = None) -> int:
             "init": "run `loreloop doctor`, fix each FAIL check, then retry initialization",
             "codex": "run `loreloop codex status`, resolve the reported Codex issue, then retry",
             "opencode": "run `loreloop opencode status`, resolve the reported OpenCode issue, then retry",
+            "claude": "run `loreloop claude status`, resolve the reported Claude Code issue, then retry",
             "comind": "run `loreloop comind status`, resolve the reported co-mind issue, then retry",
             "trust": "run `loreloop trust --help` and choose status, recover, or reset",
             "demo": "fix the reported prerequisite, then rerun `loreloop demo --help`",

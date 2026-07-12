@@ -18,15 +18,22 @@ sensitive.
   Install with `python -m pip install 'loreloop[web]'` followed by
   `python -m playwright install chromium`.
 
-## Plugin cannot install the Runtime
+## LoreLoop installation cannot finish
 
 The bundled installer requires `curl` or `wget` on Linux/macOS and `uv` or
 `pipx` on Windows. It downloads `SHA256SUMS` first and accepts only a safe
-versioned LoreLoop wheel name from that manifest. A missing wheel, malformed
+versioned LoreLoop package name from that manifest. A missing package, malformed
 manifest, or checksum mismatch is a hard failure; do not bypass it. Confirm the
 GitHub Release is complete, fix proxy/TLS access, and retry. On Linux/macOS the
 installer can fall back to a Python 3.11-3.14 virtual environment when neither
 `uv` nor `pipx` is available.
+
+## Claude Code integration is not ready
+
+Run `loreloop claude status`. If the marketplace or plugin is absent, run
+`loreloop claude install`; this delegates registration and enablement to
+Claude Code's native plugin commands and preserves an existing marketplace
+source. Start a new Claude Code session after installation.
 
 ## Codex integration is not ready
 

@@ -6,18 +6,20 @@ VERSION="${LORELOOP_VERSION:-latest}"
 WITH_WEB=0
 INITIALIZE=0
 INSTALL_CODEX=0
+INSTALL_CLAUDE=0
 INSTALL_OPENCODE=0
 INSTALL_COMIND=0
 
 usage() {
   cat <<'EOF'
-Install the LoreLoop Runtime from a checksummed GitHub Release wheel.
+Install LoreLoop and connect it to the coding agent you already use.
 
-Usage: install-runtime.sh [--version vX.Y.Z] [--with-web] [--codex] [--opencode] [--comind] [--init]
+Usage: install-loreloop.sh [--version vX.Y.Z] [--with-web] [--codex] [--claude] [--opencode] [--comind] [--init]
 
   --version VERSION  Install one tagged release instead of latest.
   --with-web         Include Playwright's Python package (browser download is separate).
   --codex            Install and enable the native LoreLoop Codex plugin too.
+  --claude           Install and enable the native LoreLoop Claude Code plugin too.
   --opencode         Install the global LoreLoop Skill and command for OpenCode.
   --comind           Install and enable the native LoreLoop co-mind plugin too.
   --init             Initialize LoreLoop and install project companion skills in cwd.
@@ -37,6 +39,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --codex)
       INSTALL_CODEX=1
+      shift
+      ;;
+    --claude)
+      INSTALL_CLAUDE=1
       shift
       ;;
     --opencode)
@@ -88,12 +94,12 @@ download() {
   fi
 }
 
-echo "Downloading LoreLoop Runtime from $RELEASE_BASE"
+echo "Downloading LoreLoop from $RELEASE_BASE"
 download "$RELEASE_BASE/SHA256SUMS" "$SUMS"
 
 WHEEL_NAME="$(awk '$2 ~ /^loreloop-[A-Za-z0-9_.+!-]+-py3-none-any\.whl$/ { print $2; exit }' "$SUMS")"
 if [ -z "$WHEEL_NAME" ]; then
-  echo "error: SHA256SUMS does not contain a valid LoreLoop wheel filename" >&2
+  echo "error: SHA256SUMS does not contain a valid LoreLoop package filename" >&2
   exit 1
 fi
 WHEEL="$TMP_DIR/$WHEEL_NAME"
@@ -108,7 +114,7 @@ else
   exit 1
 fi
 if [ "$ACTUAL" != "$EXPECTED" ]; then
-  echo "error: LoreLoop wheel checksum mismatch" >&2
+  echo "error: LoreLoop package checksum mismatch" >&2
   exit 1
 fi
 echo "Verified SHA-256: $ACTUAL"
@@ -120,10 +126,10 @@ fi
 
 if command -v uv >/dev/null 2>&1; then
   uv tool install --force "$SPEC"
-  RUNTIME="$(command -v loreloop 2>/dev/null || true)"
+  LORELOOP="$(command -v loreloop 2>/dev/null || true)"
 elif command -v pipx >/dev/null 2>&1; then
   pipx install --force "$SPEC"
-  RUNTIME="$(command -v loreloop 2>/dev/null || true)"
+  LORELOOP="$(command -v loreloop 2>/dev/null || true)"
 else
   PYTHON=""
   for candidate in python3 python; do
@@ -133,7 +139,7 @@ else
     fi
   done
   if [ -z "$PYTHON" ]; then
-    echo "error: install uv, pipx, or Python 3.11-3.14, then retry" >&2
+    echo "error: install uv, pipx, or Python 3.11-3.14, then retry LoreLoop installation" >&2
     exit 1
   fi
   VENV="${LORELOOP_INSTALL_ROOT:-$HOME/.local/share/loreloop}/venv"
@@ -141,38 +147,42 @@ else
   "$VENV/bin/python" -m pip install --force-reinstall "$SPEC"
   mkdir -p "$HOME/.local/bin"
   ln -sf "$VENV/bin/loreloop" "$HOME/.local/bin/loreloop"
-  RUNTIME="$HOME/.local/bin/loreloop"
+  LORELOOP="$HOME/.local/bin/loreloop"
 fi
 
-if [ -z "$RUNTIME" ] || [ ! -x "$RUNTIME" ]; then
+if [ -z "$LORELOOP" ] || [ ! -x "$LORELOOP" ]; then
   if [ -x "$HOME/.local/bin/loreloop" ]; then
-    RUNTIME="$HOME/.local/bin/loreloop"
+    LORELOOP="$HOME/.local/bin/loreloop"
   else
     echo "error: installation completed but loreloop is not discoverable on PATH" >&2
     exit 1
   fi
 fi
 
-"$RUNTIME" --help >/dev/null
-echo "Installed LoreLoop Runtime: $RUNTIME"
+"$LORELOOP" --help >/dev/null
+echo "Installed LoreLoop: $LORELOOP"
 
 if [ "$INSTALL_CODEX" -eq 1 ]; then
-  "$RUNTIME" codex install
+  "$LORELOOP" codex install
+fi
+
+if [ "$INSTALL_CLAUDE" -eq 1 ]; then
+  "$LORELOOP" claude install
 fi
 
 if [ "$INSTALL_OPENCODE" -eq 1 ]; then
-  "$RUNTIME" opencode install
+  "$LORELOOP" opencode install
 fi
 
 if [ "$INSTALL_COMIND" -eq 1 ]; then
-  "$RUNTIME" comind install
+  "$LORELOOP" comind install
 fi
 
 if [ "$INITIALIZE" -eq 1 ]; then
-  "$RUNTIME" init --skill
+  "$LORELOOP" init --skill
 fi
 
-if [ "$INSTALL_CODEX" -eq 1 ] || [ "$INSTALL_OPENCODE" -eq 1 ] || [ "$INSTALL_COMIND" -eq 1 ]; then
+if [ "$INSTALL_CODEX" -eq 1 ] || [ "$INSTALL_CLAUDE" -eq 1 ] || [ "$INSTALL_OPENCODE" -eq 1 ] || [ "$INSTALL_COMIND" -eq 1 ]; then
   echo "Next: restart the installed coding-agent host, then ask it to use LoreLoop in your project."
 else
   echo "Next: run a LoreLoop host integration command or use LoreLoop directly from the terminal."

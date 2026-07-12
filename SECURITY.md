@@ -103,11 +103,11 @@ compromised coding-agent binary, a model deliberately escaping the provided
 CLI capability profile, and confidentiality of local state beyond filesystem
 permissions.
 
-## Runtime security contract
+## Local core security contract
 
 These statements are observable behavior, not aspirational documentation:
 
-| Promise | Runtime enforcement | Regression coverage |
+| Promise | Core enforcement | Regression coverage |
 |---|---|---|
 | Foreign federation is read-only | SQLite opens with `mode=ro`; chain verification never creates or advances a foreign head/key | `tests/test_federation.py`, `tests/test_evidence_chain.py` |
 | Trust cannot be raised or silently rewritten by SQLite edits | Current entry digests must replay from HMAC-chain events; missing/unexplained chain-backed rows stop delegation | `tests/test_endorsement.py`, `tests/test_report_and_cli.py` |
@@ -119,9 +119,9 @@ These statements are observable behavior, not aspirational documentation:
 | Interrupted/failed work is not acceptance | Trace records an explicit failed/interrupted terminal event; only one chain-backed completion can be accepted | `tests/test_delegate.py`, `tests/test_report_and_cli.py` |
 | Chain-first harvest survives a DB crash | Signed harvest events carry complete minted rows; a retry restores only missing digest-matching rows without appending a second event | `tests/test_harvest.py` |
 | Schema upgrades preserve rollback material | Ordered transaction, pre-upgrade SQLite backup, refusal of newer versions | `tests/test_knowledge_store.py` |
-| Expected failures do not leak tracebacks | argparse and runtime failures share `error`/`reason`/`next` output | `tests/test_cli_help.py`, CLI E2E tests |
+| Expected failures do not leak tracebacks | argparse and command failures share `error`/`reason`/`next` output | `tests/test_cli_help.py`, CLI E2E tests |
 
-## Runtime distribution
+## Installation and distribution
 
 The bundled host plugins never download and execute a remote installer script. Their
 bundled installer downloads `SHA256SUMS`, accepts only a safe versioned
@@ -134,9 +134,9 @@ channel, not a trust or availability dependency for GitHub installation.
 The public README also offers direct installer-script downloads for operators
 who prefer a standalone shell/PowerShell flow. Review the downloaded script or
 verify its release provenance before execution; the script still independently
-verifies the Runtime wheel before installation.
+verifies the LoreLoop package before installation.
 
-The installer's optional host flags invoke the installed Runtime's native
+The installer's optional host flags invoke the installed LoreLoop command's native
 integration commands. Codex and co-mind use their own marketplace/plugin CLI
 operations and preserve existing marketplace registrations. OpenCode installs
 only managed Skill/command files, rejects symlinks, and refuses to overwrite or
