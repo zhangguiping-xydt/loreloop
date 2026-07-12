@@ -2,56 +2,56 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-**反转项目知识，指导编码代理，让验收结果回流为可信知识。**
+让编码代理真正复用项目知识。
 
-LoreLoop 是面向编码代理的本地知识治理与证据验收工具。它不会替代 Codex、Claude
-Code、OpenCode 或 co-mind；用户继续留在原来的编码代理会话中，LoreLoop 在背后完成：
+LoreLoop 从现有代码、运行中的 Web 应用和已经验收的开发结果中，整理出一份本地、可审核
+的项目知识库。你继续使用 Codex、Claude Code、OpenCode 或 co-mind；LoreLoop 在背后
+提供相关知识，并保留验收证据。
 
-1. 从代码和运行中的 Web 应用反向提取项目知识；
-2. 按可信度检索并注入与当前需求相关的知识；
-3. 用可复审证据验收结果；
-4. 只在操作者明确授权后，把已验收结果回流为知识。
+> 目前是 early alpha。完整闭环已经可用，但接口仍可能调整。
 
-完整的产品设计、安全模型、评估数据和开发文档请参阅英文
-[README](README.md)。下面提供完整的中文安装与首次使用说明。
+## 为什么需要它
 
-## 安装要求
+新代理进入老项目时，几乎总是从零开始。会话记忆还没有内容，文档可能已经过期，而代理
+自己写下的笔记也不应该自动变成项目事实。
 
-- 当前机器已安装 Codex、Claude Code、OpenCode 或 co-mind 中的至少一个；
-- Linux/macOS 使用 `curl` 或 `wget`；
-- 安装过程需要 `uv`、`pipx` 或 Python 3.11–3.14；
-- 浏览器探索与验收是可选能力，需要 Playwright。
+LoreLoop 补上三步：
 
-## 让当前编码代理安装
+- **反构**：从代码和真实页面中提取断言级知识，并保留源码位置、提交和页面快照。
+- **使用**：为当前需求找出少量相关知识，明确区分“已确认约束”和“仍需核对的参考”。
+- **回流**：记录验收证据，只把已经接受的结果带回知识库。
+
+它不是新的聊天入口，也不会替代你正在使用的编码代理。
+
+## 安装
+
+### 让当前编码代理安装
 
 把下面这段直接发给 Codex、Claude Code、OpenCode 或 co-mind：
 
 ```text
 请为正在运行本次对话的编码代理安装并配置 LoreLoop。
 
-请完整阅读 README 的“安装”部分并严格执行，不要只做总结：
-https://raw.githubusercontent.com/zhangguiping-xydt/loreloop/main/README.zh-CN.md
+请完整阅读这个 README 的“安装”部分并严格执行，不要只做总结：
+https://github.com/zhangguiping-xydt/loreloop/blob/main/README.zh-CN.md
 
-请识别当前宿主，使用对应的安装选项完成 LoreLoop 安装，然后运行
-loreloop doctor 和当前宿主对应的状态检查，并用中文汇报结果。
+请识别当前宿主，使用对应选项安装 LoreLoop，然后运行 loreloop doctor 和当前宿主的
+status 命令。
 
-不要要求我单独安装或理解其他执行组件；不要直接修改 .loreloop、宿主配置文件
-或 marketplace 文件；安装过程中不要执行 trust reset、complete、harvest 或知识策展。
+不要要求我单独安装或理解其他执行组件；不要直接修改 .loreloop、宿主配置或
+marketplace 文件；安装过程中不要执行 trust reset、complete、harvest 或知识策展。
 ```
 
-用户只需要表达“安装 LoreLoop”。安装过程中使用的 Python 包、本地命令和宿主插件
-属于内部实现，不需要作为独立产品步骤解释给用户。
+### 从 GitHub Release 安装
 
-## 推荐：GitHub Release 一次安装
-
-安装器会安装 LoreLoop、连接指定宿主，并验证下载包的 `SHA256SUMS`。四种宿主选项
-可以组合；由 Agent 安装时只选择当前对话所在的宿主。
+先下载安装器，不要把远端脚本直接通过管道交给 shell。
 
 Linux/macOS：
 
 ```bash
 curl -fLO https://github.com/zhangguiping-xydt/loreloop/releases/latest/download/install-loreloop.sh
 
+# 只选择当前宿主：
 sh install-loreloop.sh --codex
 sh install-loreloop.sh --claude
 sh install-loreloop.sh --opencode
@@ -63,25 +63,25 @@ Windows PowerShell：
 ```powershell
 Invoke-WebRequest https://github.com/zhangguiping-xydt/loreloop/releases/latest/download/install-loreloop.ps1 -OutFile install-loreloop.ps1
 
+# 只选择当前宿主：
 .\install-loreloop.ps1 -Codex
 .\install-loreloop.ps1 -Claude
 .\install-loreloop.ps1 -OpenCode
 .\install-loreloop.ps1 -CoMind
 ```
 
-需要浏览器探索或浏览器验收时，在 Linux/macOS 增加 `--with-web`，在 Windows 增加
-`-WithWeb`。不要把远端脚本直接通过管道交给 shell，也不要绕过校验失败。
+只有需要浏览器探索和浏览器验收时，才增加 `--with-web` 或 `-WithWeb`。
 
-## 首个 Release 发布前：从 GitHub 安装
+### 首个 Release 发布前
 
-如果仓库还没有 GitHub Release，下载地址返回 404，可以从默认分支安装：
+仓库还没有 GitHub Release 时，可以直接安装当前分支：
 
 ```bash
 uv tool install --force \
   'loreloop[web] @ git+https://github.com/zhangguiping-xydt/loreloop.git@main'
 ```
 
-不需要浏览器能力时移除 `[web]`。然后只执行当前宿主对应的一条命令：
+然后只连接当前宿主：
 
 ```bash
 loreloop codex install --source zhangguiping-xydt/loreloop --ref main
@@ -90,69 +90,122 @@ loreloop opencode install
 loreloop comind install --source zhangguiping-xydt/loreloop
 ```
 
-只有“尚无 Release”或操作者明确要求预发布版本时才能使用源码安装。正式 Release
-存在但校验失败时必须停止，不能切换到可变分支绕过校验。
+不需要浏览器能力时移除 `[web]`。正式 Release 已存在但校验失败时，不能改用可变分支
+绕过校验。
 
-## 安装后验证
+### 安装后的入口
 
-先运行：
+| 宿主 | 使用方式 |
+|---|---|
+| Codex | 新开线程后调用 `$loreloop`，或直接用自然语言要求使用 LoreLoop |
+| Claude Code | 新开会话后直接要求使用 LoreLoop |
+| OpenCode | 新开会话后运行 `/loreloop <需求>` |
+| co-mind | 新开会话后直接要求使用 LoreLoop |
+
+检查安装：
 
 ```bash
 loreloop doctor
+loreloop codex status      # 或 claude / opencode / comind
 ```
 
-再运行当前宿主对应的一条状态命令：
+## 第一个项目
+
+在项目中初始化：
 
 ```bash
-loreloop codex status
-loreloop claude status
-loreloop opencode status
-loreloop comind status
-```
-
-插件安装完成后需要新开宿主会话，让宿主重新发现 Skill。
-
-## 在项目中首次使用
-
-如果用户明确要求在当前项目使用 LoreLoop，运行：
-
-```bash
+cd your-project
 loreloop init --skill
 ```
 
-之后可以在当前编码代理中直接说：
-
-```text
-使用 LoreLoop 基于这个老项目开发一个新功能。
-```
-
-宿主会运行 `loreloop begin`，读取相关项目知识，并继续在当前会话完成开发。
-
-OpenCode 也可以使用：
-
-```text
-/loreloop 基于这个项目开发新功能
-```
-
-Codex 还可以显式调用 `$loreloop`。
-
-## 安全边界
-
-- 不要直接编辑 `.loreloop`；
-- 不要手工改写宿主配置或 marketplace 文件；
-- 安装过程不得执行 `trust reset`；
-- 未经操作者针对具体 run 明确确认，不得执行 `complete --confirm`；
-- `harvest`、approve、reject、supersede 等知识回流与策展操作始终需要明确授权；
-- OpenCode 当前没有可验证的工作区沙箱，因此不支持
-  `loreloop run --agent opencode`，但支持当前 OpenCode 会话内的交互式使用。
-
-## 卸载宿主集成
+从代码建立第一版知识：
 
 ```bash
-loreloop codex uninstall --remove-marketplace
-loreloop claude uninstall --remove-marketplace
-loreloop opencode uninstall
-loreloop comind uninstall --remove-marketplace
+loreloop ingest --from code .
+loreloop knowledge review
 ```
 
-OpenCode 卸载只会删除内容仍与 LoreLoop 模板完全一致的文件；用户修改过的文件会保留。
+然后留在当前编码代理会话里，直接说：
+
+```text
+使用 LoreLoop 给上传接口增加限流。
+```
+
+宿主会通过 `loreloop begin` 准备任务、读取相关知识，然后继续在当前会话中开发。
+
+实现完成后，可以记录确定性检查并生成验收报告：
+
+```bash
+loreloop check <run-id> "测试通过" --command "pytest -q"
+loreloop report <run-id>
+```
+
+completion、harvest 和知识策展始终由操作者明确决定。
+
+## 知识里有什么
+
+每条知识都是一条小断言，包含：
+
+- 来源：源码位置、Git 提交、URL 或页面快照；
+- 审核状态：draft、approved 或 rejected；
+- 验证状态：unverified、verified 或 contradicted；
+- 来源变化后的漂移状态。
+
+SQLite 只是本地投影。提升信任的操作需要从防篡改证据链重放，链的凭据保存在项目目录
+之外。代理仅仅修改数据库，不能让自己的笔记变成可信事实。
+
+## 和常见方案的区别
+
+| 方案 | 擅长什么 | LoreLoop 补充什么 |
+|---|---|---|
+| 会话记忆 | 保存最近对话和偏好 | 从代理进入项目之前就存在的代码和行为建立知识基线 |
+| 代码检索 / RAG | 找文件和代码片段 | 带来源、漂移和审核状态的断言级知识 |
+| Agent wrapper | 调度模型和工具 | 不采信代理自述的证据验收 |
+| 团队文档 | 记录人类解释和决策 | 可检索、可验证、可退役、可复用的项目事实 |
+
+LoreLoop 与这些工具配合使用，不要求替换它们。
+
+## 当前支持
+
+- 单仓库或多仓库代码反构
+- 同源 Web 探索，以及可选的人工登录接管
+- Codex、Claude Code、OpenCode 和 co-mind 当前会话集成
+- 命令检查和浏览器验收
+- 知识审核、拒绝、重开、替代和使用统计
+- 不同信任域之间的只读项目联邦
+
+OpenCode 支持交互式使用和无工具推理。由于其 CLI 暂时没有可验证的工作区沙箱，
+`loreloop run --agent opencode` 仍然禁用。
+
+## 公开证据
+
+仓库中的 `eval/` 会测试反构、检索、真实编码任务和规模表现。当前小型基线包括：
+
+- Codex 代码反构：14 条固定事实上 precision 1.00 / recall 1.00
+- Claude 多语言反构：precision 0.82 / recall 0.90
+- 固定查询扩展：固定检索集上 Hit@5 1.00 / MRR 1.00
+- LoreLoop 任务组：checked-in Claude 任务夹具上 3/3
+
+这些数字用于回归，不代表普遍领先。原始输入、评分代码、限制和尚未完成的真实参与者
+可用性研究都在仓库中公开。
+
+- [评测套件](eval/)
+- [产品论证与证据](docs/product-thesis-and-evidence.md)
+- [设计与实现](docs/design-and-implementation.md)
+- [安全模型](SECURITY.md)
+- [故障排查](docs/troubleshooting.md)
+
+## 开发
+
+```bash
+git clone https://github.com/zhangguiping-xydt/loreloop
+cd loreloop
+uv sync --frozen --all-extras
+uv run --frozen pytest -q
+```
+
+更多信息见 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [RELEASING.md](RELEASING.md)。
+
+## License
+
+MIT

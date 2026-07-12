@@ -2,186 +2,93 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-**Reverse the lore. Guide the agent. Feed proof back.**
+Project knowledge your coding agent can actually reuse.
 
-**Lore** is the accumulated knowledge hidden across a project; **Loop** is the
-cycle that reverses it, applies it to real work, and returns only evidence-backed
-facts. LoreLoop makes that cycle explicit, local, and governable.
+LoreLoop builds a local, reviewable knowledge base from an existing codebase,
+a running web app, and accepted development work. You keep working in Codex,
+Claude Code, OpenCode, or co-mind; LoreLoop supplies the relevant context and
+keeps the evidence trail behind the scenes.
 
-Memory tools remember what your agent did *since you installed them*. LoreLoop
-extracts knowledge from what *already exists* — the codebase and the running
-app — no session history required. Where memory tools often let the agent write
-its own memory, LoreLoop makes the agent-writable database non-authoritative:
-facts steer later runs only when the separate evidence chain backs them.
+> Early alpha. The workflow works end to end, but interfaces may still change.
 
-## The problem
+## Why
 
-You inherit a project no agent has ever touched: five years of code, a running
-app, documentation that stopped being true two refactors ago. Session-memory
-tools have nothing to capture — there is no session history. So the agent
-starts from zero, and everything it "learns" is whatever it told itself while
-working: unreviewed, unverified, and injected into the next run as if it were
-fact. Stale memory and self-graded homework compound each other.
+A new coding agent knows nothing about an old project. Session memory is empty,
+the docs may be stale, and notes written by the agent itself should not quietly
+become project truth.
 
-LoreLoop is a local-first CLI that closes the loop with a gate at both ends:
+LoreLoop adds three missing steps:
 
-1. **Ingest (cold start)** — reverse-engineer knowledge from what already
-   exists: the codebase (implementation view) and the running web app
-   (behavior view). Day one on a legacy project, you get assertion-level
-   facts with structured provenance — not chunks, not summaries.
-2. **Apply** — keep working in the Codex, Claude Code, OpenCode, or co-mind
-   session you already use. The companion skill calls `loreloop begin`, which signs the task
-   boundary and returns a relevant, trust-ranked context pack without
-   launching a nested agent. `loreloop run` remains available for headless
-   delegation to Claude-compatible hosts or `codex exec`. Established facts are marked as
-   constraints; unverified references are marked as "verify before relying".
-   LoreLoop never writes code itself.
-3. **Report & harvest (trust gate)** — verify the result in a real browser,
-   record every check on a tamper-evident (HMAC-chained) evidence trail, and
-   only then let knowledge flow back. Human-written, browser-verified
-   acceptance assertions are born verified. LLM re-extractions are born draft
-   and earn trust the normal way. The agent's own claims mint nothing.
+- **Reverse**: extract assertion-level knowledge from code and observed app
+  behavior, with source locations and snapshots.
+- **Use**: retrieve a small set of relevant facts for the task, clearly
+  separating established constraints from references that still need checking.
+- **Return**: record acceptance evidence and feed accepted outcomes back into
+  the knowledge base.
 
-## What makes the loop different
-
-Every entry carries two explicit trust axes — human curation
-(`draft`/`approved`/`rejected`) and machine verification
-(`unverified`/`verified`/`contradicted`) — and the SQLite store is treated as
-a display cache, not an authority. Real trust is replayed from the evidence
-chain, whose signing key lives outside the project tree. Concretely:
-
-- An agent that edits the store to mark its own output "approved" gains
-  nothing: strong status counts only when the chain endorses the entry's
-  *current content digest*. If a chain-backed row disappears or changes with
-  no recorded re-ingest provenance, delegation fails closed for operator review.
-- Knowledge whose anchored source has drifted (the file changed since
-  capture) is demoted to reference at injection time, automatically.
-- Rejected or superseded entries stay retired even if the database is edited
-  back — retirement is replayed from the chain too.
-
-LoreLoop keeps signing material outside the project and strips operator-only
-locations from the agent subprocess environment. Inference calls run in an
-isolated temporary directory with tools disabled or a read-only sandbox;
-delegation uses explicit non-bypass workspace permissions. This is a
-cooperative process boundary, not an OS sandbox against a malicious agent
-binary. Acceptance and curation remain operator CLI actions, and normal signing
-APIs reject LoreLoop-launched agent subprocesses.
-
-## Status
-
-Early alpha. Interfaces will change. Storage, evidence, and orchestration are
-local; there are no LoreLoop accounts or telemetry. **Local-first does not mean
-local inference:** code snippets, page observations, and prompts sent through
-the selected coding-agent host are processed under that provider's terms and settings.
-Use `--no-expand` and deterministic assertions to reduce model calls, and do
-not ingest material you are not authorized to send to the selected provider.
-
-## Requirements
-
-- One supported coding-agent CLI on PATH: Claude Code (`claude`), Codex
-  (`codex`), OpenCode (`opencode`), or co-mind (`co-mind`)
-- For installation: `curl`/`wget` plus `uv`, `pipx`, or Python 3.11–3.14
-- [uv](https://docs.astral.sh/uv/) for source-checkout development
-- Optional: Playwright for web exploration and browser-verified acceptance
+It is not another chat UI and it does not replace your coding agent.
 
 ## Install
 
-### Let your coding agent install it
+### Let your agent do it
 
-Paste this into Codex, Claude Code, OpenCode, or co-mind:
+Paste this into the coding agent you already use:
 
 ```text
 Install and configure LoreLoop for the coding agent running this conversation.
-Read the Install section in the README completely and follow it instead of only summarizing it:
-https://raw.githubusercontent.com/zhangguiping-xydt/loreloop/main/README.md
 
-Detect the current host, install LoreLoop through its matching host option, run
-loreloop doctor and the matching host status command, and report the result.
-Do not ask me to install a separate execution component. Do not edit .loreloop
-or host configuration files directly, and do not run trust reset, complete,
-harvest, or knowledge curation as part of installation.
+Read the Install section in this README and follow it instead of only summarizing it:
+https://github.com/zhangguiping-xydt/loreloop/blob/main/README.md
+
+Detect the current host, install LoreLoop with the matching host option, then run
+loreloop doctor and the matching host status command.
+
+Do not ask me to install a separate execution component. Do not edit .loreloop,
+host configuration, or marketplace files directly. Do not run trust reset,
+complete, harvest, or knowledge curation as part of installation.
 ```
 
-The instructions below prefer the checksummed GitHub Release and use the direct
-GitHub source path before the first Release. Users do not need to install or
-understand a separate execution layer.
+### From a GitHub Release
 
-### Native host integrations — recommended
-
-Keep your existing coding agent as the only user-facing entry point. LoreLoop
-uses each host's native extension surface and one shared local installation:
-
-| Host | Native integration | Install flag | In-session entry |
-|---|---|---|---|
-| Codex | marketplace plugin + Skill | `--codex` / `-Codex` | invoke `$loreloop` |
-| Claude Code | marketplace plugin + Skill | `--claude` / `-Claude` | invoke `/loreloop` or ask naturally |
-| OpenCode | global Skill + `/loreloop` command | `--opencode` / `-OpenCode` | run `/loreloop <request>` |
-| co-mind | Claude-compatible marketplace plugin | `--comind` / `-CoMind` | ask it to use LoreLoop |
-
-The installer flags can be combined.
+Download the installer instead of piping it directly into a shell.
 
 Linux/macOS:
 
 ```bash
 curl -fLO https://github.com/zhangguiping-xydt/loreloop/releases/latest/download/install-loreloop.sh
-sh install-loreloop.sh --codex --claude --opencode --comind
+
+# Pick the host for the current session:
+sh install-loreloop.sh --codex
+sh install-loreloop.sh --claude
+sh install-loreloop.sh --opencode
+sh install-loreloop.sh --comind
 ```
 
 Windows PowerShell:
 
 ```powershell
 Invoke-WebRequest https://github.com/zhangguiping-xydt/loreloop/releases/latest/download/install-loreloop.ps1 -OutFile install-loreloop.ps1
-.\install-loreloop.ps1 -Codex -Claude -OpenCode -CoMind
+
+# Pick the host for the current session:
+.\install-loreloop.ps1 -Codex
+.\install-loreloop.ps1 -Claude
+.\install-loreloop.ps1 -OpenCode
+.\install-loreloop.ps1 -CoMind
 ```
 
-For an existing installation, use `loreloop codex install`, `loreloop claude
-install`, `loreloop opencode install`, or `loreloop comind install`. Codex,
-Claude Code, and co-mind registration goes through their native plugin CLIs.
-OpenCode receives only managed Skill and command files under its config
-directory; LoreLoop does not edit `opencode.json`. Existing marketplace sources
-and user-modified OpenCode files are preserved rather than silently replaced.
+Add `--with-web` or `-WithWeb` only if you need browser exploration and
+browser-backed acceptance checks.
 
-Start a new host session after installation. If a marketplace plugin is
-installed before the local `loreloop` command exists, the plugin finishes the
-checksummed installation automatically on first use; it does not ask the user
-to understand or install a separate component. In a new repository, explicitly
-invoking LoreLoop also authorizes automatic project initialization; no second
-confirmation or credential setup is required.
+### Before the first Release
 
-### GitHub Release installer — no PyPI required
-
-Linux/macOS:
+Until a GitHub Release exists, install the current branch directly:
 
 ```bash
-curl -fLO https://github.com/zhangguiping-xydt/loreloop/releases/latest/download/install-loreloop.sh
-sh install-loreloop.sh --with-web
-loreloop doctor
-```
-
-Windows PowerShell:
-
-```powershell
-Invoke-WebRequest https://github.com/zhangguiping-xydt/loreloop/releases/latest/download/install-loreloop.ps1 -OutFile install-loreloop.ps1
-.\install-loreloop.ps1 -WithWeb
-loreloop doctor
-```
-
-The release workflow publishes the universal versioned wheel plus
-`SHA256SUMS`, SBOM, and GitHub provenance.
-`--with-web` installs Playwright's Python package; install Chromium separately
-only when web exploration or verification is needed.
-
-### Direct GitHub install — before the first Release
-
-This path installs directly from a tag, branch, or commit without PyPI:
-
-```bash
-uv tool install \
+uv tool install --force \
   'loreloop[web] @ git+https://github.com/zhangguiping-xydt/loreloop.git@main'
-loreloop doctor
 ```
 
-Then connect only the host running the current conversation:
+Then connect one host:
 
 ```bash
 loreloop codex install --source zhangguiping-xydt/loreloop --ref main
@@ -190,288 +97,127 @@ loreloop opencode install
 loreloop comind install --source zhangguiping-xydt/loreloop
 ```
 
-Use this source path only when no GitHub Release exists or when the operator
-explicitly requests a pre-release branch. A checksum failure on an existing
-Release is never a reason to fall back to a mutable branch.
+Remove `[web]` if browser features are not needed. Do not use this mutable
+source path to work around a checksum failure on an existing Release.
 
-### PyPI/pipx — optional ecosystem channel
+### Host entry points
 
-After a published release:
+| Host | After installation |
+|---|---|
+| Codex | Start a new thread and invoke `$loreloop`, or ask naturally |
+| Claude Code | Start a new session and ask it to use LoreLoop |
+| OpenCode | Start a new session and run `/loreloop <request>` |
+| co-mind | Start a new session and ask it to use LoreLoop |
+
+Check installation with:
 
 ```bash
-pipx install --include-deps 'loreloop[web]'
-playwright install chromium
 loreloop doctor
+loreloop codex status      # or claude / opencode / comind
 ```
 
-### Source checkout — contributors
+## First project
 
-Do not run LoreLoop directly from an uninstalled source tree:
+Initialize LoreLoop in the repository:
+
+```bash
+cd your-project
+loreloop init --skill
+```
+
+Build the first knowledge baseline from code:
+
+```bash
+loreloop ingest --from code .
+loreloop knowledge review
+```
+
+Then stay in your coding-agent session and ask:
+
+```text
+Use LoreLoop to add rate limiting to the upload endpoint.
+```
+
+The host prepares the task with `loreloop begin`, reads the returned context
+pack, and continues the implementation in the same conversation.
+
+When the work is ready, LoreLoop can record deterministic checks and render an
+acceptance report:
+
+```bash
+loreloop check <run-id> "tests pass" --command "pytest -q"
+loreloop report <run-id>
+```
+
+Completion, harvest, and knowledge curation remain explicit operator actions.
+
+## What gets stored
+
+Each knowledge entry is a small assertion with:
+
+- its source: code span, Git commit, URL, or page snapshot;
+- its review state: draft, approved, or rejected;
+- its verification state: unverified, verified, or contradicted;
+- drift information when the source changes.
+
+SQLite is only the local projection. Trust-raising actions are replayed from a
+tamper-evident evidence chain whose credential lives outside the project tree.
+An agent cannot make its own note authoritative by editing the database.
+
+## How it differs
+
+| Tool | Good at | What LoreLoop adds |
+|---|---|---|
+| Session memory | Remembering recent conversations and preferences | A baseline from the project that existed before the agent arrived |
+| Code search / RAG | Finding files and snippets | Assertion-level knowledge with provenance, drift, and review state |
+| Coding-agent wrappers | Running models and tools | Evidence-backed acceptance without trusting the agent's self-report |
+| Team documentation | Human explanation and decisions | Searchable facts that can be verified, retired, and reused |
+
+LoreLoop is meant to sit beside these tools, not replace them.
+
+## Supported workflows
+
+- Code ingestion across one or more Git repositories
+- Same-origin web exploration with optional human login handover
+- Current-session use through Codex, Claude Code, OpenCode, and co-mind
+- Deterministic command checks and browser-backed acceptance
+- Knowledge review, rejection, reopening, supersession, and usage reporting
+- Read-only federation across separately trusted projects
+
+OpenCode is supported as an interactive host and for tool-free inference.
+Headless `loreloop run --agent opencode` is disabled because its CLI does not
+currently expose a verifiable workspace sandbox.
+
+## Evidence, not slogans
+
+The checked-in `eval/` suite measures extraction, retrieval, executable coding
+tasks, and scale. The current small baselines include:
+
+- Codex code extraction: precision 1.00 / recall 1.00 on 14 fixed truths
+- Claude multi-language extraction: precision 0.82 / recall 0.90
+- Frozen query expansion: Hit@5 1.00 / MRR 1.00 on the fixed retrieval set
+- LoreLoop task variant: 3/3 on the checked-in Claude task fixture
+
+These are regression fixtures, not claims of general superiority. Raw inputs,
+scoring code, limitations, and the still-unfinished real-participant usability
+study are all published.
+
+- [Evaluation suite](eval/)
+- [Product thesis and evidence](docs/product-thesis-and-evidence.md)
+- [Design and implementation](docs/design-and-implementation.md)
+- [Security model](SECURITY.md)
+- [Troubleshooting](docs/troubleshooting.md)
+
+## Development
 
 ```bash
 git clone https://github.com/zhangguiping-xydt/loreloop
 cd loreloop
 uv sync --frozen --all-extras
-uv run --frozen playwright install chromium
-uv run --frozen loreloop doctor
+uv run --frozen pytest -q
 ```
 
-For local host-integration development, install LoreLoop editable and
-register the checkout through the host commands. Do not also create manual
-Skill symlinks; duplicate copies can load conflicting instructions:
-
-```bash
-uv tool install --editable '/absolute/path/to/loreloop[web]'
-loreloop codex install --source /absolute/path/to/loreloop
-loreloop claude install --source /absolute/path/to/loreloop
-loreloop opencode install
-loreloop comind install --source /absolute/path/to/loreloop
-```
-
-After installation, start a new host session. Remove older manual LoreLoop
-links once the native integration reports ready.
-
-### Pre-release rename
-
-LoreLoop is a clean break from the former pre-release name. It does not read
-`.knowhelm/` or `KNOWHELM_*`. If you used an earlier checkout, archive that
-local state and run `loreloop init` to create a fresh LoreLoop trust domain.
-
-## Five-minute quick start
-
-The bundled legacy application is the shortest complete learning path. From a
-source checkout with one coding-agent CLI configured:
-
-```bash
-loreloop demo --agent codex
-```
-
-It creates a disposable Git repository and visibly runs
-`init -> ingest -> review/approve -> run -> verify -> report -> harvest -> review/approve/supersede`.
-The retained workspace is ready to reopen directly; LoreLoop remembers its
-operator-owned local trust location, so no environment variable or key-file
-setup is required. Use `--agent claude` if preferred. A deterministic plumbing
-mode used by CI is also available:
-
-```bash
-loreloop demo --offline
-```
-
-Offline mode validates product plumbing, not model quality. Replay the checked-in
-terminal recording with `asciinema play docs/demo.cast`.
-
-## Use it in your project
-
-For interactive work, keep Codex, Claude Code, OpenCode, or co-mind as the
-user-facing entry point:
-
-```bash
-loreloop init --skill
-```
-
-Initialization prepares local trust automatically and remembers it for later
-all supported host and terminal sessions. Normal onboarding does not require
-creating, copying, or exporting a key. If a workspace predates automatic
-registration or its saved connection is missing, `loreloop trust status`
-explains the state and
-`loreloop trust recover --from <original-trust-directory>` reconnects it after
-verification. Resetting the trust domain is an explicit archival fallback,
-never the first recovery step.
-
-Then invoke `$loreloop` in Codex, `/loreloop` in Claude Code, `/loreloop
-<request>` in OpenCode, or simply ask any host:
-`Use LoreLoop to add rate limiting to the upload endpoint.` The companion skill
-prepares the signed run and injects knowledge into that same conversation.
-Under the hood, the current-session lifecycle is:
-
-```bash
-loreloop begin "add rate limiting to the upload endpoint"
-# The current coding-agent host implements the task in the current session.
-loreloop complete <run-id> --confirm       # only after explicit operator confirmation
-loreloop check <run-id> "tests pass" --command "pytest -q"
-loreloop report <run-id>
-loreloop harvest <run-id>                  # only after explicit operator instruction
-```
-
-`begin` is deterministic by default and does not invoke another model. A host
-agent may supply additional retrieval-only terms with `--expand`; those terms
-widen retrieval but never enter the context pack. `loreloop run` is the
-separate-process path for automation and unattended delegation.
-
-The complete CLI surface remains available for operators and automation:
-
-```bash
-cd your-project
-loreloop doctor                          # preflight Python/Git/agent/local trust/locking
-loreloop codex status                    # native marketplace/plugin integration status
-loreloop claude status                   # native Claude Code marketplace/plugin status
-loreloop opencode status                 # global Skill and command status
-loreloop comind status                   # native co-mind marketplace/plugin status
-loreloop trust status                    # explain local trust readiness without crypto internals
-loreloop init                            # set up .loreloop/; offers to install the
-                                         # companion skill into detected coding agents
-loreloop ingest --from code .            # implementation view: reverse the codebase
-loreloop ingest --from web http://localhost:3000   # behavior view: explore the running app
-loreloop knowledge list --status draft --channel code --limit 50
-loreloop knowledge show <entry-id>       # full assertion, trust, source span and relations
-loreloop knowledge review --stale        # detailed stale/draft curation queue
-loreloop knowledge export --output loreloop-knowledge.md  # export knowledge as Markdown
-loreloop run "add rate limiting to the upload endpoint"   # optional headless delegation
-loreloop verify <run-id> http://localhost:3000/upload \
-    "uploading a file larger than the limit shows an error"  # browser-verified check
-loreloop verify <run-id> http://localhost:3000 \
-    "contains:Cart shows 3 items" --script actions.json      # replayed flow check
-loreloop report                          # acceptance report backed by the evidence chain
-loreloop harvest <run-id>                # flow knowledge back from the accepted run
-loreloop knowledge usage                 # injected count and accepted-run correlation
-```
-
-Code ingestion reports each extraction batch and its file count on stderr,
-then reports the assertion count before that batch is classified. This keeps
-long model calls visibly active without mixing progress into command stdout.
-
-If a step fails, the CLI prints exactly one `error`, its `reason`, and the next
-recovery action. See [`docs/troubleshooting.md`](docs/troubleshooting.md) for
-agent, browser, local-trust, schema-upgrade, interrupted-run, and harvest help.
-
-## Architecture and trust boundary
-
-| Stage | What happens | Trust outcome |
-|---|---|---|
-| Reverse | Code and live behavior become atomic assertions with source spans/snapshots | LLM output is draft and unverified |
-| Apply | BM25 + bounded query expansion selects a small trust-ranked context pack | Approved/verified facts constrain; drafts are references |
-| Return | Browser/command evidence is chained, reported, then harvested | Only accepted, auditable outcomes mint verified knowledge |
-
-SQLite is the local projection; the out-of-tree HMAC key and evidence chain are
-the trust authority. Federation opens foreign SQLite databases read-only and
-imports nothing until the operator explicitly copies an entry as a local draft.
-The detailed design is in
-[`docs/design-and-implementation.md`](docs/design-and-implementation.md).
-
-Notes:
-- Retrieval for `run` is deterministic BM25 over ASCII terms and CJK bigrams,
-  plus LLM query expansion through your existing agent CLI (bilingual
-  synonyms and likely identifiers). Expansion terms only widen retrieval —
-  they never enter the delegation prompt — and are recorded in the run trace
-  for audit. `--no-expand` skips it. Embeddings are a deliberate non-feature
-  at this stage: retrieval stays explainable and testable.
-- `--from web` explores same-origin pages only. It thickens browser observation
-  with network-idle settling, lazy-scroll, semantic links, headings, buttons,
-  nav text and forms, and expands seeds from same-origin links, sitemap/robots
-  and static route strings found in code. HTTP 4xx/5xx pages are skipped during
-  exploration. When it hits a login form it hands the browser to you with
-  `--headed`; after you finish signing in and press Enter, LoreLoop observes the
-  browser's current authenticated page and continues from its links. Without
-  `--headed`, login-walled pages are skipped.
-- `verify` prefers deterministic assertions — `contains:`, `absent:`,
-  `title-contains:` prefixes are checked directly against the page, no model
-  involved. Free-form expectations fall back to an LLM judge that treats page
-  content strictly as untrusted data.
-- `verify --script actions.json` replays a deterministic interaction script
-  before checking the final page. The v1 DSL has five actions: `goto`, `click`,
-  `fill`, `select`, and `wait`. Scripts are content-addressed; harvested
-  acceptance entries use `script:<sha256>` locators, so an interactive state is
-  anchored by the path that reaches it, not just by the final URL.
-- Script execution is fenced: HTTP(S) only, cross-origin requests and final
-  URLs are rejected, password fields are never filled, destructive clicks are
-  blocked, and same-origin non-GET requests require `--allow-writes`. This is
-  not a transactional browser sandbox: GET endpoints can still have side
-  effects in a poorly designed application, so use a disposable or staging
-  environment for scripted checks.
-- Every check saves the full observation as a content-addressed artifact in
-  `.loreloop/evidence/artifacts/` and records its hash on the tamper-evident
-  chain. Script checks additionally save the script and replay trace artifacts,
-  so verdicts can be re-audited after the live page changes.
-- Curation stays human: `knowledge review --stale` shows complete assertions,
-  source spans, excerpts and relationships for entries whose anchor changed.
-  `knowledge supersede <new-id> <old-id> --yes` links a replacement after DAG
-  and active-entry validation; the old entry stays as history but is no longer
-  injected. `knowledge unsupersede <new-id> <old-id> --yes` records an explicit
-  recovery event. LoreLoop never auto-supersedes.
-- Code ingestion prints a coverage manifest with tracked, scanned and skipped
-  counts grouped by reason. Common contract files (Proto, GraphQL, JSON,
-  Markdown, Dockerfile) are included by default; use `--include`, `--exclude`,
-  `--max-file-bytes`, or `--strict` to make coverage policy explicit. The latest
-  per-repository policy is signed onto the evidence chain and reused by
-  dirty-tree checks and drift detection. Every current-session or delegated
-  run pins the complete repository-policy map in signed preparation/completion
-  records, so later ingestion cannot retroactively alter that run's harvest
-  scope.
-- Status filters and review queues use chain-replayed effective curation, never
-  the agent-writable SQLite cache. `knowledge show` displays both effective and
-  stored curation when they differ. Curation commands also validate transitions
-  against the chain and treat SQLite updates only as projection.
-
-Tests, linters, CLI probes and API test clients can produce re-auditable command
-evidence without a shell:
-
-```bash
-loreloop check <run-id> "unit tests pass" --command "python -m pytest -q"
-```
-
-The command, exit code, repository HEAD/working-tree digest, and bounded output
-are saved as a content-addressed artifact; stdout and stderr are redacted for
-common secret patterns first. Exit code zero is required to pass, and harvest
-rejects command evidence if the repository state has changed. Shell operators
-are rejected.
-
-## Multi-repository and federation
-
-A trust domain may include additional Git repositories, while federation reads
-other trust domains without adopting their facts automatically:
-
-```bash
-loreloop repo add ../backend --name backend
-loreloop repo list
-
-loreloop project add . --id storefront --tag commerce
-loreloop knowledge search "upload policy" --all
-loreloop run --with-related "update the upload policy"
-loreloop knowledge import storefront <entry-id-prefix>
-```
-
-Related-project entries are rendered in a separate non-constraint section.
-Importing is an explicit operator action and creates a local draft. See
-[`docs/multi-repo-and-federation.md`](docs/multi-repo-and-federation.md).
-
-## Reproducible evaluation
-
-The public [`eval/`](eval/) suite measures reverse Precision/Recall, retrieval
-Precision@K/Recall@K/MRR, and executable coding-task success. The recorded
-2026-07-10 small baseline is:
-
-| Benchmark | Result |
-|---|---|
-| Codex reverse | Precision 1.00, Recall 1.00 on 14 fixed truths |
-| Claude reverse | Precision 1.00, Recall 0.71; compound claims lose atomic credit |
-| Retrieval, plain BM25 | Hit@5 0.50, MRR 0.42 |
-| Retrieval, frozen expansion | Hit@5 1.00, MRR 1.00, 6 relevant / 10 returned |
-| Claude four-way tasks | no memory 0/3; code index 0/3; session memory 3/3; LoreLoop 3/3 |
-| Claude multi-language reverse matrix | Precision 0.82, Recall 0.90 across Python, TypeScript, mixed fixtures |
-| Retrieval scale, 10k entries / 5 projects | median 417 ms, P95 659 ms; Recall@5 1.00, MRR 1.00 on synthetic scale fixture |
-| Evidence chain / no-change harvest, 10k records | median 238 ms / 800 ms on the recorded Linux host |
-
-These are regression baselines, not broad claims of model superiority. The
-fixtures are deliberately small and all scoring rules, recorded predictions,
-raw task runs and limitations are published under `eval/`. The release gate
-re-scores them with `python eval/validate_results.py --check-thresholds`; the
-summary deliberately omits a historical Codex task comparison because no raw
-Codex task result file is checked in. The 10k retrieval
-result is usable but not instant; larger corpora will need a persistent lexical
-index. No zero-context human completion rate is claimed yet—the protocol is
-published, and the report remains explicitly "awaiting real participants" until
-real sessions are recorded.
-
-For the product thesis behind these metrics—what Reverse / Apply / Return
-actually proves today, where it does not, and the appropriate alpha release
-claim—see [Product thesis and evidence](docs/product-thesis-and-evidence.md).
-
-## Project policies
-
-See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md),
-[Governance](GOVERNANCE.md), [Support](SUPPORT.md), and
-[Releasing](RELEASING.md). Bugs and feature requests use structured issue
-templates; vulnerabilities belong in a private GitHub Security Advisory.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [RELEASING.md](RELEASING.md).
 
 ## License
 
