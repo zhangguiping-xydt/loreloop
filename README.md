@@ -27,11 +27,11 @@ LoreLoop is a local-first CLI that closes the loop with a gate at both ends:
    exists: the codebase (implementation view) and the running web app
    (behavior view). Day one on a legacy project, you get assertion-level
    facts with structured provenance — not chunks, not summaries.
-2. **Apply** — keep working in the Codex or Claude Code session you already
-   use. The companion skill calls `loreloop begin`, which signs the task
+2. **Apply** — keep working in the Codex, Claude Code, OpenCode, or co-mind
+   session you already use. The companion skill calls `loreloop begin`, which signs the task
    boundary and returns a relevant, trust-ranked context pack without
    launching a nested agent. `loreloop run` remains available for headless
-   delegation to `claude -p` or `codex exec`. Established facts are marked as
+   delegation to Claude-compatible hosts or `codex exec`. Established facts are marked as
    constraints; unverified references are marked as "verify before relying".
    LoreLoop never writes code itself.
 3. **Report & harvest (trust gate)** — verify the result in a real browser,
@@ -70,32 +70,61 @@ APIs reject LoreLoop-launched agent subprocesses.
 Early alpha. Interfaces will change. Storage, evidence, and orchestration are
 local; there are no LoreLoop accounts or telemetry. **Local-first does not mean
 local inference:** code snippets, page observations, and prompts sent through
-Claude Code or Codex are processed under that provider's terms and settings.
+the selected coding-agent host are processed under that provider's terms and settings.
 Use `--no-expand` and deterministic assertions to reduce model calls, and do
 not ingest material you are not authorized to send to the selected provider.
 
 ## Requirements
 
-- [Claude Code](https://code.claude.com) (`claude`) or Codex (`codex`) CLI on your PATH
+- One supported coding-agent CLI on PATH: Claude Code (`claude`), Codex
+  (`codex`), OpenCode (`opencode`), or co-mind (`co-mind`)
 - For Runtime-only installation: `uv`, `pipx`, or Python 3.11–3.14
 - [uv](https://docs.astral.sh/uv/) for source-checkout development
 - Optional: Playwright for web exploration and browser-verified acceptance
 
 ## Install
 
-### Codex plugin — recommended
+### Native host integrations — recommended
 
-Keep Codex as the only user-facing entry point:
+Keep your existing coding agent as the only user-facing entry point. LoreLoop
+uses each host's native extension surface and keeps one shared local Runtime:
+
+| Host | Native integration | Install flag | In-session entry |
+|---|---|---|---|
+| Codex | marketplace plugin + Skill | `--codex` / `-Codex` | invoke `$loreloop` |
+| Claude Code | project-local Skill | `loreloop init --skill` | invoke `/loreloop` or ask naturally |
+| OpenCode | global Skill + `/loreloop` command | `--opencode` / `-OpenCode` | run `/loreloop <request>` |
+| co-mind | Claude-compatible marketplace plugin | `--comind` / `-CoMind` | ask it to use LoreLoop |
+
+The installer flags can be combined.
+
+Linux/macOS:
 
 ```bash
-codex plugin marketplace add zhangguiping-xydt/loreloop --ref main
-codex plugin add loreloop@loreloop
+curl -fLO https://github.com/zhangguiping-xydt/loreloop/releases/latest/download/install-loreloop.sh
+sh install-loreloop.sh --codex --opencode --comind
 ```
 
-Start a new Codex thread and invoke `$loreloop`. If the Runtime is missing,
-the bundled plugin asks for explicit permission, reads the versioned wheel name
-from the GitHub Release `SHA256SUMS`, verifies it, and installs it with
-`uv` or `pipx`. It never executes a remotely downloaded installer script.
+Windows PowerShell:
+
+```powershell
+Invoke-WebRequest https://github.com/zhangguiping-xydt/loreloop/releases/latest/download/install-loreloop.ps1 -OutFile install-loreloop.ps1
+.\install-loreloop.ps1 -Codex -OpenCode -CoMind
+```
+
+If the Runtime is already installed, use `loreloop codex install`, `loreloop
+opencode install`, or `loreloop comind install`. Codex and co-mind registration
+goes through their native plugin CLIs. OpenCode receives only managed Skill and
+command files under its config directory; LoreLoop does not edit
+`opencode.json`. Existing marketplace sources and user-modified OpenCode files
+are preserved rather than silently replaced.
+
+Start a new host session after installation. If someone installed the
+marketplace first without the Runtime, the bundled plugin can still ask for
+permission and install the checksummed GitHub Release wheel with `uv` or
+`pipx`. It never executes a remotely downloaded installer script. In a new
+repository, the explicit `$loreloop` invocation also authorizes automatic
+project initialization; no second confirmation or key setup is required.
 
 ### GitHub Release Runtime — no PyPI required
 
@@ -152,6 +181,20 @@ uv run --frozen playwright install chromium
 uv run --frozen loreloop doctor
 ```
 
+For local host-integration development, install the Runtime editable and
+register the checkout through the host commands. Do not also create manual
+Skill symlinks; duplicate copies can load conflicting instructions:
+
+```bash
+uv tool install --editable '/absolute/path/to/loreloop[web]'
+loreloop codex install --source /absolute/path/to/loreloop
+loreloop opencode install
+loreloop comind install --source /absolute/path/to/loreloop
+```
+
+After installation, start a new host session. Remove older manual LoreLoop
+links once the native integration reports ready.
+
 ### Pre-release rename
 
 LoreLoop is a clean break from the former pre-release name. It does not read
@@ -169,9 +212,10 @@ loreloop demo --agent codex
 
 It creates a disposable Git repository and visibly runs
 `init -> ingest -> review/approve -> run -> verify -> report -> harvest -> review/approve/supersede`.
-The final output prints the exact `LORELOOP_KEY_DIR` export needed to continue
-using the retained workspace. Use `--agent claude`
-if preferred. A credential-free plumbing mode used by CI is also available:
+The retained workspace is ready to reopen directly; LoreLoop remembers its
+operator-owned local trust location, so no environment variable or key-file
+setup is required. Use `--agent claude` if preferred. A deterministic plumbing
+mode used by CI is also available:
 
 ```bash
 loreloop demo --offline
@@ -182,20 +226,31 @@ terminal recording with `asciinema play docs/demo.cast`.
 
 ## Use it in your project
 
-For interactive work, keep Codex or Claude Code as the user-facing entry point:
+For interactive work, keep Codex, Claude Code, OpenCode, or co-mind as the
+user-facing entry point:
 
 ```bash
 loreloop init --skill
 ```
 
-Then invoke `$loreloop` in Codex, `/loreloop` in Claude Code, or simply ask:
+Initialization prepares local trust automatically and remembers it for later
+all supported host and terminal sessions. Normal onboarding does not require
+creating, copying, or exporting a key. If a workspace predates automatic
+registration or its saved connection is missing, `loreloop trust status`
+explains the state and
+`loreloop trust recover --from <original-trust-directory>` reconnects it after
+verification. Resetting the trust domain is an explicit archival fallback,
+never the first recovery step.
+
+Then invoke `$loreloop` in Codex, `/loreloop` in Claude Code, `/loreloop
+<request>` in OpenCode, or simply ask any host:
 `Use LoreLoop to add rate limiting to the upload endpoint.` The companion skill
 prepares the signed run and injects knowledge into that same conversation.
 Under the hood, the current-session lifecycle is:
 
 ```bash
 loreloop begin "add rate limiting to the upload endpoint"
-# Codex or Claude Code implements the task in the current session.
+# The current coding-agent host implements the task in the current session.
 loreloop complete <run-id> --confirm       # only after explicit operator confirmation
 loreloop check <run-id> "tests pass" --command "pytest -q"
 loreloop report <run-id>
@@ -211,9 +266,13 @@ The complete CLI surface remains available for operators and automation:
 
 ```bash
 cd your-project
-loreloop doctor                          # preflight Python/Git/agent/key/locking
+loreloop doctor                          # preflight Python/Git/agent/local trust/locking
+loreloop codex status                    # native marketplace/plugin integration status
+loreloop opencode status                 # global Skill and command status
+loreloop comind status                   # native co-mind marketplace/plugin status
+loreloop trust status                    # explain local trust readiness without crypto internals
 loreloop init                            # set up .loreloop/; offers to install the
-                                         # companion skill into Claude Code/Codex
+                                         # companion skill into detected coding agents
 loreloop ingest --from code .            # implementation view: reverse the codebase
 loreloop ingest --from web http://localhost:3000   # behavior view: explore the running app
 loreloop knowledge list --status draft --channel code --limit 50
@@ -236,7 +295,7 @@ long model calls visibly active without mixing progress into command stdout.
 
 If a step fails, the CLI prints exactly one `error`, its `reason`, and the next
 recovery action. See [`docs/troubleshooting.md`](docs/troubleshooting.md) for
-agent, browser, evidence-key, schema-upgrade, interrupted-run, and harvest help.
+agent, browser, local-trust, schema-upgrade, interrupted-run, and harvest help.
 
 ## Architecture and trust boundary
 

@@ -31,6 +31,17 @@
   checksummed GitHub Release without requiring PyPI.
 - Bundled POSIX and PowerShell Runtime installers, versioned GitHub Release
   wheel assets, `SHA256SUMS`, SBOM, and provenance coverage for release assets.
+- Automatic project-local trust registration across Codex, Claude Code, and
+  terminal sessions, plus user-facing `trust status`, verified `trust recover`,
+  and explicit archival `trust reset` workflows.
+- Native `loreloop codex install/status/uninstall` lifecycle commands and a
+  GitHub Release installer `--codex` mode that installs the Runtime and enables
+  the marketplace plugin without directly editing Codex configuration files.
+- Native OpenCode support through global/project Skills and a `/loreloop`
+  command, with `loreloop opencode install/status/uninstall` lifecycle commands.
+- Native co-mind support through the Claude-compatible marketplace/plugin
+  system, plus inference, restricted delegation, lifecycle commands, and
+  release-installer flags for both new hosts.
 
 ### Changed
 
@@ -50,9 +61,12 @@
   the offline demo and tests exercise both without invoking a real model.
 - Command evidence binds repository HEAD/working-tree state, redacts output,
   and the latest result for an identical check supersedes older attempts.
-- Companion skills now keep Codex/Claude Code as the user-facing entry point,
+- Companion skills now keep Codex, Claude Code, OpenCode, or co-mind as the user-facing entry point,
   use session-native preparation by default, and mediate completion, harvest,
   and curation only after specific operator authorization.
+- Existing evidence history never causes a replacement local-trust credential
+  to be generated. Normal onboarding hides cryptographic internals and recovery
+  reconnects verified operator-owned trust before reset is considered.
 
 ### Security
 

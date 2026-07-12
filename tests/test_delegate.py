@@ -462,6 +462,20 @@ def test_agent_runner_profiles_use_explicit_least_privilege_modes(tmp_path):
     assert "--ignore-user-config" in codex_inference.command
     assert "--ignore-rules" in codex_inference.command
 
+    opencode_inference = inference_runner("opencode")
+    assert opencode_inference.isolated
+    assert opencode_inference.prompt_as_argument
+    assert opencode_inference.command == ("opencode", "run", "--format", "default")
+    opencode_config = dict(opencode_inference.environment)["OPENCODE_CONFIG_CONTENT"]
+    assert '"plugin":[]' in opencode_config
+    assert '"bash":false' in opencode_config
+    assert '"*":"deny"' in opencode_config
+
+    comind_inference = inference_runner("co-mind")
+    assert comind_inference.isolated
+    assert comind_inference.command[0] == "co-mind"
+    assert ("--tools", "") == comind_inference.command[2:4]
+
     claude_delegation = delegation_runner("claude", tmp_path)
     assert not claude_delegation.isolated
     assert "acceptEdits" in claude_delegation.command
@@ -470,6 +484,13 @@ def test_agent_runner_profiles_use_explicit_least_privilege_modes(tmp_path):
 
     codex_delegation = delegation_runner("codex", tmp_path)
     assert ("--sandbox", "workspace-write") == codex_delegation.command[2:4]
+
+    comind_delegation = delegation_runner("co-mind", tmp_path)
+    assert comind_delegation.command[0] == "co-mind"
+    assert "acceptEdits" in comind_delegation.command
+
+    with pytest.raises(AgentError, match="workspace sandbox equivalent"):
+        delegation_runner("opencode", tmp_path)
 
 
 def test_codex_inference_inherits_only_connection_config(tmp_path, monkeypatch):
@@ -529,6 +550,7 @@ def test_agent_runner_strips_operator_capabilities_and_isolates_inference(
     monkeypatch.setenv("LORELOOP_KEY_DIR", "/operator/keys")
     monkeypatch.setenv("LORELOOP_KEY_PASSPHRASE", "secret")
     monkeypatch.setenv("LORELOOP_REGISTRY", "/operator/registry.json")
+    monkeypatch.setenv("LORELOOP_TRUST_REGISTRY", "/operator/trust-locations.json")
     monkeypatch.setattr(agents.subprocess, "run", fake_run)
 
     assert inference_runner("codex").run("extract facts") == "ok"
@@ -538,3 +560,27 @@ def test_agent_runner_strips_operator_capabilities_and_isolates_inference(
     assert "LORELOOP_KEY_DIR" not in seen["env"]
     assert "LORELOOP_KEY_PASSPHRASE" not in seen["env"]
     assert "LORELOOP_REGISTRY" not in seen["env"]
+    assert "LORELOOP_TRUST_REGISTRY" not in seen["env"]
+
+
+def test_opencode_runner_passes_prompt_positionally_and_applies_safe_config(monkeypatch):
+    import loreloop.agents as agents
+
+    seen = {}
+
+    def fake_run(command, **kwargs):
+        seen["command"] = command
+        seen["input"] = kwargs["input"]
+        seen["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(agents.subprocess, "run", fake_run)
+
+    runner = inference_runner("opencode")
+    assert runner.run("extract facts") == "ok"
+    assert seen["command"][-1] == "extract facts"
+    assert seen["input"] is None
+    config = json.loads(seen["env"]["OPENCODE_CONFIG_CONTENT"])
+    assert config["plugin"] == []
+    assert config["permission"] == {"*": "deny"}
+    assert all(not enabled for enabled in config["tools"].values())

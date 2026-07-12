@@ -1,6 +1,9 @@
 param(
     [string]$Version = $(if ($env:LORELOOP_VERSION) { $env:LORELOOP_VERSION } else { "latest" }),
     [switch]$WithWeb,
+    [switch]$Codex,
+    [switch]$OpenCode,
+    [switch]$CoMind,
     [switch]$Init
 )
 
@@ -70,11 +73,27 @@ try {
     & $RuntimePath --help | Out-Null
     Write-Host "Installed LoreLoop Runtime: $RuntimePath"
 
+    if ($Codex) {
+        & $RuntimePath codex install
+    }
+
+    if ($OpenCode) {
+        & $RuntimePath opencode install
+    }
+
+    if ($CoMind) {
+        & $RuntimePath comind install
+    }
+
     if ($Init) {
         & $RuntimePath init --skill
     }
 
-    Write-Host 'Next: restart Codex, then invoke $loreloop in your project.'
+    if ($Codex -or $OpenCode -or $CoMind) {
+        Write-Host "Next: restart the installed coding-agent host, then ask it to use LoreLoop in your project."
+    } else {
+        Write-Host "Next: run a LoreLoop host integration command or use LoreLoop directly from the terminal."
+    }
 } finally {
     if (Test-Path $TempDir) {
         Remove-Item -Recurse -Force $TempDir

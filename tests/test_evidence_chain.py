@@ -8,8 +8,10 @@ from loreloop.evidence.chain import (
     EvidenceChain,
     LegacyKeyError,
     OperatorBoundaryError,
+    TrustCredentialUnavailable,
     key_path_for,
 )
+from loreloop.paths import register_key_directory
 
 
 @pytest.fixture()
@@ -89,6 +91,37 @@ def test_key_created_once_with_restrictive_mode(tmp_path):
     first = key_path.read_bytes()
     EvidenceChain.for_workdir(tmp_path)
     assert key_path.read_bytes() == first
+
+
+def test_existing_history_never_creates_a_replacement_key(tmp_path):
+    chain = EvidenceChain.for_workdir(tmp_path)
+    chain.append("check_passed", {"check": "history"})
+    key_path = key_path_for(tmp_path)
+    key_path.unlink()
+
+    with pytest.raises(TrustCredentialUnavailable, match="No replacement trust was created"):
+        EvidenceChain.for_workdir(tmp_path)
+
+    assert not key_path.exists()
+
+
+def test_wrong_registered_location_cannot_grant_trust(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    original = tmp_path / "original-trust"
+    wrong = tmp_path / "wrong-trust"
+    monkeypatch.setenv("LORELOOP_KEY_DIR", str(original))
+    chain = EvidenceChain.for_workdir(project)
+    chain.append("check_passed", {"check": "history"})
+
+    wrong_key = key_path_for(project, key_dir=wrong)
+    wrong_key.parent.mkdir(parents=True)
+    wrong_key.write_bytes(b"w" * 32)
+    register_key_directory(project, wrong)
+    monkeypatch.delenv("LORELOOP_KEY_DIR")
+
+    with pytest.raises(ChainVerificationError, match="signature invalid"):
+        EvidenceChain.for_workdir(project, create_key=False).verify()
 
 
 def test_key_lives_outside_the_project_tree(tmp_path):

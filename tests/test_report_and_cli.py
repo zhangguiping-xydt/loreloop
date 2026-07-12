@@ -2008,7 +2008,10 @@ def test_cli_init_creates_evidence_key(workdir, monkeypatch, capsys):
     monkeypatch.setattr(_shutil, "which", lambda name: None)
     assert main(["init"]) == 0
     assert key_path_for(workdir).exists()
-    assert "evidence signing key" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "local trust: ready (managed automatically)" in out
+    assert str(key_path_for(workdir)) not in out
+    assert "HMAC" not in out
 
 
 def test_cli_init_rejects_in_project_key_location_without_traceback(workdir, monkeypatch, capsys):
@@ -2034,8 +2037,7 @@ def test_cli_init_reports_unwritable_external_key_location_without_traceback(
     assert main(["init", "--no-skill"]) == 2
 
     err = capsys.readouterr().err
-    assert "cannot initialize evidence key" in err
-    assert "LORELOOP_KEY_DIR" in err
+    assert "cannot initialize local trust" in err
     assert "Traceback" not in err
 
 
@@ -2050,7 +2052,7 @@ def test_cli_doctor_reports_preflight_checks(workdir, monkeypatch, capsys):
     assert "Python" in out
     assert "Git" in out
     assert "coding agent" in out
-    assert "evidence key directory" in out
+    assert "local trust directory" in out
     assert "ready" in out.lower()
 
 
@@ -2063,10 +2065,375 @@ def test_cli_doctor_reports_invalid_key_boundary_as_failed_check(workdir, monkey
     assert main(["doctor"]) == 1
 
     captured = capsys.readouterr()
-    assert "FAIL  evidence key directory" in captured.out
+    assert "FAIL  local trust directory" in captured.out
     assert "must be outside the project tree" in captured.out
     assert "NOT READY" in captured.out
     assert captured.err == ""
+
+
+def test_cli_codex_status_reports_enabled_native_plugin(monkeypatch, capsys):
+    import shutil
+    import subprocess
+
+    def fake_run(argv, **_kwargs):
+        command = argv[1:]
+        if command == ["plugin", "marketplace", "list", "--json"]:
+            payload = {"marketplaces": [{"name": "loreloop", "root": "/market"}]}
+        else:
+            assert command == [
+                "plugin",
+                "list",
+                "--json",
+                "--available",
+                "--marketplace",
+                "loreloop",
+            ]
+            payload = {
+                "installed": [
+                    {
+                        "pluginId": "loreloop@loreloop",
+                        "version": "0.1.0",
+                        "installed": True,
+                        "enabled": True,
+                    }
+                ],
+                "available": [],
+            }
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/codex")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert main(["codex", "status"]) == 0
+    out = capsys.readouterr().out
+    assert "Codex integration: ready" in out
+    assert "loreloop@loreloop 0.1.0" in out
+    assert "new Codex thread" in out
+
+
+def test_cli_codex_install_uses_native_marketplace_commands(monkeypatch, capsys):
+    import shutil
+    import subprocess
+
+    calls = []
+
+    def fake_run(argv, **_kwargs):
+        command = argv[1:]
+        calls.append(command)
+        payload = {"marketplaces": []} if command[-3:] == ["list", "--json"] else {}
+        if command == ["plugin", "marketplace", "list", "--json"]:
+            payload = {"marketplaces": []}
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/codex")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert main(["codex", "install", "--ref", "v0.1.0"]) == 0
+    assert calls == [
+        ["plugin", "marketplace", "list", "--json"],
+        [
+            "plugin",
+            "marketplace",
+            "add",
+            "zhangguiping-xydt/loreloop",
+            "--ref",
+            "v0.1.0",
+            "--json",
+        ],
+        ["plugin", "add", "loreloop@loreloop", "--json"],
+    ]
+    out = capsys.readouterr().out
+    assert "Added Codex marketplace" in out
+    assert "Installed and enabled Codex plugin" in out
+
+
+def test_cli_codex_install_preserves_existing_marketplace_source(monkeypatch, capsys):
+    import shutil
+    import subprocess
+
+    calls = []
+
+    def fake_run(argv, **_kwargs):
+        command = argv[1:]
+        calls.append(command)
+        payload = (
+            {
+                "marketplaces": [
+                    {
+                        "name": "loreloop",
+                        "root": "/existing/source",
+                        "marketplaceSource": {
+                            "sourceType": "local",
+                            "source": "/existing/source",
+                        },
+                    }
+                ]
+            }
+            if command == ["plugin", "marketplace", "list", "--json"]
+            else {}
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/codex")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert main(["codex", "install", "--source", "/different/source"]) == 0
+    assert calls == [
+        ["plugin", "marketplace", "list", "--json"],
+        ["plugin", "add", "loreloop@loreloop", "--json"],
+    ]
+    assert "Using existing Codex marketplace" in capsys.readouterr().out
+
+
+def test_cli_codex_failure_is_recoverable_without_traceback(monkeypatch, capsys):
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    assert main(["codex", "status"]) == 2
+    err = capsys.readouterr().err
+    assert "Codex integration is unavailable" in err
+    assert "loreloop codex install" in err
+    assert "Traceback" not in err
+
+
+def test_cli_opencode_install_status_and_uninstall_preserve_modified_files(
+    tmp_path, monkeypatch, capsys
+):
+    config = tmp_path / "opencode"
+    monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(config))
+
+    assert main(["opencode", "status"]) == 1
+    assert "not ready" in capsys.readouterr().out
+
+    assert main(["opencode", "install"]) == 0
+    skill = config / "skills/loreloop/SKILL.md"
+    command = config / "commands/loreloop.md"
+    assert skill.is_file()
+    assert command.is_file()
+    assert "/loreloop <request>" in capsys.readouterr().out
+
+    assert main(["opencode", "status"]) == 0
+    assert "OpenCode integration: ready" in capsys.readouterr().out
+
+    command.write_text("user customization\n", encoding="utf-8")
+    assert main(["opencode", "uninstall"]) == 2
+    err = capsys.readouterr().err
+    assert "refusing to remove modified" in err
+    assert skill.exists()
+    assert command.read_text(encoding="utf-8") == "user customization\n"
+
+
+def test_cli_opencode_install_rejects_symlink(tmp_path, monkeypatch, capsys):
+    config = tmp_path / "opencode"
+    target = tmp_path / "target.md"
+    target.write_text("user file\n", encoding="utf-8")
+    command = config / "commands/loreloop.md"
+    command.parent.mkdir(parents=True)
+    command.symlink_to(target)
+    monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(config))
+
+    assert main(["opencode", "install"]) == 2
+    assert "refusing symlinked OpenCode integration file" in capsys.readouterr().err
+    assert target.read_text(encoding="utf-8") == "user file\n"
+    assert not (config / "skills/loreloop/SKILL.md").exists()
+
+
+def test_cli_comind_install_status_and_uninstall_use_native_commands(monkeypatch, capsys):
+    import shutil
+    import subprocess
+
+    calls = []
+    installed = False
+    marketplace = False
+
+    def fake_run(argv, **_kwargs):
+        nonlocal installed, marketplace
+        command = argv[1:]
+        calls.append(command)
+        if command == ["plugin", "marketplace", "list", "--json"]:
+            payload = [{"name": "loreloop", "source": "local"}] if marketplace else []
+        elif command == ["plugin", "list", "--json"]:
+            payload = (
+                [{"id": "loreloop@loreloop", "version": "0.1.0", "enabled": True}]
+                if installed
+                else []
+            )
+        elif command[:3] == ["plugin", "marketplace", "add"]:
+            marketplace = True
+            payload = {}
+        elif command[:2] == ["plugin", "install"]:
+            installed = True
+            payload = {}
+        elif command[:2] == ["plugin", "uninstall"]:
+            installed = False
+            payload = {}
+        elif command[:3] == ["plugin", "marketplace", "remove"]:
+            marketplace = False
+            payload = {}
+        else:
+            raise AssertionError(command)
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/co-mind")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert main(["comind", "install", "--source", "/checkout/loreloop"]) == 0
+    assert calls[:3] == [
+        ["plugin", "marketplace", "list", "--json"],
+        [
+            "plugin",
+            "marketplace",
+            "add",
+            "/checkout/loreloop",
+            "--scope",
+            "user",
+        ],
+        ["plugin", "install", "loreloop@loreloop", "--scope", "user"],
+    ]
+    assert "Installed co-mind plugin" in capsys.readouterr().out
+
+    assert main(["comind", "status"]) == 0
+    assert "co-mind integration: ready" in capsys.readouterr().out
+
+    assert main(["comind", "uninstall", "--remove-marketplace"]) == 0
+    assert ["plugin", "uninstall", "loreloop@loreloop", "--scope", "user"] in calls
+    assert ["plugin", "marketplace", "remove", "loreloop"] in calls
+
+
+def test_cli_comind_install_preserves_existing_marketplace(monkeypatch, capsys):
+    import shutil
+    import subprocess
+
+    calls = []
+
+    def fake_run(argv, **_kwargs):
+        command = argv[1:]
+        calls.append(command)
+        payload = (
+            [{"name": "loreloop", "source": "/existing/source"}]
+            if command == ["plugin", "marketplace", "list", "--json"]
+            else {}
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/co-mind")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert main(["comind", "install", "--source", "/different/source"]) == 0
+    assert calls == [
+        ["plugin", "marketplace", "list", "--json"],
+        ["plugin", "install", "loreloop@loreloop", "--scope", "user"],
+    ]
+    assert "source preserved" in capsys.readouterr().out
+
+
+def test_cli_init_remembers_custom_trust_location_for_future_sessions(workdir, monkeypatch, capsys):
+    import shutil as _shutil
+
+    from loreloop.evidence.chain import EvidenceChain
+
+    custom = workdir.parent / "operator-keys"
+    monkeypatch.setenv("LORELOOP_KEY_DIR", str(custom))
+    monkeypatch.setattr(_shutil, "which", lambda _name: None)
+
+    assert main(["init", "--no-skill"]) == 0
+    EvidenceChain.for_workdir(workdir).append("history", {})
+    capsys.readouterr()
+
+    monkeypatch.delenv("LORELOOP_KEY_DIR")
+    assert main(["trust", "status"]) == 0
+    out = capsys.readouterr().out
+    assert "Project trust: ready" in out
+    assert "saved project registration" in out
+    assert main(["knowledge", "list", "--limit", "1"]) == 0
+
+
+def test_cli_existing_history_without_credential_never_creates_replacement(
+    workdir, monkeypatch, capsys
+):
+    import shutil as _shutil
+
+    from loreloop.evidence.chain import EvidenceChain, key_path_for
+
+    custom = workdir.parent / "missing-operator-keys"
+    monkeypatch.setenv("LORELOOP_KEY_DIR", str(custom))
+    monkeypatch.setattr(_shutil, "which", lambda _name: None)
+    assert main(["init", "--no-skill"]) == 0
+    chain = EvidenceChain.for_workdir(workdir)
+    chain.append("history", {})
+    key = key_path_for(workdir)
+    key.unlink()
+    capsys.readouterr()
+
+    monkeypatch.delenv("LORELOOP_KEY_DIR")
+    assert main(["knowledge", "list", "--limit", "1"]) == 2
+    err = capsys.readouterr().err
+    assert "local project trust is unavailable" in err
+    assert "No replacement trust was created" in err
+    assert "HMAC" not in err
+    assert "record 0" not in err
+    assert ".loreloop" not in err
+    assert not key.exists()
+
+
+def test_cli_trust_recover_replaces_wrong_location_without_archiving_history(
+    workdir, monkeypatch, capsys
+):
+    import shutil as _shutil
+    from pathlib import Path
+
+    from loreloop.evidence.chain import EvidenceChain, key_path_for
+    from loreloop.paths import trust_locations_file
+
+    home = workdir.parent / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    custom = workdir.parent / "original-keys"
+    monkeypatch.setenv("LORELOOP_KEY_DIR", str(custom))
+    monkeypatch.setattr(_shutil, "which", lambda _name: None)
+    assert main(["init", "--no-skill"]) == 0
+    EvidenceChain.for_workdir(workdir).append("history", {})
+    capsys.readouterr()
+
+    trust_locations_file().unlink()
+    monkeypatch.delenv("LORELOOP_KEY_DIR")
+    wrong = key_path_for(workdir)
+    wrong.parent.mkdir(parents=True)
+    wrong.write_bytes(b"w" * 32)
+
+    assert main(["trust", "status"]) == 1
+    assert "wrong local trust" in capsys.readouterr().out
+    assert main(["trust", "recover", "--from", str(custom)]) == 0
+    assert "Project trust: recovered" in capsys.readouterr().out
+    assert main(["trust", "status"]) == 0
+    assert "Project trust: ready" in capsys.readouterr().out
+    assert (workdir / ".loreloop/evidence.jsonl").exists()
+
+
+def test_cli_trust_reset_requires_confirmation_and_archives_state(workdir, capsys):
+    (workdir / ".loreloop").mkdir()
+    (workdir / ".loreloop/marker").write_text("history", encoding="utf-8")
+
+    assert main(["trust", "reset"]) == 2
+    assert "explicit confirmation required" in capsys.readouterr().err
+    assert main(["trust", "reset", "--confirm"]) == 0
+    out = capsys.readouterr().out
+    assert "Project trust archived" in out
+    assert not (workdir / ".loreloop").exists()
+    archive = next(workdir.glob(".loreloop.archived-*"))
+    assert (archive / "marker").read_text(encoding="utf-8") == "history"
+
+
+def test_cli_trust_registry_failure_is_clean(workdir, monkeypatch, capsys):
+    registry = workdir.parent / "trust-locations.json"
+    registry.write_text("not-json", encoding="utf-8")
+    monkeypatch.setenv("LORELOOP_TRUST_REGISTRY", str(registry))
+
+    assert main(["trust", "status"]) == 2
+    err = capsys.readouterr().err
+    assert "trust failed" in err
+    assert "cannot read trust-location registry" in err
+    assert "Traceback" not in err
 
 
 def test_cli_surfaces_legacy_key_error_cleanly(workdir, capsys):
@@ -2101,6 +2468,8 @@ def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys)
     text = skill.read_text()
     assert 'Run `loreloop begin "<task>"`' in text
     assert "Do not use `loreloop run` for normal interactive work" in text
+    assert "loreloop trust recover --from <directory>" in text
+    assert "recommend moving/deleting `.loreloop` manually" in text
     assert "specific, explicit instruction" in text
     assert "name: loreloop" in text
 
@@ -2137,8 +2506,27 @@ def test_cli_init_installs_codex_companion_skill(workdir, monkeypatch, capsys):
     assert skill.exists()
     text = skill.read_text(encoding="utf-8")
     assert 'Run `loreloop begin "<task>"`' in text
-    assert "Keep the user in this Claude Code or Codex session" in text
+    assert "Keep the user in this host coding-agent session" in text
+    assert "loreloop trust recover --from <directory>" in text
     assert "installed companion skill for Codex" in capsys.readouterr().out
+
+
+def test_cli_init_installs_shared_skills_and_opencode_command_once(workdir, monkeypatch, capsys):
+    import shutil as _shutil
+
+    monkeypatch.setattr(_shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    assert main(["init", "--skill"]) == 0
+
+    assert (workdir / ".claude/skills/loreloop/SKILL.md").is_file()
+    assert (workdir / ".agents/skills/loreloop/SKILL.md").is_file()
+    assert (workdir / ".opencode/commands/loreloop.md").is_file()
+    out = capsys.readouterr().out
+    assert "installed companion skill for Claude/co-mind" in out
+    assert "installed companion skill for Codex/OpenCode" in out
+    assert out.count(".claude/skills/loreloop/SKILL.md") == 1
+    assert out.count(".agents/skills/loreloop/SKILL.md") == 1
+    assert "installed OpenCode command" in out
 
 
 def test_cli_ingest_web_requires_playwright(workdir):

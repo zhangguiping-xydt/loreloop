@@ -11,7 +11,6 @@ import argparse
 import json
 import os
 import re
-import shlex
 import shutil
 import socket
 import subprocess
@@ -209,8 +208,8 @@ def run_demo(workspace: Path, *, agent: str, offline: bool) -> Path:
         _step(cli.main, ["knowledge", "review", "--status", "draft"])
         print(f"\nComplete: the reproducible demo workspace is {project}")
         print("Continue with:")
-        print(f"  cd {shlex.quote(str(project))}")
-        print(f"  export LORELOOP_KEY_DIR={shlex.quote(str(workspace / 'keys'))}")
+        print(f"  cd {project}")
+        print("  loreloop trust status")
         print("  loreloop knowledge review --status draft")
         return project
     finally:
@@ -230,7 +229,7 @@ def run_demo(workspace: Path, *, agent: str, offline: bool) -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--agent", choices=["claude", "codex"], default="claude")
+    parser.add_argument("--agent", choices=["claude", "codex", "co-mind"], default="claude")
     parser.add_argument("--offline", action="store_true", help="use deterministic CI adapters")
     parser.add_argument("--workspace", type=Path)
     args = parser.parse_args()

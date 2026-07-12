@@ -1,14 +1,18 @@
 $ loreloop --help
-usage: loreloop [-h] [--agent {claude,codex}]
-                {doctor,init,demo,ingest,repo,project,verify,begin,complete,run,check,report,harvest,knowledge}
+usage: loreloop [-h] [--agent {claude,codex,opencode,co-mind}]
+                {doctor,codex,opencode,comind,trust,init,demo,ingest,repo,project,verify,begin,complete,run,check,report,harvest,knowledge}
                 ...
 
 Reverse-engineer project knowledge, apply it to coding-agent work, and return
 accepted outcomes to a tamper-evident knowledge loop.
 
 positional arguments:
-  {doctor,init,demo,ingest,repo,project,verify,begin,complete,run,check,report,harvest,knowledge}
+  {doctor,codex,opencode,comind,trust,init,demo,ingest,repo,project,verify,begin,complete,run,check,report,harvest,knowledge}
     doctor              check prerequisites and writable trust state
+    codex               install or inspect the native Codex integration
+    opencode            install or inspect the native OpenCode integration
+    comind              install or inspect the native co-mind integration
+    trust               inspect or recover this project's local trust
     init                set up LoreLoop in this project
     demo                run the bundled five-minute knowledge loop
     ingest              reverse-engineer knowledge from a source
@@ -27,7 +31,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --agent {claude,codex}
+  --agent {claude,codex,opencode,co-mind}
                         coding-agent CLI used for extraction and delegated
                         work (default: claude)
 
@@ -36,6 +40,138 @@ usage: loreloop doctor [-h]
 
 options:
   -h, --help  show this help message and exit
+
+$ loreloop codex --help
+usage: loreloop codex [-h] {status,install,uninstall} ...
+
+positional arguments:
+  {status,install,uninstall}
+    status              show Codex plugin readiness
+    install             install and enable LoreLoop through the Codex plugin
+                        system
+    uninstall           remove the LoreLoop plugin from Codex
+
+options:
+  -h, --help            show this help message and exit
+
+$ loreloop codex status --help
+usage: loreloop codex status [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+$ loreloop codex install --help
+usage: loreloop codex install [-h] [--source SOURCE] [--ref REF]
+
+options:
+  -h, --help       show this help message and exit
+  --source SOURCE  Git repository or local marketplace root
+  --ref REF        Git ref used when adding a Git marketplace (default:
+                   v0.1.0)
+
+$ loreloop codex uninstall --help
+usage: loreloop codex uninstall [-h] [--remove-marketplace]
+
+options:
+  -h, --help            show this help message and exit
+  --remove-marketplace  also remove the LoreLoop marketplace registration
+
+$ loreloop opencode --help
+usage: loreloop opencode [-h] {status,install,uninstall} ...
+
+positional arguments:
+  {status,install,uninstall}
+    status              show OpenCode integration readiness
+    install             install LoreLoop's global OpenCode Skill and command
+    uninstall           remove unmodified LoreLoop OpenCode integration files
+
+options:
+  -h, --help            show this help message and exit
+
+$ loreloop opencode status --help
+usage: loreloop opencode status [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+$ loreloop opencode install --help
+usage: loreloop opencode install [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+$ loreloop opencode uninstall --help
+usage: loreloop opencode uninstall [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+$ loreloop comind --help
+usage: loreloop comind [-h] {status,install,uninstall} ...
+
+positional arguments:
+  {status,install,uninstall}
+    status              show co-mind plugin readiness
+    install             install and enable LoreLoop through co-mind's plugin
+                        system
+    uninstall           remove the LoreLoop plugin from co-mind
+
+options:
+  -h, --help            show this help message and exit
+
+$ loreloop comind status --help
+usage: loreloop comind status [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+$ loreloop comind install --help
+usage: loreloop comind install [-h] [--source SOURCE]
+
+options:
+  -h, --help       show this help message and exit
+  --source SOURCE  GitHub repository or local marketplace root
+
+$ loreloop comind uninstall --help
+usage: loreloop comind uninstall [-h] [--remove-marketplace]
+
+options:
+  -h, --help            show this help message and exit
+  --remove-marketplace  also remove the LoreLoop marketplace registration
+
+$ loreloop trust --help
+usage: loreloop trust [-h] {status,recover,reset} ...
+
+positional arguments:
+  {status,recover,reset}
+    status              show local trust readiness
+    recover             reconnect existing history to its original local trust
+    reset               archive existing LoreLoop state and start a new local
+                        trust domain
+
+options:
+  -h, --help            show this help message and exit
+
+$ loreloop trust status --help
+usage: loreloop trust status [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+$ loreloop trust recover --help
+usage: loreloop trust recover [-h] --from TRUST_DIR
+
+options:
+  -h, --help        show this help message and exit
+  --from TRUST_DIR  operator-owned directory containing this project's
+                    original local trust
+
+$ loreloop trust reset --help
+usage: loreloop trust reset [-h] [--confirm]
+
+options:
+  -h, --help  show this help message and exit
+  --confirm   confirm archival of the current .loreloop state
 
 $ loreloop init --help
 usage: loreloop init [-h] [--skill | --no-skill]
@@ -47,21 +183,21 @@ options:
 
 $ loreloop demo --help
 usage: loreloop demo [-h] [--offline] [--workspace WORKSPACE]
-                     [--agent {claude,codex}]
+                     [--agent {claude,codex,opencode,co-mind}]
 
 options:
   -h, --help            show this help message and exit
   --offline             use deterministic CI adapters
   --workspace WORKSPACE
                         parent directory for the demo repository
-  --agent {claude,codex}
+  --agent {claude,codex,opencode,co-mind}
                         override the coding-agent CLI for this action
 
 $ loreloop ingest --help
 usage: loreloop ingest [-h] --from {code,web} [--max-pages MAX_PAGES]
                        [--include GLOB] [--exclude GLOB]
                        [--max-file-bytes MAX_FILE_BYTES] [--strict] [--headed]
-                       [--agent {claude,codex}]
+                       [--agent {claude,codex,opencode,co-mind}]
                        target
 
 positional arguments:
@@ -80,7 +216,7 @@ options:
   --strict              fail when tracked files are skipped without an
                         explicit --exclude
   --headed              show the browser window (needed for login handover)
-  --agent {claude,codex}
+  --agent {claude,codex,opencode,co-mind}
                         override the coding-agent CLI for this action
 
 $ loreloop repo --help
@@ -164,7 +300,7 @@ options:
 
 $ loreloop verify --help
 usage: loreloop verify [-h] [--headed] [--script SCRIPT] [--allow-writes]
-                       [--agent {claude,codex}]
+                       [--agent {claude,codex,opencode,co-mind}]
                        run_id url expectation
 
 positional arguments:
@@ -178,7 +314,7 @@ options:
   --script SCRIPT       replay an interaction script before verification
   --allow-writes        allow fill/select/POST-submit actions outside
                         search/filter controls
-  --agent {claude,codex}
+  --agent {claude,codex,opencode,co-mind}
                         override the coding-agent CLI for this action
 
 $ loreloop begin --help
@@ -210,7 +346,8 @@ options:
 
 $ loreloop run --help
 usage: loreloop run [-h] [--no-expand] [--with-related]
-                    [--related-limit RELATED_LIMIT] [--agent {claude,codex}]
+                    [--related-limit RELATED_LIMIT]
+                    [--agent {claude,codex,opencode,co-mind}]
                     task
 
 positional arguments:
@@ -224,7 +361,7 @@ options:
                         projects
   --related-limit RELATED_LIMIT
                         maximum related-project references
-  --agent {claude,codex}
+  --agent {claude,codex,opencode,co-mind}
                         override the coding-agent CLI for this action
 
 $ loreloop check --help
@@ -255,14 +392,14 @@ options:
   -h, --help  show this help message and exit
 
 $ loreloop harvest --help
-usage: loreloop harvest [-h] [--agent {claude,codex}] run_id
+usage: loreloop harvest [-h] [--agent {claude,codex,opencode,co-mind}] run_id
 
 positional arguments:
   run_id
 
 options:
   -h, --help            show this help message and exit
-  --agent {claude,codex}
+  --agent {claude,codex,opencode,co-mind}
                         override the coding-agent CLI for this action
 
 $ loreloop knowledge --help
@@ -423,7 +560,8 @@ options:
   --yes         confirm restoration of the old entry
 
 $ loreloop knowledge verify --help
-usage: loreloop knowledge verify [-h] [--headed] [--agent {claude,codex}]
+usage: loreloop knowledge verify [-h] [--headed]
+                                 [--agent {claude,codex,opencode,co-mind}]
                                  [ENTRY_ID]
 
 positional arguments:
@@ -432,7 +570,7 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --headed
-  --agent {claude,codex}
+  --agent {claude,codex,opencode,co-mind}
                         override the coding-agent CLI for this action
 
 $ loreloop knowledge usage --help

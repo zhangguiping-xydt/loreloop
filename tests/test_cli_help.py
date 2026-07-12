@@ -7,6 +7,22 @@ from loreloop.cli import build_parser, main
 PUBLIC_HELP_PATHS = [
     (),
     ("doctor",),
+    ("codex",),
+    ("codex", "status"),
+    ("codex", "install"),
+    ("codex", "uninstall"),
+    ("opencode",),
+    ("opencode", "status"),
+    ("opencode", "install"),
+    ("opencode", "uninstall"),
+    ("comind",),
+    ("comind", "status"),
+    ("comind", "install"),
+    ("comind", "uninstall"),
+    ("trust",),
+    ("trust", "status"),
+    ("trust", "recover"),
+    ("trust", "reset"),
     ("init",),
     ("demo",),
     ("ingest",),
@@ -133,3 +149,9 @@ def test_agent_override_is_accepted_before_or_after_action_name():
     after = parser.parse_args(["run", "task", "--agent", "codex"])
     assert before.agent == "codex"
     assert after.agent == "codex"
+
+    assert (
+        parser.parse_args(["--agent", "opencode", "ingest", "--from", "code", "."]).agent
+        == "opencode"
+    )
+    assert parser.parse_args(["run", "task", "--agent", "co-mind"]).agent == "co-mind"

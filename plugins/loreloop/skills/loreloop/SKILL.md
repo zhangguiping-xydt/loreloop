@@ -1,13 +1,14 @@
 ---
 name: loreloop
-description: Use LoreLoop's governed project knowledge and evidence-backed acceptance inside the current Codex session. Trigger when the user asks to use LoreLoop, invokes $loreloop, or works in a repository containing .loreloop.
+description: Use LoreLoop's governed project knowledge and evidence-backed acceptance inside the current coding-agent session. Trigger when the user asks to use LoreLoop, invokes its host command, or works in a repository containing .loreloop.
 ---
 
-# LoreLoop in Codex
+# LoreLoop in the current coding agent
 
-Keep the user in this Codex session. LoreLoop is the local knowledge and
-evidence engine behind Codex, not a replacement chat entry point. Evidence,
-not the agent's own account, decides acceptance.
+Keep the user in this host session. LoreLoop is the local knowledge and
+evidence engine behind Codex or a Claude-compatible host such as co-mind, not
+a replacement chat entry point. Evidence, not the agent's own account, decides
+acceptance.
 
 ## Runtime bootstrap
 
@@ -21,13 +22,20 @@ Before the first LoreLoop action, check whether `loreloop` is on `PATH`.
 - After permission, locate this plugin's root (two directories above this
   `SKILL.md`) and run `scripts/install-runtime.sh` on Linux/macOS or
   `scripts/install-runtime.ps1` on Windows.
+- After the Runtime installation, run the current host check (`loreloop codex status`
+  in Codex or `loreloop comind status` in co-mind) and `loreloop doctor` before
+  continuing. Do not edit host configuration files directly; use the corresponding
+  LoreLoop integration command if registration is missing.
 - Never download and execute a remote installer script directly. The bundled
   installer downloads only the release wheel and verifies it against the
   release `SHA256SUMS` file.
 
-If the current repository has no `.loreloop` directory, ask before running
-`loreloop init --skill`. Initialization creates local trust state and an
-out-of-tree signing key, so it is an operator-visible project decision.
+If the current repository has no `.loreloop` directory and the operator
+explicitly invoked LoreLoop or asked to use it for the task, run
+`loreloop init --skill`; that explicit invocation authorizes initialization.
+Initialization creates project-local LoreLoop state and prepares private local
+trust automatically, with no manual credential setup. Ask first only when
+LoreLoop was inferred indirectly and the operator did not request enabling it.
 
 ## Start work in the current session
 
@@ -38,11 +46,29 @@ When the operator asks to use LoreLoop for a development task:
    coding agent.
 2. Keep the printed run id for later evidence commands.
 3. Read the printed context pack using the rules below, then perform the task
-   in this current Codex session.
+   in this current host session.
 
 Do not use `loreloop run` for normal interactive work: it launches a separate
 coding-agent process. Use it only when the operator explicitly requests an
 automated or headless delegation.
+
+## Recover local trust without exposing internals
+
+If `doctor`, `begin`, or another command reports that project trust is
+unavailable or does not match:
+
+1. Run `loreloop trust status` and summarize its user-facing result.
+2. Do not expose signature algorithms, key identifiers, evidence record
+   indexes, or recommend moving/deleting `.loreloop` manually.
+3. If the operator has the original LoreLoop trust directory or its backup,
+   ask for that directory and run
+   `loreloop trust recover --from <directory>`.
+4. Run `loreloop doctor` after recovery, then retry the original command.
+
+`loreloop trust reset --confirm` archives the current LoreLoop state and starts
+a new trust domain. Run it only after the operator explicitly authorizes losing
+the old domain's continuity. Never infer that authorization from a failed
+recovery or from the absence of a backup.
 
 ## Read the context pack
 
@@ -85,4 +111,4 @@ loreloop knowledge search "<query>"
 - Never create, edit, or delete anything under `.loreloop/` directly.
 - Never invent, weaken, or reword an operator's acceptance assertion.
 - Never work around an operator-boundary refusal, checksum failure, or
-  signing-key restriction.
+  local-trust restriction.

@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "loreloop"
 version = "0.1.0"
-description = "Knowledge-governed cockpit for coding agents: reverse-engineer project knowledge, inject it into Claude Code / Codex runs, and verify results with tamper-evident evidence."
+description = "Knowledge-governed cockpit for coding agents: reverse project knowledge, apply it in existing agent sessions, and verify results with tamper-evident evidence."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11,<3.15"
 authors = [{ name = "LoreLoop contributors" }]
-keywords = ["ai", "coding-agent", "knowledge", "claude-code", "codex", "evidence", "acceptance"]
+keywords = ["ai", "coding-agent", "knowledge", "claude-code", "codex", "opencode", "evidence", "acceptance"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",

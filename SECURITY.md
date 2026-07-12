@@ -88,8 +88,9 @@ boundary, LoreLoop defends against:
   stdout/stderr before storing artifacts or chain details.
 
 - **Agent subprocess capability reduction.** Inference is launched in a
-  temporary directory with Claude tools disabled or Codex read-only sandboxing
-  and user/project rules ignored. Delegation uses explicit non-bypass workspace
+  temporary directory with Claude/co-mind tools disabled, Codex read-only
+  sandboxing, or an inline OpenCode configuration with plugins/tools disabled
+  and all permissions denied. Delegation uses explicit non-bypass workspace
   permissions. LoreLoop removes operator key/registry variables and marks child
   processes so its signing API refuses their append attempts. This is defense
   in depth for cooperative tools, not an OS security boundary: a malicious
@@ -113,6 +114,7 @@ These statements are observable behavior, not aspirational documentation:
 | Browser scope cannot escape origin silently | Redirect targets, robots, sitemaps, discovered links, network requests, action steps, and final observations are checked | `tests/test_webexplore.py`, `tests/test_smoke_playwright.py` |
 | Scripted writes require operator opt-in | Network interception blocks same-origin non-GET requests without `--allow-writes`; password/destructive controls stay blocked | `tests/test_webexplore.py`, `tests/test_smoke_playwright.py` |
 | Agent children do not receive normal signing capability | Key/registry variables are removed; the child marker makes evidence append fail; inference/delegation commands use explicit permission profiles | `tests/test_delegate.py`, `tests/test_evidence_chain.py` |
+| A trust-location mapping cannot grant trust | Existing history is verified against the candidate before registration/use; missing history credentials never trigger replacement generation | `tests/test_paths.py`, `tests/test_evidence_chain.py`, `tests/test_report_and_cli.py` |
 | Current-session metadata cannot be rewritten through the trace | `begin` signs preparation metadata before work; `complete` copies only that signed payload and requires explicit confirmation | `tests/test_report_and_cli.py` |
 | Interrupted/failed work is not acceptance | Trace records an explicit failed/interrupted terminal event; only one chain-backed completion can be accepted | `tests/test_delegate.py`, `tests/test_report_and_cli.py` |
 | Chain-first harvest survives a DB crash | Signed harvest events carry complete minted rows; a retry restores only missing digest-matching rows without appending a second event | `tests/test_harvest.py` |
@@ -121,7 +123,7 @@ These statements are observable behavior, not aspirational documentation:
 
 ## Runtime distribution
 
-The Codex plugin never downloads and executes a remote installer script. Its
+The bundled host plugins never download and execute a remote installer script. Their
 bundled installer downloads `SHA256SUMS`, accepts only a safe versioned
 LoreLoop wheel filename from that manifest, downloads the wheel from the same
 GitHub Release, verifies SHA-256 locally, and only then passes it to `uv` or
@@ -133,6 +135,13 @@ The public README also offers direct installer-script downloads for operators
 who prefer a standalone shell/PowerShell flow. Review the downloaded script or
 verify its release provenance before execution; the script still independently
 verifies the Runtime wheel before installation.
+
+The installer's optional host flags invoke the installed Runtime's native
+integration commands. Codex and co-mind use their own marketplace/plugin CLI
+operations and preserve existing marketplace registrations. OpenCode installs
+only managed Skill/command files, rejects symlinks, and refuses to overwrite or
+remove modified files. LoreLoop does not install private hook-state blocks or a
+resident MCP wrapper around its signing and curation interfaces.
 
 On POSIX, newly created state, key, trace, database, chain, lock, and artifact
 directories/files use `0700`/`0600` as appropriate and reject symlink
@@ -147,15 +156,18 @@ shared with other accounts.
 - **Current-session authorization is cooperative.** The companion skill must
   obtain explicit operator approval before passing `--confirm`, harvesting, or
   curating, but the CLI cannot cryptographically distinguish a command typed
-  by the operator from one launched by the already-trusted host Codex/Claude
+  by the operator from one launched by the already-trusted coding-agent host
   process under the same OS account. The flag records an authorization
   boundary for honest-agent workflows; it is not protection against a
   malicious host-agent binary, which is already outside the threat model.
-- **Local storage is not local inference.** Claude Code and Codex may send
+- **Local storage is not local inference.** Supported coding agents may send
   source snippets, page observations, and prompts to their configured model
   provider. Provider retention, residency, account policy, and transport are
   outside LoreLoop's control. Do not ingest data you are not authorized to
   disclose to that provider.
+- **OpenCode headless delegation is disabled.** LoreLoop supports OpenCode as
+  an interactive host and for no-tools inference, but refuses `loreloop run
+  --agent opencode` until the CLI exposes a verifiable workspace sandbox.
 - **Browser write fencing cannot repair unsafe server semantics.** Cross-origin
   requests and default non-GET requests are blocked, but a same-origin GET can
   still have side effects in a poorly designed application. Run action scripts
@@ -191,6 +203,16 @@ access" to "a process that reaches into the operator's home directory" —
 it is still not a defense against a local root attacker. Do not commit
 `.loreloop/` to a public repository — evidence artifacts can embed page
 content from your running application.
+
+Normal onboarding does not expose or require manual management of this key.
+Initialization stores a private project-to-trust-location mapping in
+`~/.loreloop/trust-locations.json`; future sessions resolve it automatically.
+The mapping is only a locator, not an authority: candidate material must still
+verify the existing chain, so a wrong or tampered mapping fails closed. If
+history exists and matching material is unavailable, LoreLoop never creates a
+replacement key. `loreloop trust recover --from ...` verifies before updating
+the mapping, while `trust reset --confirm` requires explicit operator approval
+and archives project state without deleting operator-owned material.
 
 ## Reporting a vulnerability
 

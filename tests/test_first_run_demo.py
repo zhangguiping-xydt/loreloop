@@ -24,7 +24,8 @@ def test_bundled_offline_demo_completes_full_first_run(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Verdict: ACCEPTED" in result.stdout
     assert "harvested run" in result.stdout
-    assert "export LORELOOP_KEY_DIR=" in result.stdout
+    assert "loreloop trust status" in result.stdout
+    assert "export LORELOOP_KEY_DIR=" not in result.stdout
     assert "superseded:" in result.stdout
     assert (tmp_path / "legacy-upload/.loreloop/knowledge.db").is_file()
 

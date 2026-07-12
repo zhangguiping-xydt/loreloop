@@ -5,15 +5,21 @@ REPOSITORY="zhangguiping-xydt/loreloop"
 VERSION="${LORELOOP_VERSION:-latest}"
 WITH_WEB=0
 INITIALIZE=0
+INSTALL_CODEX=0
+INSTALL_OPENCODE=0
+INSTALL_COMIND=0
 
 usage() {
   cat <<'EOF'
 Install the LoreLoop Runtime from a checksummed GitHub Release wheel.
 
-Usage: install-runtime.sh [--version vX.Y.Z] [--with-web] [--init]
+Usage: install-runtime.sh [--version vX.Y.Z] [--with-web] [--codex] [--opencode] [--comind] [--init]
 
   --version VERSION  Install one tagged release instead of latest.
   --with-web         Include Playwright's Python package (browser download is separate).
+  --codex            Install and enable the native LoreLoop Codex plugin too.
+  --opencode         Install the global LoreLoop Skill and command for OpenCode.
+  --comind           Install and enable the native LoreLoop co-mind plugin too.
   --init             Initialize LoreLoop and install project companion skills in cwd.
 EOF
 }
@@ -27,6 +33,18 @@ while [ "$#" -gt 0 ]; do
       ;;
     --with-web)
       WITH_WEB=1
+      shift
+      ;;
+    --codex)
+      INSTALL_CODEX=1
+      shift
+      ;;
+    --opencode)
+      INSTALL_OPENCODE=1
+      shift
+      ;;
+    --comind)
+      INSTALL_COMIND=1
       shift
       ;;
     --init)
@@ -138,8 +156,24 @@ fi
 "$RUNTIME" --help >/dev/null
 echo "Installed LoreLoop Runtime: $RUNTIME"
 
+if [ "$INSTALL_CODEX" -eq 1 ]; then
+  "$RUNTIME" codex install
+fi
+
+if [ "$INSTALL_OPENCODE" -eq 1 ]; then
+  "$RUNTIME" opencode install
+fi
+
+if [ "$INSTALL_COMIND" -eq 1 ]; then
+  "$RUNTIME" comind install
+fi
+
 if [ "$INITIALIZE" -eq 1 ]; then
   "$RUNTIME" init --skill
 fi
 
-echo "Next: restart Codex, then invoke \$loreloop in your project."
+if [ "$INSTALL_CODEX" -eq 1 ] || [ "$INSTALL_OPENCODE" -eq 1 ] || [ "$INSTALL_COMIND" -eq 1 ]; then
+  echo "Next: restart the installed coding-agent host, then ask it to use LoreLoop in your project."
+else
+  echo "Next: run a LoreLoop host integration command or use LoreLoop directly from the terminal."
+fi

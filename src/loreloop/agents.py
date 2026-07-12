@@ -1,4 +1,4 @@
-"""Thin adapter over local agent CLIs (claude -p / codex exec).
+"""Thin adapters over supported local coding-agent CLIs.
 
 loreloop never calls a model API directly: it reuses the coding-agent CLI the
 user already has, so there is no API key configuration of its own.
@@ -25,6 +25,8 @@ class AgentRunner:
     timeout: float = 600.0
     cwd: Path | None = None
     isolated: bool = False
+    prompt_as_argument: bool = False
+    environment: tuple[tuple[str, str], ...] = ()
 
     def run(self, prompt: str) -> str:
         if self.isolated:
@@ -33,12 +35,19 @@ class AgentRunner:
         return self._run(prompt, self.cwd)
 
     def _run(self, prompt: str, cwd: Path | None) -> str:
+        command = list(self.command)
+        stdin = prompt
+        if self.prompt_as_argument:
+            command.append(prompt)
+            stdin = None
+        env = agent_environment()
+        env.update(self.environment)
         try:
             proc = subprocess.run(
-                list(self.command),
-                input=prompt,
+                command,
+                input=stdin,
                 cwd=cwd,
-                env=agent_environment(),
+                env=env,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -47,8 +56,8 @@ class AgentRunner:
             )
         except FileNotFoundError as exc:
             raise AgentError(
-                f"agent CLI not found: {self.command[0]!r}. Install Claude Code or Codex "
-                "and make sure it is on your PATH."
+                f"agent CLI not found: {self.command[0]!r}. Install the selected supported "
+                "coding agent and make sure it is on your PATH."
             ) from exc
         except subprocess.TimeoutExpired as exc:
             raise AgentError(f"agent call timed out after {self.timeout}s") from exc
@@ -85,9 +94,32 @@ def inference_runner(name: str, *, timeout: float = 600.0) -> AgentRunner:
             timeout=timeout,
             isolated=True,
         )
+    if name == "opencode":
+        inline = json.dumps(
+            {
+                "plugin": [],
+                "tools": {
+                    "bash": False,
+                    "edit": False,
+                    "write": False,
+                    "skill": False,
+                },
+                "permission": {"*": "deny"},
+                "share": "disabled",
+            },
+            separators=(",", ":"),
+        )
+        return AgentRunner(
+            command=("opencode", "run", "--format", "default"),
+            timeout=timeout,
+            isolated=True,
+            prompt_as_argument=True,
+            environment=(("OPENCODE_CONFIG_CONTENT", inline),),
+        )
+    executable = "co-mind" if name == "co-mind" else "claude"
     return AgentRunner(
         command=(
-            "claude",
+            executable,
             "-p",
             "--tools",
             "",
@@ -164,9 +196,16 @@ def delegation_runner(name: str, workdir: Path, *, timeout: float = 600.0) -> Ag
     """Return the coding runner with an explicit, non-bypass permission mode."""
     if name == "codex":
         command = ("codex", "exec", "--sandbox", "workspace-write", "--ephemeral", "-")
+    elif name == "opencode":
+        raise AgentError(
+            "OpenCode headless delegation is not enabled because its CLI does not expose "
+            "a workspace sandbox equivalent. Use `loreloop begin` inside the current "
+            "OpenCode session instead."
+        )
     else:
+        executable = "co-mind" if name == "co-mind" else "claude"
         command = (
-            "claude",
+            executable,
             "-p",
             "--permission-mode",
             "acceptEdits",
@@ -189,6 +228,7 @@ def agent_environment() -> dict[str, str]:
         "LORELOOP_KEY_DIR",
         "LORELOOP_KEY_PASSPHRASE",
         "LORELOOP_REGISTRY",
+        "LORELOOP_TRUST_REGISTRY",
     ):
         env.pop(name, None)
     env["LORELOOP_AGENT_PROCESS"] = "1"

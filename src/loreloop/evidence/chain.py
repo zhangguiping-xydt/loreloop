@@ -64,6 +64,10 @@ class KeyMaterialError(Exception):
     pass
 
 
+class TrustCredentialUnavailable(KeyMaterialError):
+    """Project history exists but the matching local credential is unavailable."""
+
+
 class OperatorBoundaryError(Exception):
     """A model subprocess attempted to use an operator signing capability."""
 
@@ -102,10 +106,10 @@ class EvidenceRecord:
 
 
 class EvidenceChain:
-    def __init__(self, chain_path: Path, key_path: Path) -> None:
+    def __init__(self, chain_path: Path, key_path: Path, *, create_key: bool = True) -> None:
         reject_symlink(chain_path, label="evidence chain")
         self._path = chain_path
-        self._key = _load_or_create_key(key_path)
+        self._key = _load_or_create_key(key_path, create=create_key)
         # Head commitment lives NEXT TO THE KEY, outside the agent-writable
         # tree. A hash chain alone cannot detect tail truncation: every prefix
         # of a valid chain is itself a valid chain. Committing the latest
@@ -115,13 +119,27 @@ class EvidenceChain:
         ensure_private_directory(self._path.parent)
 
     @classmethod
-    def for_workdir(cls, workdir: Path) -> "EvidenceChain":
+    def for_workdir(
+        cls,
+        workdir: Path,
+        *,
+        create_key: bool = True,
+        key_dir: Path | None = None,
+    ) -> "EvidenceChain":
         base = ensure_state_root(workdir)
-        expected = key_path_for(workdir)
+        expected = key_path_for(workdir, key_dir=key_dir)
         legacy = base / "evidence.key"
         if legacy.exists() and not expected.exists():
             raise LegacyKeyError(legacy, expected)
-        return cls(base / "evidence.jsonl", expected)
+        chain_path = base / "evidence.jsonl"
+        if _chain_has_history(chain_path) and not expected.is_file():
+            raise TrustCredentialUnavailable(
+                "this project has existing LoreLoop history, but its original local trust "
+                "is unavailable on this machine. Run `loreloop trust status`; reconnect "
+                "the original trust location or explicitly reset the local trust domain. "
+                "No replacement trust was created."
+            )
+        return cls(chain_path, expected, create_key=create_key)
 
     @classmethod
     def verify_readonly(cls, workdir: Path) -> list[EvidenceRecord]:
@@ -309,15 +327,15 @@ def _chain_hash(prev_hash: str, index: int, ts: str, event: str, payload: dict[s
     return hashlib.sha256(material.encode()).hexdigest()
 
 
-def key_path_for(workdir: Path) -> Path:
+def key_path_for(workdir: Path, *, key_dir: Path | None = None) -> Path:
     """Per-project key file under the key dir, named by a hash of the
     project's absolute path so unrelated projects never share a key."""
-    key_dir = require_key_directory_outside(workdir)
+    key_dir = require_key_directory_outside(workdir, directory=key_dir)
     digest = hashlib.sha256(str(workdir.resolve()).encode()).hexdigest()[:16]
     return key_dir / f"{digest}.key"
 
 
-def _load_or_create_key(key_path: Path) -> bytes:
+def _load_or_create_key(key_path: Path, *, create: bool = True) -> bytes:
     reject_symlink(key_path, label="evidence key")
     if key_path.exists():
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -336,6 +354,10 @@ def _load_or_create_key(key_path: Path) -> bytes:
                 "Restore the matching key backup or archive the old chain and start fresh."
             )
         return key
+    if not create:
+        raise TrustCredentialUnavailable(
+            "local project trust is not available; run `loreloop trust status`"
+        )
     ensure_private_directory(key_path.parent)
     key = secrets.token_bytes(32)
     try:
@@ -351,6 +373,15 @@ def _load_or_create_key(key_path: Path) -> bytes:
     with os.fdopen(fd, "wb") as fh:
         fh.write(key)
     return key
+
+
+def _chain_has_history(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        return any(line.strip() for line in path.read_text(encoding="utf-8").splitlines())
+    except OSError:
+        return True
 
 
 def lock_backend() -> str:

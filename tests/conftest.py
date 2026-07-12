@@ -10,3 +10,7 @@ def isolated_key_dir(tmp_path_factory, monkeypatch):
         "LORELOOP_REGISTRY",
         str(tmp_path_factory.mktemp("loreloop-registry") / "projects.json"),
     )
+    monkeypatch.setenv(
+        "LORELOOP_TRUST_REGISTRY",
+        str(tmp_path_factory.mktemp("loreloop-trust-registry") / "trust-locations.json"),
+    )

@@ -7,12 +7,13 @@ sensitive.
 
 ## `loreloop doctor` is not ready
 
-- Agent CLI missing: install Claude Code or Codex, authenticate it, and confirm
-  `claude -p "reply ok"` or `codex exec -` works outside LoreLoop.
-- Project/key directory not writable: use a writable checkout. Set
-  `LORELOOP_KEY_DIR` to an owner-controlled directory outside the project when
-  the default home directory is unavailable. A key directory inside the project
-  is rejected even if writable.
+- Agent CLI missing: install and authenticate Claude Code, Codex, OpenCode, or
+  co-mind, then confirm that host works outside LoreLoop.
+- Local trust storage not writable: use a writable checkout and an
+  owner-controlled home directory. `LORELOOP_KEY_DIR` remains an advanced
+  deployment override, but normal initialization chooses and remembers local
+  trust storage automatically. Storage inside the project is rejected even if
+  writable.
 - Playwright is informational until web ingestion or verification is needed.
   Install with `python -m pip install 'loreloop[web]'` followed by
   `python -m playwright install chromium`.
@@ -26,6 +27,34 @@ manifest, or checksum mismatch is a hard failure; do not bypass it. Confirm the
 GitHub Release is complete, fix proxy/TLS access, and retry. On Linux/macOS the
 installer can fall back to a Python 3.11-3.14 virtual environment when neither
 `uv` nor `pipx` is available.
+
+## Codex integration is not ready
+
+Run `loreloop codex status`. If the marketplace or plugin is absent, run
+`loreloop codex install`; this delegates registration and enablement to the
+native `codex plugin` commands instead of editing Codex configuration directly.
+Start a new Codex thread after installation because plugin Skills are resolved
+at the thread boundary. For a source checkout, pass
+`--source /absolute/path/to/loreloop`. If an existing marketplace with the same
+name points somewhere else, LoreLoop preserves it rather than silently
+rewriting user configuration; inspect `codex plugin marketplace list` first.
+
+## OpenCode integration is not ready
+
+Run `loreloop opencode status`, then `loreloop opencode install`. LoreLoop
+installs a global Skill and `/loreloop` command without editing `opencode.json`.
+If status reports `modified` or `symlink`, LoreLoop preserves that path; move or
+reconcile it yourself before retrying. Start a new OpenCode session after
+installation. Interactive use and tool-free inference are supported, but
+headless `loreloop run --agent opencode` is deliberately refused because the
+current CLI has no verifiable workspace sandbox equivalent.
+
+## co-mind integration is not ready
+
+Run `loreloop comind status`, then `loreloop comind install`. LoreLoop uses
+co-mind's own `plugin marketplace` and `plugin install` commands and preserves
+an existing `loreloop` marketplace source. For a checkout, pass `--source
+/absolute/path/to/loreloop`. Start a new co-mind session after installation.
 
 ## Browser exploration or verification fails
 
@@ -45,7 +74,7 @@ server violates HTTP semantics.
 
 ## Provider or data-residency concern
 
-LoreLoop stores state locally but invokes the configured Claude Code or Codex
+LoreLoop stores state locally but may invoke the configured supported agent
 CLI for extraction, optional expansion, headless delegation, and free-form judging. `begin`
 itself is deterministic and stays in the host-agent session; the host agent and
 any other model-backed action still operate under that provider's terms. Those tools
@@ -53,12 +82,25 @@ may send source snippets or page observations to an external provider. Review
 the provider/account policy before ingestion, prefer deterministic assertions,
 and use `run --no-expand` when query expansion is not needed.
 
-## Evidence key or chain error
+## Local project trust is unavailable or does not match
 
-Never delete only the chain or only its key. The key and head commitment live in
-`~/.loreloop/keys/` (or `LORELOOP_KEY_DIR`), outside the agent-writable project.
-If a legacy in-tree key is detected, follow the exact move/archive choices in
-the error. A tampered or truncated chain is deliberately not auto-repaired.
+Run `loreloop trust status` first. Normal initialization manages local trust
+automatically and saves the project connection outside the repository. If a
+workspace predates automatic registration, lost that saved connection, or
+previously used custom trust storage, reconnect it with:
+
+```bash
+loreloop trust recover --from <original-trust-directory>
+loreloop doctor
+```
+
+Recovery verifies the candidate before saving anything; pointing it at the
+wrong directory cannot grant trust. Do not move or delete `.loreloop` by hand.
+If the original trust material cannot be restored, the operator may explicitly
+archive the old domain with `loreloop trust reset --confirm`, then initialize a
+new one. This loses continuity with the old evidence history and is never an
+automatic agent decision. A tampered or truncated history is deliberately not
+auto-repaired.
 
 ## Database schema is newer or an upgrade fails
 

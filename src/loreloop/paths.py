@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import tempfile
@@ -88,15 +89,85 @@ def secure_atomic_write_text(path: Path, text: str) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def key_directory() -> Path:
+def trust_locations_file() -> Path:
+    configured = os.environ.get("LORELOOP_TRUST_REGISTRY")
+    if configured:
+        return Path(configured).expanduser().absolute()
+    return (Path.home() / ".loreloop/trust-locations.json").absolute()
+
+
+def load_trust_locations() -> dict[str, Path]:
+    path = trust_locations_file()
+    if not path.exists():
+        return {}
+    reject_symlink(path, label="trust-location registry")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise StatePathError(f"cannot read trust-location registry {path}: {exc}") from exc
+    if not isinstance(data, dict) or set(data) != {"version", "projects"}:
+        raise StatePathError(f"invalid trust-location registry {path}")
+    if data["version"] != 1 or not isinstance(data["projects"], dict):
+        raise StatePathError(f"invalid trust-location registry {path}")
+    locations: dict[str, Path] = {}
+    for raw_project, raw_directory in data["projects"].items():
+        if (
+            not isinstance(raw_project, str)
+            or not raw_project
+            or not Path(raw_project).is_absolute()
+            or not isinstance(raw_directory, str)
+            or not raw_directory
+            or not Path(raw_directory).is_absolute()
+        ):
+            raise StatePathError(f"invalid trust-location registry {path}")
+        locations[str(Path(raw_project).resolve())] = Path(raw_directory).resolve()
+    return locations
+
+
+def register_key_directory(workdir: Path, directory: Path) -> None:
+    resolved_workdir = workdir.resolve()
+    resolved_directory = directory.expanduser().resolve()
+    if resolved_directory == resolved_workdir or resolved_directory.is_relative_to(
+        resolved_workdir
+    ):
+        raise StatePathError("trust credential directory must be outside the project tree")
+    locations = load_trust_locations()
+    locations[str(resolved_workdir)] = resolved_directory
+    payload = {
+        "version": 1,
+        "projects": {project: str(key_dir) for project, key_dir in sorted(locations.items())},
+    }
+    secure_atomic_write_text(
+        trust_locations_file(), json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    )
+
+
+def unregister_key_directory(workdir: Path) -> None:
+    locations = load_trust_locations()
+    if locations.pop(str(workdir.resolve()), None) is None:
+        return
+    payload = {
+        "version": 1,
+        "projects": {project: str(key_dir) for project, key_dir in sorted(locations.items())},
+    }
+    secure_atomic_write_text(
+        trust_locations_file(), json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    )
+
+
+def key_directory(workdir: Path | None = None) -> Path:
     configured = os.environ.get("LORELOOP_KEY_DIR")
     if configured:
         return Path(configured).expanduser().absolute()
+    if workdir is not None:
+        registered = load_trust_locations().get(str(workdir.resolve()))
+        if registered is not None:
+            return registered
     return (Path.home() / ".loreloop/keys").absolute()
 
 
-def require_key_directory_outside(workdir: Path) -> Path:
-    key_dir = key_directory()
+def require_key_directory_outside(workdir: Path, *, directory: Path | None = None) -> Path:
+    key_dir = directory.expanduser().absolute() if directory is not None else key_directory(workdir)
     reject_symlink(key_dir, label="key directory")
     resolved_key_dir = key_dir.resolve()
     root = workdir.resolve()

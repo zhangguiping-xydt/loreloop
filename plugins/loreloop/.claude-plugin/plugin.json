@@ -1,0 +1,14 @@
+{
+  "name": "loreloop",
+  "version": "0.1.0",
+  "description": "Use LoreLoop's governed project knowledge and evidence loop inside Claude-compatible coding agents.",
+  "author": {
+    "name": "LoreLoop contributors",
+    "url": "https://github.com/zhangguiping-xydt"
+  },
+  "homepage": "https://github.com/zhangguiping-xydt/loreloop#readme",
+  "repository": "https://github.com/zhangguiping-xydt/loreloop",
+  "license": "MIT",
+  "keywords": ["project-knowledge", "coding-agent", "evidence", "claude-code", "co-mind"],
+  "skills": "./skills/"
+}

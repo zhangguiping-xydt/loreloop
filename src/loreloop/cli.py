@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shlex
 import sys
@@ -10,6 +11,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import __version__
 from .agents import AgentError, AgentRunner, delegation_runner, inference_runner
 from .delegate.runner import DelegateRunner
 from .evidence.chain import ChainVerificationError, EvidenceChain
@@ -44,12 +46,29 @@ from .knowledge.endorsement import (
 )
 from .knowledge.model import Curation, Entry
 from .knowledge.store import KnowledgeStore
-from .paths import StatePathError, ensure_state_root, key_directory, state_path, state_root
+from .paths import (
+    StatePathError,
+    ensure_state_root,
+    key_directory,
+    load_trust_locations,
+    register_key_directory,
+    state_path,
+    state_root,
+    unregister_key_directory,
+)
 from .report.acceptance import RunTraceError, evaluate_run, load_run, record_check, render_report
 
 # run ids are used to build filesystem paths; a strict shape rules out
 # traversal like "../../etc/passwd" without any path canonicalization games.
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
+_CODEX_MARKETPLACE = "loreloop"
+_CODEX_PLUGIN_ID = "loreloop@loreloop"
+_CODEX_MARKETPLACE_SOURCE = "zhangguiping-xydt/loreloop"
+_CODEX_DEFAULT_REF = f"v{__version__}"
+_COMIND_MARKETPLACE = "loreloop"
+_COMIND_PLUGIN_ID = "loreloop@loreloop"
+_COMIND_MARKETPLACE_SOURCE = "zhangguiping-xydt/loreloop"
+_AGENT_CHOICES = ["claude", "codex", "opencode", "co-mind"]
 
 
 class InitializationError(Exception):
@@ -110,7 +129,7 @@ def _print_cli_error(error: CLIError) -> int:
 def _add_agent_option(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--agent",
-        choices=["claude", "codex"],
+        choices=_AGENT_CHOICES,
         default=argparse.SUPPRESS,
         help="override the coding-agent CLI for this action",
     )
@@ -178,14 +197,16 @@ def cmd_init(args: argparse.Namespace) -> int:
     key_ok, key_problem = _probe_writable_directory(key_dir, create=True)
     if not key_ok:
         raise InitializationError(
-            f"cannot initialize evidence key in {key_dir}: {key_problem}. "
-            "Set LORELOOP_KEY_DIR to a writable directory outside the project tree."
+            f"cannot initialize local trust in {key_dir}: {key_problem}. "
+            "Choose a writable operator-owned directory outside the project tree."
         )
     _store(workdir).close()
-    EvidenceChain.for_workdir(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    chain.verify()
+    register_key_directory(workdir, key_dir)
     state_dir = state_root(workdir)
     print(f"initialized {state_dir.name}/ (knowledge store, evidence chain) in {workdir}")
-    print(f"evidence signing key: {key_path_for(workdir)} (outside the project tree)")
+    print("local trust: ready (managed automatically)")
     print("register this trust domain for federation with `loreloop project add .`")
 
     gitignore = workdir / ".gitignore"
@@ -199,9 +220,12 @@ def cmd_init(args: argparse.Namespace) -> int:
                 fh.write(f"{ignore_entry}\n")
             print(f"added {ignore_entry} to .gitignore (evidence may embed page content)")
 
-    hosts = [name for name in ("claude", "codex") if shutil.which(name)]
+    hosts = [name for name in _AGENT_CHOICES if shutil.which(name)]
     if not hosts:
-        print("no coding agent (claude/codex) found on PATH; skill installation skipped")
+        print(
+            "no supported coding agent (claude/codex/opencode/co-mind) found on PATH; "
+            "skill installation skipped"
+        )
         return 0
     print(f"detected coding agent(s): {', '.join(hosts)}")
 
@@ -211,16 +235,27 @@ def cmd_init(args: argparse.Namespace) -> int:
     else:
         wanted = args.skill
     if wanted:
-        if "claude" in hosts:
+        claude_hosts = [name for name in ("claude", "co-mind") if name in hosts]
+        if claude_hosts:
             from .companion import install_claude_skill
 
             path = install_claude_skill(workdir)
-            print(f"installed companion skill for Claude: {path.relative_to(workdir)}")
-        if "codex" in hosts:
+            labels = {"claude": "Claude", "co-mind": "co-mind"}
+            detected = "/".join(labels[name] for name in claude_hosts)
+            print(f"installed companion skill for {detected}: {path.relative_to(workdir)}")
+        agent_hosts = [name for name in ("codex", "opencode") if name in hosts]
+        if agent_hosts:
             from .companion import install_codex_skill
 
             path = install_codex_skill(workdir)
-            print(f"installed companion skill for Codex: {path.relative_to(workdir)}")
+            labels = {"codex": "Codex", "opencode": "OpenCode"}
+            detected = "/".join(labels[name] for name in agent_hosts)
+            print(f"installed companion skill for {detected}: {path.relative_to(workdir)}")
+        if "opencode" in hosts:
+            from .companion import install_opencode_command
+
+            path = install_opencode_command(workdir)
+            print(f"installed OpenCode command: {path.relative_to(workdir)}")
     else:
         print("skipped skill installation (re-run `loreloop init --skill` to install)")
     return 0
@@ -238,12 +273,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks.append(("Python", "PASS" if python_ok else "FAIL", platform.python_version(), python_ok))
     git = shutil.which("git")
     checks.append(("Git", "PASS" if git else "FAIL", git or "not found on PATH", bool(git)))
-    agents = [name for name in ("claude", "codex") if shutil.which(name)]
+    agents = [name for name in _AGENT_CHOICES if shutil.which(name)]
     checks.append(
         (
             "coding agent",
             "PASS" if agents else "FAIL",
-            ", ".join(agents) if agents else "install claude or codex",
+            ", ".join(agents) if agents else "install claude, codex, opencode, or co-mind",
             bool(agents),
         )
     )
@@ -253,7 +288,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         key_path = key_path_for(workdir)
     except StatePathError as exc:
         key_path = None
-        key_dir = key_directory()
+        key_dir = key_directory(workdir)
         key_writable = False
         key_detail = str(exc)
     else:
@@ -261,27 +296,46 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         key_writable, key_detail = _probe_writable_directory(key_dir, create=True)
     checks.append(
         (
-            "evidence key directory",
+            "local trust directory",
             "PASS" if key_writable else "FAIL",
-            f"{key_dir} ({key_detail})",
+            "managed automatically (writable)" if key_writable else f"{key_dir} ({key_detail})",
             key_writable,
         )
     )
+    history_path = state_path(workdir, "evidence.jsonl")
+    has_history = history_path.is_file() and bool(history_path.read_text(encoding="utf-8").strip())
     if key_path is None:
         key_ok = False
-        key_detail = "key path is unavailable until the directory boundary is fixed"
+        key_detail = "local trust storage is unavailable until the directory boundary is fixed"
     elif key_path.exists():
         try:
             key_size = len(key_path.read_bytes())
-            key_ok = key_size == 32
-            key_detail = f"{key_path} ({key_size} bytes)"
+            if key_size != 32:
+                key_ok = False
+                key_detail = "local trust material is invalid; restore its backup"
+            else:
+                EvidenceChain.for_workdir(workdir, create_key=False).verify()
+                key_ok = True
+                key_detail = "ready"
+        except ChainVerificationError as exc:
+            key_ok = False
+            if exc.index == 0 and exc.reason == "signature invalid":
+                key_detail = (
+                    "local trust does not match this project's history; run `loreloop trust status`"
+                )
+            else:
+                key_detail = f"project history integrity check failed: {exc.reason}"
         except OSError as exc:
             key_ok = False
-            key_detail = f"cannot read {key_path}: {exc}"
+            key_detail = f"cannot read local trust material: {exc}"
     else:
-        key_ok = key_writable
-        key_detail = f"will be created at {key_path}"
-    checks.append(("evidence key", "PASS" if key_ok else "FAIL", key_detail, key_ok))
+        key_ok = key_writable and not has_history
+        key_detail = (
+            "existing project history needs its original local trust; run `loreloop trust status`"
+            if has_history
+            else "will be created automatically during initialization"
+        )
+    checks.append(("local trust", "PASS" if key_ok else "FAIL", key_detail, key_ok))
     backend = lock_backend()
     lock_ok = backend != "unavailable"
     checks.append(("evidence lock", "PASS" if lock_ok else "FAIL", backend, lock_ok))
@@ -298,6 +352,450 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     ready = all(ok for _, status, _, ok in checks if status != "INFO")
     print("\nREADY: loreloop preflight passed" if ready else "\nNOT READY: fix FAIL checks above")
     return 0 if ready else 1
+
+
+def _codex_json(*argv: str) -> dict[str, object]:
+    import json
+    import shutil
+    import subprocess
+
+    executable = shutil.which("codex")
+    if executable is None:
+        raise CLIError(
+            "Codex integration is unavailable",
+            "the Codex CLI is not installed or is not on PATH",
+            "install and authenticate Codex, then rerun `loreloop codex install`",
+        )
+    try:
+        result = subprocess.run(
+            [executable, *argv],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        raise CLIError(
+            "Codex integration command failed",
+            detail,
+            "run `codex plugin list`, resolve the reported marketplace/plugin issue, then retry",
+        ) from exc
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise CLIError(
+            "Codex integration returned invalid output",
+            "the Codex CLI did not return the expected JSON response",
+            "upgrade Codex, then rerun `loreloop codex status`",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise CLIError(
+            "Codex integration returned invalid output",
+            "the Codex CLI JSON response is not an object",
+            "upgrade Codex, then rerun `loreloop codex status`",
+        )
+    return payload
+
+
+def _codex_marketplace() -> dict[str, object] | None:
+    payload = _codex_json("plugin", "marketplace", "list", "--json")
+    raw = payload.get("marketplaces")
+    if not isinstance(raw, list):
+        return None
+    return next(
+        (item for item in raw if isinstance(item, dict) and item.get("name") == _CODEX_MARKETPLACE),
+        None,
+    )
+
+
+def _codex_plugin() -> dict[str, object] | None:
+    payload = _codex_json(
+        "plugin",
+        "list",
+        "--json",
+        "--available",
+        "--marketplace",
+        _CODEX_MARKETPLACE,
+    )
+    for group in ("installed", "available"):
+        raw = payload.get(group)
+        if not isinstance(raw, list):
+            continue
+        match = next(
+            (
+                item
+                for item in raw
+                if isinstance(item, dict) and item.get("pluginId") == _CODEX_PLUGIN_ID
+            ),
+            None,
+        )
+        if match is not None:
+            return match
+    return None
+
+
+def cmd_codex(args: argparse.Namespace) -> int:
+    if args.action == "status":
+        marketplace = _codex_marketplace()
+        if marketplace is None:
+            print("Codex integration: not installed")
+            print("Next: loreloop codex install")
+            return 1
+        plugin = _codex_plugin()
+        if plugin is None or not plugin.get("installed") or not plugin.get("enabled"):
+            print("Codex integration: plugin not enabled")
+            print(f"Next: codex plugin add {_CODEX_PLUGIN_ID}")
+            return 1
+        print("Codex integration: ready")
+        print(f"Plugin: {_CODEX_PLUGIN_ID} {plugin.get('version', '')}".rstrip())
+        print("Entry point: invoke `$loreloop` in a new Codex thread")
+        return 0
+
+    if args.action == "install":
+        marketplace = _codex_marketplace()
+        if marketplace is None:
+            command = [
+                "plugin",
+                "marketplace",
+                "add",
+                args.source,
+                "--json",
+            ]
+            if args.ref and not Path(args.source).expanduser().exists():
+                command[4:4] = ["--ref", args.ref]
+            _codex_json(*command)
+            print(f"Added Codex marketplace: {_CODEX_MARKETPLACE}")
+        else:
+            print(f"Using existing Codex marketplace: {_CODEX_MARKETPLACE} (source preserved)")
+        _codex_json("plugin", "add", _CODEX_PLUGIN_ID, "--json")
+        print(f"Installed and enabled Codex plugin: {_CODEX_PLUGIN_ID}")
+        print("Next: start a new Codex thread and invoke `$loreloop` in your project.")
+        return 0
+
+    if args.action == "uninstall":
+        marketplace = _codex_marketplace()
+        if marketplace is None:
+            print("Codex integration: already removed")
+            return 0
+        plugin = _codex_plugin()
+        if plugin is not None and plugin.get("installed"):
+            _codex_json("plugin", "remove", _CODEX_PLUGIN_ID, "--json")
+            print(f"Removed Codex plugin: {_CODEX_PLUGIN_ID}")
+        if args.remove_marketplace:
+            _codex_json("plugin", "marketplace", "remove", _CODEX_MARKETPLACE, "--json")
+            print(f"Removed Codex marketplace: {_CODEX_MARKETPLACE}")
+        else:
+            print("Marketplace preserved; pass --remove-marketplace to remove it too.")
+        return 0
+
+    raise CLIError(
+        "unsupported Codex integration action",
+        f"unknown Codex action: {args.action}",
+        "run `loreloop codex --help`",
+    )
+
+
+def cmd_opencode(args: argparse.Namespace) -> int:
+    from .companion import (
+        install_opencode_global,
+        opencode_global_status,
+        uninstall_opencode_global,
+    )
+
+    if args.action == "status":
+        status = opencode_global_status()
+        if all(state == "ready" for _, state in status):
+            print("OpenCode integration: ready")
+            for path, _ in status:
+                print(f"Installed: {path}")
+            print("Entry point: run `/loreloop <request>` in a new OpenCode session")
+            return 0
+        print("OpenCode integration: not ready")
+        for path, state in status:
+            print(f"{state}: {path}")
+        print("Next: loreloop opencode install")
+        return 1
+
+    if args.action == "install":
+        try:
+            skill, command = install_opencode_global()
+        except RuntimeError as exc:
+            raise CLIError(
+                "OpenCode integration was not installed",
+                str(exc),
+                "preserve or rename the conflicting file, then rerun `loreloop opencode install`",
+            ) from exc
+        print(f"Installed OpenCode skill: {skill}")
+        print(f"Installed OpenCode command: {command}")
+        print("Next: start a new OpenCode session and run `/loreloop <request>`.")
+        return 0
+
+    if args.action == "uninstall":
+        try:
+            removed = uninstall_opencode_global()
+        except RuntimeError as exc:
+            raise CLIError(
+                "OpenCode integration was not removed",
+                str(exc),
+                "keep the modified file or restore LoreLoop's managed content, then retry",
+            ) from exc
+        if not removed:
+            print("OpenCode integration: already removed")
+            return 0
+        for path in removed:
+            print(f"Removed OpenCode integration file: {path}")
+        return 0
+
+    raise CLIError(
+        "unsupported OpenCode integration action",
+        f"unknown OpenCode action: {args.action}",
+        "run `loreloop opencode --help`",
+    )
+
+
+def _comind_command(*argv: str) -> str:
+    import shutil
+    import subprocess
+
+    executable = shutil.which("co-mind")
+    if executable is None:
+        raise CLIError(
+            "co-mind integration is unavailable",
+            "the co-mind CLI is not installed or is not on PATH",
+            "install co-mind, then rerun `loreloop comind install`",
+        )
+    try:
+        result = subprocess.run(
+            [executable, *argv],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        raise CLIError(
+            "co-mind integration command failed",
+            detail,
+            "run `co-mind plugin list`, resolve the reported marketplace/plugin issue, then retry",
+        ) from exc
+    return result.stdout
+
+
+def _comind_json(*argv: str) -> object:
+    import json
+
+    output = _comind_command(*argv)
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise CLIError(
+            "co-mind integration returned invalid output",
+            "the co-mind CLI did not return the expected JSON response",
+            "upgrade co-mind, then rerun `loreloop comind status`",
+        ) from exc
+
+
+def _comind_marketplace() -> dict[str, object] | None:
+    payload = _comind_json("plugin", "marketplace", "list", "--json")
+    raw = payload if isinstance(payload, list) else None
+    if raw is None and isinstance(payload, dict):
+        value = payload.get("marketplaces")
+        raw = value if isinstance(value, list) else None
+    if raw is None:
+        return None
+    return next(
+        (
+            item
+            for item in raw
+            if isinstance(item, dict) and item.get("name") == _COMIND_MARKETPLACE
+        ),
+        None,
+    )
+
+
+def _comind_plugin() -> dict[str, object] | None:
+    payload = _comind_json("plugin", "list", "--json")
+    raw = payload if isinstance(payload, list) else None
+    if raw is None and isinstance(payload, dict):
+        value = payload.get("installed")
+        raw = value if isinstance(value, list) else None
+    if not isinstance(raw, list):
+        return None
+    return next(
+        (
+            item
+            for item in raw
+            if isinstance(item, dict)
+            and (item.get("pluginId") == _COMIND_PLUGIN_ID or item.get("id") == _COMIND_PLUGIN_ID)
+        ),
+        None,
+    )
+
+
+def cmd_comind(args: argparse.Namespace) -> int:
+    if args.action == "status":
+        marketplace = _comind_marketplace()
+        if marketplace is None:
+            print("co-mind integration: not installed")
+            print("Next: loreloop comind install")
+            return 1
+        plugin = _comind_plugin()
+        if plugin is None:
+            print("co-mind integration: plugin not installed")
+            print(f"Next: co-mind plugin install {_COMIND_PLUGIN_ID} --scope user")
+            return 1
+        print("co-mind integration: ready")
+        print(f"Plugin: {_COMIND_PLUGIN_ID} {plugin.get('version', '')}".rstrip())
+        print("Entry point: ask co-mind to use LoreLoop in a new session")
+        return 0
+
+    if args.action == "install":
+        marketplace = _comind_marketplace()
+        if marketplace is None:
+            _comind_command("plugin", "marketplace", "add", args.source, "--scope", "user")
+            print(f"Added co-mind marketplace: {_COMIND_MARKETPLACE}")
+        else:
+            print(f"Using existing co-mind marketplace: {_COMIND_MARKETPLACE} (source preserved)")
+        _comind_command("plugin", "install", _COMIND_PLUGIN_ID, "--scope", "user")
+        print(f"Installed co-mind plugin: {_COMIND_PLUGIN_ID}")
+        print("Next: start a new co-mind session and ask it to use LoreLoop.")
+        return 0
+
+    if args.action == "uninstall":
+        marketplace = _comind_marketplace()
+        if marketplace is None:
+            print("co-mind integration: already removed")
+            return 0
+        plugin = _comind_plugin()
+        if plugin is not None:
+            _comind_command("plugin", "uninstall", _COMIND_PLUGIN_ID, "--scope", "user")
+            print(f"Removed co-mind plugin: {_COMIND_PLUGIN_ID}")
+        if args.remove_marketplace:
+            _comind_command("plugin", "marketplace", "remove", _COMIND_MARKETPLACE)
+            print(f"Removed co-mind marketplace: {_COMIND_MARKETPLACE}")
+        else:
+            print("Marketplace preserved; pass --remove-marketplace to remove it too.")
+        return 0
+
+    raise CLIError(
+        "unsupported co-mind integration action",
+        f"unknown co-mind action: {args.action}",
+        "run `loreloop comind --help`",
+    )
+
+
+def cmd_trust(args: argparse.Namespace) -> int:
+    from .evidence.chain import TrustCredentialUnavailable, key_path_for
+
+    workdir = _workdir()
+    history_path = state_path(workdir, "evidence.jsonl")
+    has_history = history_path.is_file() and bool(history_path.read_text(encoding="utf-8").strip())
+
+    if args.action == "status":
+        registered = load_trust_locations().get(str(workdir.resolve()))
+        key_path = key_path_for(workdir)
+        if not state_root(workdir).exists():
+            print("Project trust: not initialized")
+            print("Next: loreloop init --skill")
+            return 0
+        if has_history and not key_path.is_file():
+            print("Project trust: unavailable on this machine")
+            print(
+                "This project has existing LoreLoop history, but its original local trust "
+                "is not connected."
+            )
+            print("Next: loreloop trust recover --from <original-trust-directory>")
+            return 1
+        if not key_path.is_file():
+            print("Project trust: ready to initialize")
+            print("LoreLoop will prepare local trust automatically during `loreloop init`.")
+            return 0
+        try:
+            EvidenceChain.for_workdir(workdir, create_key=False).verify()
+        except ChainVerificationError as exc:
+            if exc.index == 0 and exc.reason == "signature invalid":
+                print("Project trust: connected to the wrong local trust")
+                print("The selected local trust does not belong to this project's history.")
+                print("Next: loreloop trust recover --from <original-trust-directory>")
+                return 1
+            raise
+        source = (
+            "environment override"
+            if os.environ.get("LORELOOP_KEY_DIR")
+            else "saved project registration"
+            if registered is not None
+            else "default local storage"
+        )
+        print("Project trust: ready")
+        print(f"Connection: {source}")
+        return 0
+
+    if args.action == "recover":
+        if not has_history:
+            raise CLIError(
+                "no project history to recover",
+                "this project has no existing LoreLoop evidence history",
+                "run `loreloop init --skill` to initialize it normally",
+            )
+        candidate_dir = args.source_dir.expanduser().resolve()
+        try:
+            EvidenceChain.for_workdir(
+                workdir,
+                create_key=False,
+                key_dir=candidate_dir,
+            ).verify()
+        except TrustCredentialUnavailable as exc:
+            raise CLIError(
+                "trust recovery failed",
+                f"no matching LoreLoop trust was found in {candidate_dir}",
+                "select the original LoreLoop trust directory or restore its backup",
+            ) from exc
+        except ChainVerificationError as exc:
+            if exc.index == 0 and exc.reason == "signature invalid":
+                raise CLIError(
+                    "trust recovery failed",
+                    f"the local trust in {candidate_dir} does not match this project's history",
+                    "select the original LoreLoop trust directory or restore its backup",
+                ) from exc
+            raise
+        register_key_directory(workdir, candidate_dir)
+        print("Project trust: recovered")
+        print("The connection is saved for future LoreLoop and Codex sessions.")
+        print("Next: loreloop doctor")
+        return 0
+
+    if args.action == "reset":
+        if not args.confirm:
+            raise CLIError(
+                "explicit confirmation required",
+                "reset archives this project's current LoreLoop state",
+                "review recovery options first, then run `loreloop trust reset --confirm`",
+            )
+        root = state_root(workdir)
+        if not root.exists():
+            raise CLIError(
+                "project trust is not initialized",
+                "there is no .loreloop state to archive",
+                "run `loreloop init --skill`",
+            )
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        archive = workdir / f".loreloop.archived-{stamp}"
+        suffix = 1
+        while archive.exists():
+            archive = workdir / f".loreloop.archived-{stamp}-{suffix}"
+            suffix += 1
+        root.rename(archive)
+        unregister_key_directory(workdir)
+        print(f"Project trust archived: {archive.name}")
+        print("No operator-owned local trust material was deleted.")
+        print("Next: loreloop init --skill")
+        return 0
+
+    raise CLIError(
+        "unsupported trust action",
+        f"unknown trust action: {args.action}",
+        "run `loreloop trust --help`",
+    )
 
 
 def cmd_demo(args: argparse.Namespace) -> int:
@@ -1920,7 +2418,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--agent",
-        choices=["claude", "codex"],
+        choices=_AGENT_CHOICES,
         default="claude",
         help="coding-agent CLI used for extraction and delegated work (default: claude)",
     )
@@ -1928,6 +2426,98 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_doctor = sub.add_parser("doctor", help="check prerequisites and writable trust state")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_codex = sub.add_parser("codex", help="install or inspect the native Codex integration")
+    codex_sub = p_codex.add_subparsers(dest="action", required=True)
+    p_codex_status = codex_sub.add_parser("status", help="show Codex plugin readiness")
+    p_codex_status.set_defaults(func=cmd_codex)
+    p_codex_install = codex_sub.add_parser(
+        "install", help="install and enable LoreLoop through the Codex plugin system"
+    )
+    p_codex_install.add_argument(
+        "--source",
+        default=_CODEX_MARKETPLACE_SOURCE,
+        help="Git repository or local marketplace root",
+    )
+    p_codex_install.add_argument(
+        "--ref",
+        default=_CODEX_DEFAULT_REF,
+        help=f"Git ref used when adding a Git marketplace (default: {_CODEX_DEFAULT_REF})",
+    )
+    p_codex_install.set_defaults(func=cmd_codex)
+    p_codex_uninstall = codex_sub.add_parser(
+        "uninstall", help="remove the LoreLoop plugin from Codex"
+    )
+    p_codex_uninstall.add_argument(
+        "--remove-marketplace",
+        action="store_true",
+        help="also remove the LoreLoop marketplace registration",
+    )
+    p_codex_uninstall.set_defaults(func=cmd_codex)
+
+    p_opencode = sub.add_parser(
+        "opencode", help="install or inspect the native OpenCode integration"
+    )
+    opencode_sub = p_opencode.add_subparsers(dest="action", required=True)
+    p_opencode_status = opencode_sub.add_parser(
+        "status", help="show OpenCode integration readiness"
+    )
+    p_opencode_status.set_defaults(func=cmd_opencode)
+    p_opencode_install = opencode_sub.add_parser(
+        "install", help="install LoreLoop's global OpenCode Skill and command"
+    )
+    p_opencode_install.set_defaults(func=cmd_opencode)
+    p_opencode_uninstall = opencode_sub.add_parser(
+        "uninstall", help="remove unmodified LoreLoop OpenCode integration files"
+    )
+    p_opencode_uninstall.set_defaults(func=cmd_opencode)
+
+    p_comind = sub.add_parser("comind", help="install or inspect the native co-mind integration")
+    comind_sub = p_comind.add_subparsers(dest="action", required=True)
+    p_comind_status = comind_sub.add_parser("status", help="show co-mind plugin readiness")
+    p_comind_status.set_defaults(func=cmd_comind)
+    p_comind_install = comind_sub.add_parser(
+        "install", help="install and enable LoreLoop through co-mind's plugin system"
+    )
+    p_comind_install.add_argument(
+        "--source",
+        default=_COMIND_MARKETPLACE_SOURCE,
+        help="GitHub repository or local marketplace root",
+    )
+    p_comind_install.set_defaults(func=cmd_comind)
+    p_comind_uninstall = comind_sub.add_parser(
+        "uninstall", help="remove the LoreLoop plugin from co-mind"
+    )
+    p_comind_uninstall.add_argument(
+        "--remove-marketplace",
+        action="store_true",
+        help="also remove the LoreLoop marketplace registration",
+    )
+    p_comind_uninstall.set_defaults(func=cmd_comind)
+
+    p_trust = sub.add_parser("trust", help="inspect or recover this project's local trust")
+    trust_sub = p_trust.add_subparsers(dest="action", required=True)
+    p_trust_status = trust_sub.add_parser("status", help="show local trust readiness")
+    p_trust_status.set_defaults(func=cmd_trust)
+    p_trust_recover = trust_sub.add_parser(
+        "recover", help="reconnect existing history to its original local trust"
+    )
+    p_trust_recover.add_argument(
+        "--from",
+        dest="source_dir",
+        type=Path,
+        required=True,
+        metavar="TRUST_DIR",
+        help="operator-owned directory containing this project's original local trust",
+    )
+    p_trust_recover.set_defaults(func=cmd_trust)
+    p_trust_reset = trust_sub.add_parser(
+        "reset", help="archive existing LoreLoop state and start a new local trust domain"
+    )
+    p_trust_reset.add_argument(
+        "--confirm", action="store_true", help="confirm archival of the current .loreloop state"
+    )
+    p_trust_reset.set_defaults(func=cmd_trust)
 
     p_init = sub.add_parser("init", help="set up LoreLoop in this project")
     skill_group = p_init.add_mutually_exclusive_group()
@@ -2202,7 +2792,12 @@ def main(argv: list[str] | None = None) -> int:
     import sqlite3
     import subprocess
 
-    from .evidence.chain import KeyMaterialError, LegacyKeyError, OperatorBoundaryError
+    from .evidence.chain import (
+        KeyMaterialError,
+        LegacyKeyError,
+        OperatorBoundaryError,
+        TrustCredentialUnavailable,
+    )
     from .federation.registry import RegistryError
     from .knowledge.repos import RepoConfigError
     from .knowledge.code_reverse import ExtractionError
@@ -2218,6 +2813,33 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except CLIError as exc:
         return _print_cli_error(exc)
+    except TrustCredentialUnavailable as exc:
+        return _print_cli_error(
+            CLIError(
+                "local project trust is unavailable",
+                str(exc),
+                "run `loreloop trust status`, then reconnect the original local trust "
+                "or explicitly reset the local trust domain",
+            )
+        )
+    except ChainVerificationError as exc:
+        if exc.index == 0 and exc.reason == "signature invalid":
+            return _print_cli_error(
+                CLIError(
+                    "local project trust does not match",
+                    "this project has existing LoreLoop history, but the selected local "
+                    "trust belongs to a different trust domain",
+                    "run `loreloop trust status`, then `loreloop trust recover --from "
+                    "<original-trust-directory>`",
+                )
+            )
+        return _print_cli_error(
+            CLIError(
+                "evidence chain broken",
+                str(exc),
+                "restore the intact project state and matching local trust credential",
+            )
+        )
     except KeyboardInterrupt:
         return _print_cli_error(
             CLIError(
@@ -2228,7 +2850,6 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     except (
-        ChainVerificationError,
         LegacyKeyError,
         KeyMaterialError,
         OperatorBoundaryError,
@@ -2252,6 +2873,10 @@ def main(argv: list[str] | None = None) -> int:
         command = getattr(locals().get("args"), "command", None)
         hints = {
             "init": "run `loreloop doctor`, fix each FAIL check, then retry initialization",
+            "codex": "run `loreloop codex status`, resolve the reported Codex issue, then retry",
+            "opencode": "run `loreloop opencode status`, resolve the reported OpenCode issue, then retry",
+            "comind": "run `loreloop comind status`, resolve the reported co-mind issue, then retry",
+            "trust": "run `loreloop trust --help` and choose status, recover, or reset",
             "demo": "fix the reported prerequisite, then rerun `loreloop demo --help`",
             "ingest": "check the source path/URL and agent setup, then retry ingestion",
             "begin": "fix the reported trust-state issue, then retry `loreloop begin <task>`",

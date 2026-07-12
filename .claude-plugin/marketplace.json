@@ -1,0 +1,19 @@
+{
+  "name": "loreloop",
+  "owner": {
+    "name": "LoreLoop contributors"
+  },
+  "metadata": {
+    "description": "LoreLoop host integrations for Claude-compatible coding agents",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "loreloop",
+      "description": "Governed project knowledge and evidence-backed delivery inside the current coding-agent session",
+      "source": "./plugins/loreloop",
+      "category": "development",
+      "homepage": "https://github.com/zhangguiping-xydt/loreloop"
+    }
+  ]
+}

@@ -32,12 +32,30 @@ def test_codex_plugin_manifest_matches_package_and_marketplace():
     ]
 
 
+def test_claude_compatible_plugin_manifest_matches_package_and_marketplace():
+    package = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    manifest = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
+    marketplace = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8"))
+
+    assert manifest["name"] == "loreloop"
+    assert manifest["version"] == package["version"]
+    assert manifest["skills"] == "./skills/"
+    assert marketplace["name"] == "loreloop"
+    assert marketplace["plugins"][0]["name"] == "loreloop"
+    assert marketplace["plugins"][0]["source"] == "./plugins/loreloop"
+
+
 def test_plugin_skill_requires_permission_and_uses_bundled_installer():
     skill = (PLUGIN / "skills/loreloop/SKILL.md").read_text(encoding="utf-8")
 
     assert "explicit permission" in skill
     assert "scripts/install-runtime.sh" in skill
     assert "Never download and execute a remote installer script directly" in skill
+    assert "explicit invocation authorizes initialization" in skill
+    assert "loreloop codex status" in skill
+    assert "loreloop comind status" in skill
+    assert "host configuration files" in skill
+    assert "directly" in skill
     assert 'Run `loreloop begin "<task>"`' in skill
 
 
@@ -110,6 +128,40 @@ def test_posix_installer_verifies_wheel_before_installing(tmp_path):
     assert runtime_log.read_text(encoding="utf-8").splitlines() == ["--help", "init --skill"]
 
 
+def test_posix_installer_can_install_runtime_and_codex_plugin_together(tmp_path):
+    env, _, runtime_log = _fake_install_environment(tmp_path, b"wheel-content")
+
+    result = subprocess.run(
+        [str(INSTALLER), "--codex"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert runtime_log.read_text(encoding="utf-8").splitlines() == ["--help", "codex install"]
+    assert "restart the installed coding-agent host" in result.stdout
+
+
+def test_posix_installer_can_install_all_host_integrations(tmp_path):
+    env, _, runtime_log = _fake_install_environment(tmp_path, b"wheel-content")
+
+    result = subprocess.run(
+        [str(INSTALLER), "--codex", "--opencode", "--comind"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert runtime_log.read_text(encoding="utf-8").splitlines() == [
+        "--help",
+        "codex install",
+        "opencode install",
+        "comind install",
+    ]
+
+
 def test_posix_installer_refuses_checksum_mismatch(tmp_path):
     env, uv_log, _ = _fake_install_environment(
         tmp_path,
@@ -134,5 +186,11 @@ def test_installers_do_not_pipe_remote_scripts_to_a_shell():
     powershell = (PLUGIN / "scripts/install-runtime.ps1").read_text(encoding="utf-8")
 
     assert "| sh" not in shell
+    assert '"$RUNTIME" codex install' in shell
+    assert '"$RUNTIME" opencode install' in shell
+    assert '"$RUNTIME" comind install' in shell
     assert "Invoke-Expression" not in powershell
     assert "Get-FileHash -Algorithm SHA256" in powershell
+    assert "& $RuntimePath codex install" in powershell
+    assert "& $RuntimePath opencode install" in powershell
+    assert "& $RuntimePath comind install" in powershell
