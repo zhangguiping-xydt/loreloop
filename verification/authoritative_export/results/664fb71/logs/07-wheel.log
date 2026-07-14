@@ -1,7 +1,0 @@
-$ uv build --wheel --out-dir /tmp/loreloop-authoritative-proof-1hhr3bwj/dist
-
-[stdout]
-
-[stderr]
-Building wheel...
-Successfully built /tmp/loreloop-authoritative-proof-1hhr3bwj/dist/loreloop-0.1.0-py3-none-any.whl

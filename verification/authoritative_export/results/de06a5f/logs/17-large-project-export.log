@@ -1,7 +1,7 @@
-$ /media/vdc/code/ai/loreloop/.venv/bin/python -m loreloop.cli knowledge export --format package --output /tmp/loreloop-authoritative-proof-1hhr3bwj/dogfood-knowledge.zip --project-name dogfood
+$ /media/vdc/code/ai/loreloop/.venv/bin/python -m loreloop.cli knowledge export --format package --output /tmp/loreloop-authoritative-proof-iash7eru/dogfood-knowledge.zip --project-name dogfood
 
 [stdout]
-exported 8 reverse-engineered documents to ZIP package /tmp/loreloop-authoritative-proof-1hhr3bwj/dogfood-knowledge.zip
+exported 8 reverse-engineered documents to ZIP package /tmp/loreloop-authoritative-proof-iash7eru/dogfood-knowledge.zip
 
 [stderr]
 capturing clean Git source snapshot...
