@@ -22,6 +22,28 @@ CONTRACT = Path("docs/verification/authoritative-export-v5.md")
 MIN_DOGFOOD_TRACKED_FILES = 5_000
 MIN_DOGFOOD_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 _PUBLIC_GITHUB_REMOTE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+(?:\.git)?")
+_PROOF_ENV_PASSTHROUGH = (
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +75,26 @@ def _anonymous_git_environment(home: Path) -> dict[str, str]:
             "XDG_CONFIG_HOME": str(home),
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
+        }
+    )
+    return environment
+
+
+def _proof_environment(checkout: Path, home: Path) -> dict[str, str]:
+    """Build a closed gate environment without caller-controlled test selection."""
+    environment = {
+        name: os.environ[name] for name in _PROOF_ENV_PASSTHROUGH if name in os.environ
+    }
+    environment.update(
+        {
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(home),
+            "PYTHONPATH": str(checkout / "src"),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONHASHSEED": "0",
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_TERMINAL_PROMPT": "0",
         }
     )
     return environment
@@ -275,13 +317,12 @@ def main(argv: list[str] | None = None) -> int:
         contract = checkout / CONTRACT
         if not contract.is_file():
             raise SystemExit(f"contract is absent from frozen commit: {CONTRACT}")
-        env = {
-            **os.environ,
-            "PYTHONPATH": str(checkout / "src"),
-            "PYTHONDONTWRITEBYTECODE": "1",
-        }
+        proof_home = scratch / "proof-home"
+        proof_home.mkdir(mode=0o700)
+        env = _proof_environment(checkout, proof_home)
         python = sys.executable
         gate_specs: list[tuple[str, tuple[str, ...], int]] = [
+            ("pytest-collect", (python, "-m", "pytest", "--collect-only", "-q"), 300),
             ("full-test-suite", (python, "-m", "pytest", "-q"), 900),
             ("ruff", ("ruff", "check", "src", "tests", "plugins"), 300),
             (
@@ -554,6 +595,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         gate_names = {gate.name for gate in gates}
         required_gates = {
+            "pytest-collect",
             "full-test-suite",
             "ruff",
             "bandit-medium-high",
@@ -604,6 +646,9 @@ def main(argv: list[str] | None = None) -> int:
             "environment": {
                 "python": sys.version,
                 "platform": platform.platform(),
+                "policy": "proof-environment-whitelist-v1",
+                "pytest_plugin_autoload": False,
+                "passthrough": list(_PROOF_ENV_PASSTHROUGH),
             },
             "gates": [asdict(gate) for gate in gates],
             "filesystems": filesystem_evidence,

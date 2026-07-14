@@ -114,6 +114,23 @@ def read_snapshot_blobs(
                 "requirement material exceeds the semantic blob size limit: "
                 + ", ".join(oversized_requirements)
             )
+        oversized_supported = tuple(
+            entry
+            for entry in entries
+            if not excluded_semantic_source(entry.path)
+            and _semantic_path_candidate(entry.path)
+            and entry.byte_length is not None
+            and entry.byte_length > MAX_SEMANTIC_BLOB_BYTES
+        )
+        if oversized_supported:
+            details = ", ".join(
+                f"{repository.alias}:{entry.path} ({entry.byte_length} bytes)"
+                for entry in oversized_supported
+            )
+            raise GitSnapshotError(
+                "supported source exceeds the semantic blob size limit "
+                f"({MAX_SEMANTIC_BLOB_BYTES} bytes): {details}"
+            )
         payloads = read_blob_batch(
             repo,
             tuple(entry.object_id.git_sha1_hex() for entry in selected),

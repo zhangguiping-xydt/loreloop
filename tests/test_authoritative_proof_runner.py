@@ -1,11 +1,31 @@
 from __future__ import annotations
 
+import runpy
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 RUNNER = ROOT / "verification/authoritative_export/run.py"
+
+
+def test_proof_runner_uses_a_closed_environment_for_test_gates(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--deselect=tests/test_document_archive.py")
+    monkeypatch.setenv("PYTHONWARNINGS", "ignore")
+    monkeypatch.setenv("COVERAGE_PROCESS_START", "/operator/config")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example.invalid")
+    namespace = runpy.run_path(str(RUNNER))
+
+    environment = namespace["_proof_environment"](ROOT, tmp_path)
+
+    assert "PYTEST_ADDOPTS" not in environment
+    assert "PYTHONWARNINGS" not in environment
+    assert "COVERAGE_PROCESS_START" not in environment
+    assert environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    assert environment["PYTHONHASHSEED"] == "0"
+    assert environment["HTTPS_PROXY"] == "http://proxy.example.invalid"
 
 
 def test_proof_runner_refuses_to_delete_source_repository() -> None:

@@ -237,6 +237,25 @@ def test_snapshot_streams_large_nonsemantic_asset_without_retaining_bytes(
     assert by_path["asset.bin"].byte_length == authoritative_source.MAX_SEMANTIC_BLOB_BYTES + 1
 
 
+def test_snapshot_rejects_oversized_supported_source_instead_of_silently_skipping_it(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path / "repo", {"app.py": "VALUE = 1\n"})
+    (repo / "large.py").write_bytes(
+        b"#" * (authoritative_source.MAX_SEMANTIC_BLOB_BYTES + 1)
+    )
+    _ = _git(repo, "add", "-A")
+    _ = _git(repo, "commit", "-m", "large supported source")
+
+    snapshot = capture_source_snapshot(repo)
+
+    with pytest.raises(
+        GitSnapshotError,
+        match=r"supported source exceeds.*\.:large\.py.*16777217 bytes",
+    ):
+        _ = read_snapshot_blobs(snapshot, repo)
+
+
 def test_semantic_blob_loading_has_a_project_total_budget(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
