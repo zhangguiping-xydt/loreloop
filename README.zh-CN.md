@@ -165,8 +165,9 @@ baseline.zip
 ```
 
 固定生成六份核心文档；接口和数据库文档只在源码有明确证据时生成。当前检测覆盖 Python、
-TypeScript/JavaScript、Java/Kotlin、Go、Rust、C#、SQL、SQLAlchemy、Django ORM、Prisma、
-TypeORM、常见 migration、OpenAPI/Swagger、GraphQL、protobuf、Docker、Compose 和 Kubernetes。
+TypeScript/JavaScript、Vue SFC、Java/Kotlin、Go、Rust、C#、SQL、SQLAlchemy、Django ORM、
+Prisma、TypeORM、常见 migration、OpenAPI/Swagger、GraphQL、protobuf、Docker、Compose 和
+Kubernetes。受支持语言的测试文件只投影为验收规格中的测试证据，不会混入功能清单或详细设计。
 终端会列出各仓库文件数、检测器覆盖、事实数量和未语义解析的文件类型。
 规范化后的 `--project-name` 也属于 SemanticCore 身份，因此文件名、AST、Markdown 和 package ID
 来自同一条确定性投影链，不是可以脱离证据单独修改的标签。

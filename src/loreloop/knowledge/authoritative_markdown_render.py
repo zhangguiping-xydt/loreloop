@@ -284,10 +284,16 @@ def _gap_lines(document: MarkdownDocument) -> list[str]:
     if document.family == "detailed_design":
         if not kinds & {"StateRow", "ErrorRow", "ImplementationFactRow"}:
             gaps.append("缺少状态机、错误路径和核心流程证据；符号清单不等同于完整详细设计。")
-    if document.family == "user_guide" and not kinds & {"UiSurfaceRow", "CommandRow"}:
-        gaps.append("缺少 UI/CLI 操作入口与运行时页面证据；无法形成可执行用户操作手册。")
-    if document.family == "acceptance" and not kinds & {"AcceptanceRow", "TestRow"}:
-        gaps.append("缺少验收条款和测试证据；本文件不能用于正式项目验收。")
+    if document.family == "user_guide":
+        if not kinds & {"UiSurfaceRow", "CommandRow"}:
+            gaps.append("缺少 UI/CLI 操作入口与运行时页面证据；无法形成可执行用户操作手册。")
+        elif "RequirementRow" not in kinds:
+            gaps.append("已识别页面或命令入口，但缺少已提交操作说明；本文件不能替代完整操作步骤。")
+    if document.family == "acceptance":
+        if "AcceptanceRow" not in kinds:
+            gaps.append("缺少已提交验收条款；测试存在性不能替代业务验收标准。")
+        if "TestRow" not in kinds:
+            gaps.append("缺少可识别的测试证据；本文件不能用于正式项目验收。")
     if document.family == "interface_contract":
         interface_rows = tuple(
             row

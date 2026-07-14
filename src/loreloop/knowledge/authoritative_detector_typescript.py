@@ -7,6 +7,7 @@ from typing import Final
 
 from .authoritative_detector_sql import detect_sql_source
 from .authoritative_detector_typeorm import detect_typeorm_entities
+from .authoritative_detector_ui import detect_typescript_ui_surfaces
 from .authoritative_records import (
     ConfigurationRecord,
     DependencyRecord,
@@ -229,6 +230,7 @@ def detect_typescript_source(source: str, repository_alias: str, path: str) -> D
         interfaces=_interfaces(source, repository_alias, path),
         symbols=_symbols(source, repository_alias, path),
         permissions=permissions,
+        ui_surfaces=detect_typescript_ui_surfaces(source, repository_alias, path),
         configurations=configurations,
         dependencies=dependencies,
     )

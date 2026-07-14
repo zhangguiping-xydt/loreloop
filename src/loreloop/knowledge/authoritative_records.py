@@ -57,6 +57,23 @@ class PermissionRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class UiSurfaceRecord:
+    name: str
+    surface_type: Literal["route", "page", "component"]
+    entry: str | None
+    actions: tuple[str, ...]
+    source: SourceRef
+
+
+@dataclass(frozen=True, slots=True)
+class TestRecord:
+    name: str
+    framework: str
+    scope: Literal["unit", "integration", "unknown"]
+    source: SourceRef
+
+
+@dataclass(frozen=True, slots=True)
 class ConfigurationRecord:
     key: str
     default: str | None
@@ -129,6 +146,8 @@ class DetectionReport:
     interfaces: tuple[InterfaceRecord, ...] = ()
     symbols: tuple[SymbolRecord, ...] = ()
     permissions: tuple[PermissionRecord, ...] = ()
+    ui_surfaces: tuple[UiSurfaceRecord, ...] = ()
+    tests: tuple[TestRecord, ...] = ()
     configurations: tuple[ConfigurationRecord, ...] = ()
     dependencies: tuple[DependencyRecord, ...] = ()
     requirements: tuple[RequirementRecord, ...] = ()
@@ -151,6 +170,8 @@ def merge_reports(*reports: DetectionReport) -> DetectionReport:
         interfaces=tuple(item for report in reports for item in report.interfaces),
         symbols=tuple(item for report in reports for item in report.symbols),
         permissions=tuple(item for report in reports for item in report.permissions),
+        ui_surfaces=tuple(item for report in reports for item in report.ui_surfaces),
+        tests=tuple(item for report in reports for item in report.tests),
         configurations=tuple(item for report in reports for item in report.configurations),
         dependencies=tuple(item for report in reports for item in report.dependencies),
         requirements=tuple(item for report in reports for item in report.requirements),

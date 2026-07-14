@@ -57,6 +57,27 @@ def normalize_detection_report(report: DetectionReport) -> DetectionReport:
                 item.expression,
             ),
         ),
+        ui_surfaces=_unique(
+            report.ui_surfaces,
+            lambda item: (
+                item.source.repository_alias,
+                item.source.path,
+                item.name,
+                item.surface_type,
+                item.entry,
+                item.actions,
+            ),
+        ),
+        tests=_unique(
+            report.tests,
+            lambda item: (
+                item.source.repository_alias,
+                item.source.path,
+                item.name,
+                item.framework,
+                item.scope,
+            ),
+        ),
         configurations=_unique(
             report.configurations,
             lambda item: (

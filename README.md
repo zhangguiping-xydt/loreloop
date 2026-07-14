@@ -176,10 +176,12 @@ baseline.zip
 
 Six core documents are always produced. Interface and database documents are
 added only when the source supports them. Deterministic detectors currently
-cover Python, TypeScript/JavaScript, Java/Kotlin, Go, Rust, C#, SQL,
+cover Python, TypeScript/JavaScript, Vue SFCs, Java/Kotlin, Go, Rust, C#, SQL,
 SQLAlchemy, Django ORM, Prisma, TypeORM, common migrations, OpenAPI/Swagger,
 GraphQL, protobuf, Docker, Compose, and Kubernetes. The CLI prints repository,
 detector, fact, document, and unsupported-suffix coverage.
+Tests in supported languages project only into acceptance evidence; they do not
+become capability or implementation-design facts.
 The normalized `--project-name` is part of the SemanticCore identity, so names,
 ASTs, Markdown, and package IDs are one deterministic projection rather than
 independent labels.

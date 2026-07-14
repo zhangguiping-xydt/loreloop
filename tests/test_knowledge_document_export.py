@@ -59,6 +59,11 @@ def create_user(name: str) -> dict[str, str]:
 |---|---|---|
 | REQ-BIZ-001 | 管理员可以创建用户 | 创建成功后返回用户标识 |
 """,
+            "src/views/users.vue": """
+<template><button @click="createUser">Create</button></template>
+<script>export default { name: "UsersPage" }</script>
+""",
+            "tests/test_users.py": "def test_create_user(): assert True\n",
         },
     )
     monkeypatch.chdir(repo)
@@ -116,10 +121,12 @@ def create_user(name: str) -> dict[str, str]:
     assert "## HTTP 接口" not in detailed
     assert "## HTTP 接口" not in user_guide
     assert requirements != user_guide
+    assert "UsersPage" in user_guide and "click:createUser" in user_guide
     assert interface.index("## 证据缺口") < interface.index("## HTTP 接口")
     assert "未发现结构化错误码或异常响应契约" in interface
     acceptance = (target / "demo-验收规格.md").read_text(encoding="utf-8")
     assert "创建成功后返回用户标识" in acceptance
+    assert "test_create_user" in acceptance and "pytest" in acceptance
     assert "## 证据索引" not in "".join(
         path.read_text(encoding="utf-8") for path in target.glob("*.md")
     )

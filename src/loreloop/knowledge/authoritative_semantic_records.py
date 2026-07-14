@@ -85,6 +85,33 @@ def build_semantic_records(
                 "expression": item.expression,
             },
         )
+    for item in report.ui_surfaces:
+        _add(
+            context,
+            records,
+            evidence,
+            "UI",
+            DocumentRowKind.UI_SURFACE,
+            item.surface_type,
+            item.source,
+            {
+                "name": item.name,
+                "surface_type": item.surface_type,
+                "entry": item.entry,
+                "actions": ", ".join(item.actions),
+            },
+        )
+    for item in report.tests:
+        _add(
+            context,
+            records,
+            evidence,
+            "TEST",
+            DocumentRowKind.TEST,
+            "test",
+            item.source,
+            {"name": item.name, "framework": item.framework, "scope": item.scope},
+        )
     for item in report.configurations:
         _add(
             context,

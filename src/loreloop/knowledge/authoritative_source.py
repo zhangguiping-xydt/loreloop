@@ -16,7 +16,12 @@ from .authoritative_detector_prisma import detect_prisma_schema
 from .authoritative_detector_proto import detect_proto_source
 from .authoritative_detector_python import detect_python_source
 from .authoritative_detector_sql import detect_sql_source
+from .authoritative_detector_tests import (
+    detect_test_source,
+    is_supported_test_evidence_path,
+)
 from .authoritative_detector_typescript import detect_typescript_source
+from .authoritative_detector_ui import detect_vue_source
 from .authoritative_git import (
     GitSnapshotError,
     read_blob_batch,
@@ -96,8 +101,11 @@ def read_snapshot_blobs(
             for entry in entries
             if (repository.alias, entry.path) in requirement_keys
             or (
-                not excluded_semantic_source(entry.path)
-                and _semantic_path_candidate(entry.path)
+                (
+                    not excluded_semantic_source(entry.path)
+                    and _semantic_path_candidate(entry.path)
+                )
+                or is_supported_test_evidence_path(entry.path)
             )
             if entry.byte_length is not None
             and entry.byte_length <= MAX_SEMANTIC_BLOB_BYTES
@@ -117,8 +125,13 @@ def read_snapshot_blobs(
         oversized_supported = tuple(
             entry
             for entry in entries
-            if not excluded_semantic_source(entry.path)
-            and _semantic_path_candidate(entry.path)
+            if (
+                (
+                    not excluded_semantic_source(entry.path)
+                    and _semantic_path_candidate(entry.path)
+                )
+                or is_supported_test_evidence_path(entry.path)
+            )
             and entry.byte_length is not None
             and entry.byte_length > MAX_SEMANTIC_BLOB_BYTES
         )
@@ -175,6 +188,21 @@ def _text(blob: SnapshotBlob) -> str:
         ) from exc
 
 
+def _test_text(blob: SnapshotBlob) -> str:
+    """Decode test syntax deterministically while preserving strict product-source UTF-8."""
+    if blob.data is None:
+        raise DetectionError(
+            f"supported test source exceeds semantic loading limits: "
+            f"{blob.repository_alias}:{blob.path}"
+        )
+    for encoding in ("utf-8", "gb18030", "latin-1"):
+        try:
+            return blob.data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise AssertionError("latin-1 decoding must be total")
+
+
 def _is_config(path: str) -> bool:
     name = path.rsplit("/", 1)[-1].lower()
     return name in {
@@ -214,6 +242,7 @@ def _semantic_path_candidate(path: str) -> bool:
                 ".jsx",
                 ".mjs",
                 ".cjs",
+                ".vue",
                 ".sql",
                 ".prisma",
                 ".graphql",
@@ -235,12 +264,16 @@ def detector_profile(blob: SnapshotBlob) -> str | None:
     lower = blob.path.lower()
     if blob.data is None:
         return None
+    if is_supported_test_evidence_path(blob.path):
+        return "test_evidence"
     if excluded_semantic_source(blob.path):
         return None
     if lower.endswith(".py"):
         return "python"
     if lower.endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")):
         return "typescript_javascript"
+    if lower.endswith(".vue"):
+        return "vue_sfc"
     if lower.endswith(".sql"):
         return "sql"
     if _is_config(blob.path):
@@ -270,7 +303,14 @@ def detect_snapshot_blobs(
     """Run deterministic detectors over one already verified blob set."""
     reports: list[DetectionReport] = []
     for blob in blobs:
-        if blob.data is None or excluded_semantic_source(blob.path):
+        if blob.data is None:
+            continue
+        if is_supported_test_evidence_path(blob.path):
+            reports.append(
+                detect_test_source(_test_text(blob), blob.repository_alias, blob.path)
+            )
+            continue
+        if excluded_semantic_source(blob.path):
             continue
         try:
             report = _detect_snapshot_blob(blob)
@@ -293,6 +333,8 @@ def _detect_snapshot_blob(blob: SnapshotBlob) -> DetectionReport | None:
         return detect_python_source(_text(blob), blob.repository_alias, blob.path)
     if lower.endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")):
         return detect_typescript_source(_text(blob), blob.repository_alias, blob.path)
+    if lower.endswith(".vue"):
+        return detect_vue_source(_text(blob), blob.repository_alias, blob.path)
     if lower.endswith(".sql"):
         return detect_sql_source(_text(blob), blob.repository_alias, blob.path)
     if _is_config(blob.path):

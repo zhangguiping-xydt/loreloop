@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 
 from .authoritative_records import DetectionReport
 from .authoritative_source import SnapshotBlob, detector_profile, excluded_semantic_source
+from .authoritative_detector_tests import is_supported_test_evidence_path
 from .authoritative_types import SourceSnapshot
 
 
@@ -26,11 +27,15 @@ def render_coverage_summary(
         for blob in blobs
         if detector_profile(blob) is None and not excluded_semantic_source(blob.path)
     )
-    excluded = sum(excluded_semantic_source(blob.path) for blob in blobs)
+    excluded = sum(
+        excluded_semantic_source(blob.path)
+        and not is_supported_test_evidence_path(blob.path)
+        for blob in blobs
+    )
     lines = [
         "authoritative export coverage:",
         f"  repositories: {len(snapshot.repositories)}; committed blobs: {len(blobs)}; "
-        f"detector-inspected: {sum(profiles.values())}; test/generated excluded: {excluded}",
+        f"detector-inspected: {sum(profiles.values())}; fixture/generated excluded: {excluded}",
     ]
     roles = {item.alias: item.role for item in snapshot.repositories}
     for alias in (item.alias for item in snapshot.repositories):
@@ -49,6 +54,8 @@ def render_coverage_summary(
                 f"requirements={len(report.requirements)}",
                 f"acceptance={len(report.acceptances)}",
                 f"permissions={len(report.permissions)}",
+                f"ui_surfaces={len(report.ui_surfaces)}",
+                f"tests={len(report.tests)}",
                 f"configurations={len(report.configurations)}",
                 f"dependencies={len(report.dependencies)}",
                 f"tables={len(report.tables)}",
