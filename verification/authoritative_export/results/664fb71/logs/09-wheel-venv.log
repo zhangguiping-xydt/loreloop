@@ -1,0 +1,7 @@
+$ uv venv --python /media/vdc/code/ai/loreloop/.venv/bin/python /tmp/loreloop-authoritative-proof-1hhr3bwj/wheel-venv
+
+[stdout]
+
+[stderr]
+Using CPython 3.11.15 interpreter at: /media/vdc/code/ai/loreloop/.venv/bin/python
+Creating virtual environment at: /tmp/loreloop-authoritative-proof-1hhr3bwj/wheel-venv

@@ -1,0 +1,5 @@
+$ git -c credential.helper= fetch --quiet --no-tags https://github.com/openclaw/openclaw.git +refs/heads/main:refs/loreloop-proof/public-dogfood
+
+[stdout]
+
+[stderr]

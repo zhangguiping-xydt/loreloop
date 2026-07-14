@@ -1,0 +1,6 @@
+$ /media/vdc/code/ai/loreloop/.venv/bin/ruff check src tests plugins
+
+[stdout]
+All checks passed!
+
+[stderr]

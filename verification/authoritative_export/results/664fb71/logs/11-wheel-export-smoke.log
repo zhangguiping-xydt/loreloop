@@ -1,0 +1,14 @@
+$ /tmp/loreloop-authoritative-proof-1hhr3bwj/wheel-venv/bin/loreloop knowledge export --format package --output /tmp/loreloop-authoritative-proof-1hhr3bwj/wheel-smoke.zip
+
+[stdout]
+exported 7 reverse-engineered documents to ZIP package /tmp/loreloop-authoritative-proof-1hhr3bwj/wheel-smoke.zip
+
+[stderr]
+capturing clean Git source snapshot...
+detecting source contracts across 1 repositories...
+authoritative export coverage:
+  repositories: 1; committed blobs: 1; detector-inspected: 1; fixture/generated excluded: 0
+  - . (root): 1 blobs
+  detector profiles: python=1
+  facts: interfaces=1, symbols=1, requirements=0, acceptance=0, permissions=0, ui_surfaces=0, test_suites=0, configurations=0, dependencies=0, tables=0, indexes=0
+  documents: 7 (6 core + evidence-backed optional)

@@ -1,0 +1,10 @@
+$ /media/vdc/code/ai/loreloop/.venv/bin/python -m loreloop.cli knowledge replay /tmp/loreloop-authoritative-proof-1hhr3bwj/dogfood-knowledge.zip
+
+[stdout]
+Capsule replay: no_key
+  package_id: 1af91970c2b4d07104dcf45ac1c51c247a428625413cb7760396af1f965c06ca
+  semantic_core_sha256: 883e72e25b61f1407fe20aadd3464c89eaac779a5d58c711653d2c9e7dae40e5
+  capsule_sha256: badf4ce52a2190b08b2edacb066f1bc37ff84db7d55dbc7013909fe1e3f7e021
+  documents: 8
+
+[stderr]

@@ -1,0 +1,28 @@
+$ /media/vdc/code/ai/loreloop/.venv/bin/python -m loreloop.cli knowledge export --help
+
+[stdout]
+usage: loreloop knowledge export [-h] [--stale]
+                                 [--format {audit,package,docs}]
+                                 [--output OUTPUT]
+                                 [--project-name PROJECT_NAME]
+                                 [--requirements PATH] [--force] [--attest]
+
+options:
+  -h, --help            show this help message and exit
+  --stale               audit only: export entries with drifted code anchors
+  --format {audit,package,docs}
+                        audit entries or deterministic project package; docs
+                        is a compatibility alias
+  --output OUTPUT       audit Markdown file, source-docs directory, or
+                        deliverable .zip package; package/docs defaults to
+                        baseline.zip
+  --project-name PROJECT_NAME
+                        project name used in source documents
+  --requirements PATH   committed Markdown requirements; use repo:NAME/path
+                        for a peer repository
+  --force               replace an existing ZIP or update source docs in a
+                        non-empty directory
+  --attest              append an optional local trust-chain attestation for
+                        the exported package
+
+[stderr]

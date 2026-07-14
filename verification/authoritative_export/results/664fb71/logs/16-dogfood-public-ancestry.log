@@ -1,0 +1,5 @@
+$ git merge-base --is-ancestor 0455028a3cd25d87f76bc389f89261eee658657a refs/loreloop-proof/public-dogfood
+
+[stdout]
+
+[stderr]

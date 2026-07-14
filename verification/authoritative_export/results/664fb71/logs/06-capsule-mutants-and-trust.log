@@ -1,0 +1,7 @@
+$ /media/vdc/code/ai/loreloop/.venv/bin/python -m pytest -q tests/test_document_capsule.py tests/test_document_capsule_replay.py tests/test_cli_capsule_replay.py tests/test_authoritative_trust.py
+
+[stdout]
+.....................................                                    [100%]
+37 passed in 22.11s
+
+[stderr]

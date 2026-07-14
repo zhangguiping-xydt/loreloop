@@ -1,0 +1,5 @@
+$ /media/vdc/code/ai/loreloop/.venv/bin/bandit -q -r src/loreloop -x src/loreloop/example -lll
+
+[stdout]
+
+[stderr]
