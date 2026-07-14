@@ -99,6 +99,12 @@ def _playwright_browsers_path() -> Path | None:
     return None
 
 
+def _python_environment_tool(name: str) -> str:
+    """Prefer tools installed beside the Python interpreter running the proof."""
+    environment_bin = str(Path(sys.executable).parent)
+    return shutil.which(name, path=environment_bin) or shutil.which(name) or name
+
+
 def _proof_environment(
     checkout: Path,
     home: Path,
@@ -352,13 +358,15 @@ def main(argv: list[str] | None = None) -> int:
             playwright_browsers_path=playwright_browsers_path,
         )
         python = sys.executable
+        ruff = _python_environment_tool("ruff")
+        bandit = _python_environment_tool("bandit")
         gate_specs: list[tuple[str, tuple[str, ...], int]] = [
             ("pytest-collect", (python, "-m", "pytest", "--collect-only", "-q"), 300),
             ("full-test-suite", (python, "-m", "pytest", "-q"), 900),
-            ("ruff", ("ruff", "check", "src", "tests", "plugins"), 300),
+            ("ruff", (ruff, "check", "src", "tests", "plugins"), 300),
             (
                 "bandit-medium-high",
-                ("bandit", "-q", "-r", "src/loreloop", "-x", "src/loreloop/example", "-lll"),
+                (bandit, "-q", "-r", "src/loreloop", "-x", "src/loreloop/example", "-lll"),
                 300,
             ),
             (

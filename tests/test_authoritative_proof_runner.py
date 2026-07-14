@@ -3,6 +3,7 @@ from __future__ import annotations
 import runpy
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -51,6 +52,22 @@ def test_proof_runner_reuses_installed_playwright_browsers_with_isolated_home(
     assert environment["HOME"] == str(proof_home)
     assert environment["XDG_CONFIG_HOME"] == str(proof_home)
     assert environment["PLAYWRIGHT_BROWSERS_PATH"] == str(browser_cache.resolve())
+
+
+def test_proof_runner_prefers_tools_beside_its_python(
+    tmp_path: Path, monkeypatch
+) -> None:
+    environment_bin = tmp_path / "venv" / "bin"
+    environment_bin.mkdir(parents=True)
+    python = environment_bin / "python"
+    bandit = environment_bin / "bandit"
+    python.touch()
+    bandit.touch(mode=0o755)
+    monkeypatch.setattr(sys, "executable", str(python))
+    monkeypatch.setenv("PATH", os.defpath)
+    namespace = runpy.run_path(str(RUNNER))
+
+    assert namespace["_python_environment_tool"]("bandit") == str(bandit)
 
 
 def test_proof_runner_refuses_to_delete_source_repository() -> None:
