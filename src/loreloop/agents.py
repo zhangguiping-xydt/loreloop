@@ -14,12 +14,14 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+ConfigScalar = str | bool | int | float
+
 
 class AgentError(Exception):
     pass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AgentRunner:
     command: tuple[str, ...] = ("claude", "-p")
     timeout: float = 600.0
@@ -156,12 +158,10 @@ def _codex_connection_args() -> tuple[str, ...]:
         config = {}
 
     model = os.environ.get("LORELOOP_CODEX_MODEL") or config.get("model")
-    effort = os.environ.get("LORELOOP_CODEX_REASONING_EFFORT") or config.get(
-        "model_reasoning_effort"
-    )
+    effort = os.environ.get("LORELOOP_CODEX_REASONING_EFFORT") or "low"
     provider = os.environ.get("LORELOOP_CODEX_PROVIDER") or config.get("model_provider")
 
-    overrides: list[tuple[str, object]] = []
+    overrides: list[tuple[str, ConfigScalar]] = []
     for key, value in (
         ("model", model),
         ("model_reasoning_effort", effort),

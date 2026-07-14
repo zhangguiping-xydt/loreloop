@@ -531,6 +531,22 @@ url = "https://private.example/mcp"
     assert "mcp_servers" not in rendered
 
 
+def test_codex_inference_uses_low_reasoning_unless_operator_overrides(tmp_path, monkeypatch):
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        'model = "configured-model"\nmodel_reasoning_effort = "xhigh"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.delenv("LORELOOP_CODEX_REASONING_EFFORT", raising=False)
+
+    command = inference_runner("codex").command
+
+    assert 'model_reasoning_effort="low"' in command
+    assert 'model_reasoning_effort="xhigh"' not in command
+
+
 def test_agent_runner_strips_operator_capabilities_and_isolates_inference(
     monkeypatch,
 ):
