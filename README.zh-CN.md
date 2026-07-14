@@ -148,6 +148,9 @@ loreloop knowledge export \
 
 ZIP 包内结构如下：
 
+这些是便于评审、Git diff 和编码代理直接读取的 Markdown，不会生成 Word/DOCX；机器重放使用
+包内的 Capsule JSON。
+
 ```text
 knowledge-export.zip
 ├── your-project-功能清单.md

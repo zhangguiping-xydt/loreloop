@@ -112,6 +112,19 @@ def test_openapi_fails_closed_for_malformed_or_executable_input(source: str, mes
         _ = detect_openapi_source(source, ".", "openapi.yaml")
 
 
+@pytest.mark.parametrize(
+    "source",
+    (
+        'openapi: "4.0"\npaths: {}\n',
+        'swagger: "3.0"\npaths: {}\n',
+        'openapi: "3.0.0"\nswagger: "2.0"\npaths: {}\n',
+    ),
+)
+def test_openapi_rejects_unsupported_or_ambiguous_version_markers(source: str) -> None:
+    with pytest.raises(DetectionError, match="version|not OpenAPI"):
+        _ = detect_openapi_source(source, ".", "openapi.yaml")
+
+
 def test_graphql_sdl_extracts_custom_root_operations_and_declared_types() -> None:
     source = '''schema {
   query: RootQuery

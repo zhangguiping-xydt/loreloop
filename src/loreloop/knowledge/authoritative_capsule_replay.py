@@ -5,15 +5,32 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, Protocol, cast
 
 from .authoritative_archive import ExportArchiveError, read_export_archive
+from .authoritative_ast import AstViolation, DocumentRowKind, ProjectedValue
+from .authoritative_bindings import BindingEntry, SourceBinding, SourceTransform
 from .authoritative_capsule import CAPSULE_FILENAME, JsonValue
 from .authoritative_capsule_io import CapsuleIoError, parse_capsule, read_export_files
 from .authoritative_capsule_render import CapsuleRenderError, render_capsule_ast
-from .authoritative_ids import IdentityContractError, canon_v4, package_id, semantic_core_sha256
+from .authoritative_document_ast import build_document_ast_set
+from .authoritative_ids import (
+    AtomIdentity,
+    EvidenceIdentity,
+    IdentityContractError,
+    RecordIdentity,
+    atom_id,
+    canon_v4,
+    evidence_id,
+    package_id,
+    record_id,
+    semantic_core_sha256,
+)
+from .authoritative_records import DetectionError, SourceRef
+from .authoritative_semantic import semantic_core_payload
+from .authoritative_semantic_model import SemanticCore, SemanticEvidence, SemanticRecord
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _ROOT_KEYS = {
@@ -39,10 +56,30 @@ _AST_KEYS = {
     "title",
 }
 _SEMANTIC_KEYS = {
+    "evidence",
     "records",
     "repository_config_digest",
     "source_snapshot_sha256",
     "trust_domain_id",
+}
+_LEGACY_SEMANTIC_KEYS = _SEMANTIC_KEYS - {"evidence"}
+_SEMANTIC_RECORD_KEYS = {
+    "atom_id",
+    "atom_kind",
+    "evidence_id",
+    "record_id",
+    "row_kind",
+    "value_order",
+    "values",
+}
+_SEMANTIC_EVIDENCE_KEYS = {
+    "blob_sha256",
+    "end",
+    "evidence_id",
+    "line",
+    "path",
+    "repository_alias",
+    "start",
 }
 _REQUIRED_FAMILIES = {
     "acceptance",
@@ -111,6 +148,18 @@ def _sha256(value: JsonValue | None, label: str) -> str:
     return digest
 
 
+def _integer(value: JsonValue | None, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise CapsuleReplayError(f"{label} must be an integer")
+    return value
+
+
+def _scalar(value: JsonValue | None, label: str) -> None | bool | int | str:
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    raise CapsuleReplayError(f"{label} must be a canonical scalar")
+
+
 def _keys(value: Mapping[str, JsonValue], expected: set[str], label: str) -> None:
     if set(value) != expected:
         raise CapsuleReplayError(f"{label} has unexpected or missing fields")
@@ -129,11 +178,164 @@ def _safe_markdown_filename(value: JsonValue | None) -> str:
     return filename
 
 
-def _validate_core(root: Mapping[str, JsonValue]) -> tuple[str, str, str, str]:
+def _semantic_evidence(value: JsonValue | None) -> tuple[SemanticEvidence, ...]:
+    evidence: list[SemanticEvidence] = []
+    identifiers: set[str] = set()
+    for index, raw in enumerate(_array(value, "semantic evidence")):
+        item = _mapping(raw, f"semantic evidence {index}")
+        _keys(item, _SEMANTIC_EVIDENCE_KEYS, f"semantic evidence {index}")
+        identifier = _text(item.get("evidence_id"), f"semantic evidence id {index}")
+        if identifier in identifiers:
+            raise CapsuleReplayError("semantic core contains duplicate evidence ids")
+        alias = _text(item.get("repository_alias"), f"semantic evidence repository {index}")
+        path = _text(item.get("path"), f"semantic evidence path {index}")
+        line = _integer(item.get("line"), f"semantic evidence line {index}")
+        blob_digest = _sha256(item.get("blob_sha256"), f"semantic evidence blob digest {index}")
+        start = _integer(item.get("start"), f"semantic evidence start {index}")
+        end = _integer(item.get("end"), f"semantic evidence end {index}")
+        if start < 0 or end < start:
+            raise CapsuleReplayError(f"semantic evidence span {index} is invalid")
+        try:
+            source = SourceRef(alias, path, line)
+            computed = evidence_id(EvidenceIdentity(alias, path, blob_digest, start, end))
+        except (DetectionError, IdentityContractError) as exc:
+            raise CapsuleReplayError(f"semantic evidence {index} is invalid: {exc}") from exc
+        if computed != identifier:
+            raise CapsuleReplayError(f"semantic evidence identity mismatch: {identifier}")
+        identifiers.add(identifier)
+        evidence.append(SemanticEvidence(identifier, source, blob_digest, start, end))
+    if tuple(item.evidence_id for item in evidence) != tuple(sorted(identifiers)):
+        raise CapsuleReplayError("semantic evidence is not in deterministic order")
+    return tuple(evidence)
+
+
+def _semantic_values(
+    record: Mapping[str, JsonValue], index: int
+) -> tuple[tuple[ProjectedValue, ...], dict[str, None | bool | int | str]]:
+    raw_values = _mapping(record.get("values"), f"semantic record values {index}")
+    order = tuple(
+        _text(item, f"semantic record value pointer {index}")
+        for item in _array(record.get("value_order"), f"semantic record value order {index}")
+    )
+    if len(order) != len(set(order)) or set(order) != set(raw_values):
+        raise CapsuleReplayError(f"semantic record value order mismatch: {index}")
+    values: list[ProjectedValue] = []
+    payload: dict[str, None | bool | int | str] = {}
+    for pointer in order:
+        key = pointer.removeprefix("/")
+        if not pointer.startswith("/") or not key or "/" in key:
+            raise CapsuleReplayError(f"semantic record pointer is not a payload field: {pointer}")
+        scalar = _scalar(raw_values.get(pointer), f"semantic record value {index}:{pointer}")
+        try:
+            values.append(ProjectedValue(pointer, scalar))
+        except AstViolation as exc:
+            raise CapsuleReplayError(f"semantic record pointer is invalid: {pointer}") from exc
+        payload[key] = scalar
+    return tuple(values), payload
+
+
+def _semantic_records(
+    value: JsonValue | None,
+    evidence: tuple[SemanticEvidence, ...],
+    trust: str,
+    repository: str,
+) -> tuple[SemanticRecord, ...]:
+    evidence_by_id = {item.evidence_id: item for item in evidence}
+    records: list[SemanticRecord] = []
+    identifiers: set[str] = set()
+    for index, raw in enumerate(_array(value, "semantic records")):
+        item = _mapping(raw, f"semantic record {index}")
+        _keys(item, _SEMANTIC_RECORD_KEYS, f"semantic record {index}")
+        identifier = _text(item.get("record_id"), f"semantic record id {index}")
+        if identifier in identifiers:
+            raise CapsuleReplayError("semantic core contains duplicate record ids")
+        source_id = _text(item.get("evidence_id"), f"semantic record evidence id {index}")
+        source_evidence = evidence_by_id.get(source_id)
+        if source_evidence is None:
+            raise CapsuleReplayError(f"semantic record has unknown evidence: {identifier}")
+        atom_kind = _text(item.get("atom_kind"), f"semantic record atom kind {index}")
+        if not atom_kind:
+            raise CapsuleReplayError(f"semantic record atom kind is empty: {identifier}")
+        values, payload = _semantic_values(item, index)
+        raw_kind = _text(item.get("row_kind"), f"semantic record row kind {index}")
+        try:
+            row_kind = DocumentRowKind(raw_kind)
+        except ValueError as exc:
+            raise CapsuleReplayError(f"semantic record row kind is invalid: {raw_kind}") from exc
+        source = source_evidence.source
+        computed_atom = atom_id(
+            AtomIdentity(
+                atom_kind,
+                source.repository_alias,
+                source.path,
+                source_evidence.blob_sha256,
+                source_evidence.start,
+                source_evidence.end,
+                payload,
+            )
+        )
+        stored_atom = _text(item.get("atom_id"), f"semantic record atom id {index}")
+        if computed_atom != stored_atom:
+            raise CapsuleReplayError(f"semantic atom identity mismatch: {identifier}")
+        prefix, separator, _ = identifier.partition("-")
+        if not separator:
+            raise CapsuleReplayError(f"semantic record id is invalid: {identifier}")
+        try:
+            computed_record = record_id(
+                prefix,
+                RecordIdentity(
+                    trust,
+                    repository,
+                    {
+                        "alias": source.repository_alias,
+                        "path": source.path,
+                        "kind": atom_kind,
+                        "payload": payload,
+                    },
+                ),
+            )
+        except IdentityContractError as exc:
+            raise CapsuleReplayError(f"semantic record identity is invalid: {identifier}") from exc
+        if computed_record != identifier:
+            raise CapsuleReplayError(f"semantic record identity mismatch: {identifier}")
+        bindings = tuple(
+            BindingEntry(
+                projected.pointer,
+                SourceBinding(
+                    source_id,
+                    stored_atom,
+                    f"/payload{projected.pointer}",
+                    SourceTransform.IDENTITY,
+                ),
+            )
+            for projected in values
+        )
+        identifiers.add(identifier)
+        records.append(
+            SemanticRecord(
+                identifier,
+                stored_atom,
+                atom_kind,
+                row_kind,
+                values,
+                source_id,
+                bindings,
+            )
+        )
+    if {item.evidence_id for item in records} != set(evidence_by_id):
+        raise CapsuleReplayError("semantic evidence set does not match semantic records")
+    return tuple(records)
+
+
+def _validate_core(root: Mapping[str, JsonValue]) -> SemanticCore:
     _keys(root, _ROOT_KEYS, "capsule")
     if root.get("schema_version") != 2:
         raise CapsuleReplayError("unsupported capsule schema version; expected version 2")
     semantic = _mapping(root.get("semantic_core"), "semantic core")
+    if set(semantic) == _LEGACY_SEMANTIC_KEYS:
+        raise CapsuleReplayError(
+            "legacy capsule lacks deterministic SemanticCore evidence closure; regenerate it"
+        )
     _keys(semantic, _SEMANTIC_KEYS, "semantic core")
     core_digest = _sha256(root.get("semantic_core_sha256"), "semantic core digest")
     if semantic_core_sha256(semantic) != core_digest:
@@ -145,9 +347,13 @@ def _validate_core(root: Mapping[str, JsonValue]) -> tuple[str, str, str, str]:
     repository = _sha256(
         semantic.get("repository_config_digest"), "repository configuration digest"
     )
-    _ = _sha256(semantic.get("source_snapshot_sha256"), "source snapshot digest")
-    _ = _array(semantic.get("records"), "semantic records")
-    return package, core_digest, trust, repository
+    snapshot = _sha256(semantic.get("source_snapshot_sha256"), "source snapshot digest")
+    evidence = _semantic_evidence(semantic.get("evidence"))
+    records = _semantic_records(semantic.get("records"), evidence, trust, repository)
+    core = SemanticCore(trust, repository, snapshot, records, evidence, core_digest, package)
+    if canon_v4(semantic_core_payload(core)) != canon_v4(semantic):
+        raise CapsuleReplayError("semantic core is not in deterministic portable form")
+    return core
 
 
 def _validate_applicability(value: JsonValue | None, optional: set[str]) -> None:
@@ -170,12 +376,35 @@ def _validate_applicability(value: JsonValue | None, optional: set[str]) -> None
         raise CapsuleReplayError("optional document applicability families are invalid")
 
 
+def _project_name(documents: tuple[Mapping[str, JsonValue], ...]) -> str:
+    for document in documents:
+        ast = _mapping(document.get("ast"), "document AST")
+        if ast.get("required_family") != "capability_catalog":
+            continue
+        title = _text(ast.get("title"), "capability catalog title")
+        suffix = " 功能清单"
+        if not title.endswith(suffix) or len(title) == len(suffix):
+            raise CapsuleReplayError("capability catalog title cannot identify the project")
+        return title[: -len(suffix)]
+    raise CapsuleReplayError("capsule lacks the capability catalog project identity")
+
+
+def _expected_applicability(core: SemanticCore, project_name: str) -> JsonValue:
+    document_set = build_document_ast_set(project_name, core)
+    return [
+        {
+            "family": item.family.value,
+            "status": item.status.value,
+            "reason_ids": list(item.reason_ids),
+        }
+        for item in document_set.applicability
+    ]
+
+
 def _validate_documents(
     root: Mapping[str, JsonValue],
     files: Mapping[str, bytes],
-    package: str,
-    trust: str,
-    repository: str,
+    core: SemanticCore,
     *,
     allow_extra_non_markdown: bool,
 ) -> tuple[str, ...]:
@@ -201,10 +430,21 @@ def _validate_documents(
             f"export file set mismatch; missing={sorted(missing)}, "
             f"extra={sorted(rejected_extras)}"
         )
+    for document, filename in zip(documents, filenames, strict=True):
+        ast = _mapping(document.get("ast"), f"document AST for {filename}")
+        ast_digest = hashlib.sha256(canon_v4(ast)).hexdigest()
+        if ast_digest != _sha256(document.get("ast_sha256"), f"AST digest for {filename}"):
+            raise CapsuleReplayError(f"document AST digest mismatch: {filename}")
+    project_name = _project_name(documents)
+    expected_set = build_document_ast_set(project_name, core)
+    if len(expected_set.documents) != len(documents):
+        raise CapsuleReplayError("document set is not the deterministic SemanticCore projection")
     required: set[str] = set()
     optional: set[str] = set()
     document_ids: set[str] = set()
-    for document, filename in zip(documents, filenames, strict=True):
+    for document, filename, expected_document in zip(
+        documents, filenames, expected_set.documents, strict=True
+    ):
         ast = _mapping(document.get("ast"), f"document AST for {filename}")
         _keys(ast, _AST_KEYS, f"document AST for {filename}")
         ast_digest = hashlib.sha256(canon_v4(ast)).hexdigest()
@@ -224,17 +464,21 @@ def _validate_documents(
         if isinstance(optional_family, str):
             optional.add(optional_family)
         header = _mapping(ast.get("header"), f"AST header for {filename}")
-        if header.get("package_id") != package:
+        if header.get("package_id") != core.package_id:
             raise CapsuleReplayError(f"document AST belongs to another package: {filename}")
         if (
-            header.get("trust_domain_id") != trust
-            or header.get("repository_config_digest") != repository
+            header.get("trust_domain_id") != core.trust_domain_id
+            or header.get("repository_config_digest") != core.repository_config_digest
         ):
             raise CapsuleReplayError(
                 f"document AST authority disagrees with SemanticCore: {filename}"
             )
         if header.get("authority_label") != "git_snapshot_verified":
             raise CapsuleReplayError(f"document AST has an invalid authority label: {filename}")
+        if canon_v4(ast) != canon_v4(asdict(expected_document)):
+            raise CapsuleReplayError(
+                f"document AST is not the deterministic SemanticCore projection: {filename}"
+            )
         expected_markdown = render_capsule_ast(cast(JsonValue, ast), filenames).encode()
         markdown = files[filename]
         if hashlib.sha256(markdown).hexdigest() != _sha256(
@@ -246,6 +490,12 @@ def _validate_documents(
     if required != _REQUIRED_FAMILIES or not optional <= _OPTIONAL_FAMILIES:
         raise CapsuleReplayError("document families are incomplete or invalid")
     _validate_applicability(root.get("applicability"), optional)
+    if canon_v4(root.get("applicability")) != canon_v4(
+        _expected_applicability(core, project_name)
+    ):
+        raise CapsuleReplayError(
+            "document applicability is not the deterministic SemanticCore projection"
+        )
     return filenames
 
 
@@ -262,20 +512,21 @@ def _replay_capsule_files(
         root = parse_capsule(capsule_bytes)
     except CapsuleIoError as exc:
         raise CapsuleReplayError(str(exc)) from exc
-    package, core_digest, trust, repository = _validate_core(root)
+    core = _validate_core(root)
     try:
         filenames = _validate_documents(
             root,
             files,
-            package,
-            trust,
-            repository,
+            core,
             allow_extra_non_markdown=allow_extra_non_markdown,
         )
     except (CapsuleRenderError, IdentityContractError) as exc:
         raise CapsuleReplayError(f"document AST cannot be replayed: {exc}") from exc
     claim = CapsuleTrustClaim(
-        hashlib.sha256(capsule_bytes).hexdigest(), package, core_digest, trust
+        hashlib.sha256(capsule_bytes).hexdigest(),
+        core.package_id,
+        core.semantic_core_sha256,
+        core.trust_domain_id,
     )
     mode: Literal["no_key", "trusted"] = "no_key"
     if trust_verifier is not None:
@@ -285,9 +536,9 @@ def _replay_capsule_files(
             raise CapsuleReplayError("trusted verifier rejected the exact Capsule digest") from exc
         mode = "trusted"
     return CapsuleReplayResult(
-        package,
-        core_digest,
-        trust,
+        core.package_id,
+        core.semantic_core_sha256,
+        core.trust_domain_id,
         claim.capsule_sha256,
         filenames,
         mode,

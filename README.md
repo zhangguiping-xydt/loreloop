@@ -158,6 +158,9 @@ loreloop knowledge export \
 
 The ZIP contains:
 
+These are reviewable Markdown files, not Word/DOCX documents; the Capsule JSON
+is the machine-verifiable representation used by replay.
+
 ```text
 knowledge-export.zip
 ├── your-project-功能清单.md

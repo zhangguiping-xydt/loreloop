@@ -112,15 +112,30 @@ def semantic_core_payload(core: SemanticCore) -> CanonicalInput:
         {
             "record_id": record.record_id,
             "atom_id": record.atom_id,
+            "atom_kind": record.atom_kind,
             "row_kind": record.row_kind.value,
             "values": {value.pointer: value.value for value in record.values},
+            "value_order": [value.pointer for value in record.values],
             "evidence_id": record.evidence_id,
         }
         for record in core.records
+    ]
+    canonical_evidence: CanonicalInput = [
+        {
+            "evidence_id": evidence.evidence_id,
+            "repository_alias": evidence.source.repository_alias,
+            "path": evidence.source.path,
+            "line": evidence.source.line,
+            "blob_sha256": evidence.blob_sha256,
+            "start": evidence.start,
+            "end": evidence.end,
+        }
+        for evidence in core.evidence
     ]
     return {
         "trust_domain_id": core.trust_domain_id,
         "repository_config_digest": core.repository_config_digest,
         "source_snapshot_sha256": core.source_snapshot_sha256,
         "records": canonical_records,
+        "evidence": canonical_evidence,
     }

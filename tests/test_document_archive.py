@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 import warnings
 import zipfile
@@ -9,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from loreloop.cli import main
+from loreloop.knowledge import authoritative_archive
 from loreloop.knowledge.authoritative_archive import (
     ExportArchiveError,
     read_export_archive,
@@ -155,4 +157,67 @@ def test_archive_first_install_does_not_overwrite_a_racing_operator_file(
         )
 
     assert output.read_bytes() == b"operator file"
+    assert not tuple(tmp_path.glob(".knowledge.zip.loreloop-stage-*"))
+
+
+def test_archive_reader_rejects_encrypted_and_symlink_members(tmp_path: Path) -> None:
+    encrypted = tmp_path / "encrypted.zip"
+    with zipfile.ZipFile(encrypted, "w") as archive:
+        archive.writestr("doc.md", b"content")
+    payload = bytearray(encrypted.read_bytes())
+    local = payload.index(b"PK\x03\x04")
+    central = payload.index(b"PK\x01\x02")
+    payload[local + 6 : local + 8] = (1).to_bytes(2, "little")
+    payload[central + 8 : central + 10] = (1).to_bytes(2, "little")
+    encrypted.write_bytes(payload)
+
+    with pytest.raises(ExportArchiveError, match="plain file"):
+        _ = read_export_archive(encrypted)
+
+    linked = tmp_path / "linked.zip"
+    with zipfile.ZipFile(linked, "w") as archive:
+        info = zipfile.ZipInfo("doc.md")
+        info.create_system = 3
+        info.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(info, b"outside.md")
+    with pytest.raises(ExportArchiveError, match="regular file"):
+        _ = read_export_archive(linked)
+
+
+def test_archive_reader_enforces_file_count_and_expansion_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    crowded = tmp_path / "crowded.zip"
+    with zipfile.ZipFile(crowded, "w") as archive:
+        for index in range(authoritative_archive.MAX_ARCHIVE_FILES + 1):
+            archive.writestr(f"{index}.txt", b"x")
+    with pytest.raises(ExportArchiveError, match="file count"):
+        _ = read_export_archive(crowded)
+
+    expanded = tmp_path / "expanded.zip"
+    with zipfile.ZipFile(expanded, "w") as archive:
+        archive.writestr("doc.md", b"four")
+    monkeypatch.setattr(authoritative_archive, "MAX_ARCHIVE_UNCOMPRESSED_BYTES", 3)
+    with pytest.raises(ExportArchiveError, match="size limit"):
+        _ = read_export_archive(expanded)
+
+
+def test_force_archive_replace_keeps_old_package_if_install_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "knowledge.zip"
+    output.write_bytes(b"old package")
+
+    def fail_replace(source: Path, destination: Path) -> None:
+        raise OSError(f"simulated replace failure: {source} -> {destination}")
+
+    monkeypatch.setattr(authoritative_archive.os, "replace", fail_replace)
+    with pytest.raises(ExportArchiveError, match="simulated replace failure"):
+        write_export_archive(
+            output,
+            (SourceDocument("doc.md", "new\n"),),
+            replace=True,
+        )
+
+    assert output.read_bytes() == b"old package"
     assert not tuple(tmp_path.glob(".knowledge.zip.loreloop-stage-*"))

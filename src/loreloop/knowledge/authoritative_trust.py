@@ -25,6 +25,30 @@ def _location_digest(path: Path) -> str:
     ).hexdigest()
 
 
+def _git_common_dir_identity(path: Path) -> tuple[int, int]:
+    completed = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        cwd=path,
+        check=False,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        raise ExportTrustError(f"cannot inspect trusted Git checkout: {path}")
+    raw = completed.stdout.decode("utf-8", errors="replace").strip()
+    if not raw:
+        raise ExportTrustError(f"trusted Git checkout has no common directory: {path}")
+    common = Path(raw)
+    if not common.is_absolute():
+        common = path / common
+    try:
+        metadata = common.resolve().stat()
+    except OSError as exc:
+        raise ExportTrustError(f"cannot inspect trusted Git common directory: {path}") from exc
+    if metadata.st_dev < 0 or metadata.st_ino <= 0:
+        raise ExportTrustError(f"trusted Git common directory has no stable local identity: {path}")
+    return metadata.st_dev, metadata.st_ino
+
+
 def _repository_paths(
     snapshot: SourceSnapshot,
     root: Path,
@@ -55,10 +79,13 @@ def repository_bindings(
         identity = repository.repository_identity_sha256
         if identity is None:
             raise ExportTrustError(f"repository {repository.alias!r} has no stable identity")
+        common_device, common_inode = _git_common_dir_identity(paths[repository.alias])
         bindings[repository.alias] = {
             "repository_identity_sha256": identity,
             "location_sha256": _location_digest(paths[repository.alias]),
             "checkout_path": str(paths[repository.alias]),
+            "git_common_dir_device": common_device,
+            "git_common_dir_inode": common_inode,
         }
     return bindings
 
@@ -90,19 +117,22 @@ def verify_trusted_export(
     peers: Mapping[str, Path] | None = None,
 ) -> EvidenceRecord:
     """Require an exact attestation and reject alias substitution after export."""
-    candidates = [
+    package_candidates = [
         record
         for record in records
         if record.event == ATTESTATION_EVENT and record.payload.get("package_id") == package_id
     ]
-    if not candidates:
+    if not package_candidates:
         raise ExportTrustError("no local trust attestation exists for this package")
-    record = candidates[-1]
-    stored_digest = record.payload.get("capsule_sha256")
-    if not isinstance(stored_digest, str) or not hmac.compare_digest(
-        stored_digest, capsule.sha256
-    ):
+    candidates = [
+        record
+        for record in package_candidates
+        if isinstance(record.payload.get("capsule_sha256"), str)
+        and hmac.compare_digest(str(record.payload["capsule_sha256"]), capsule.sha256)
+    ]
+    if not candidates:
         raise ExportTrustError("trusted capsule digest does not match the exported package")
+    record = candidates[-1]
     stored = record.payload.get("repositories")
     if not isinstance(stored, dict):
         raise ExportTrustError("trusted repository bindings are invalid")
@@ -119,6 +149,16 @@ def verify_trusted_export(
         if str(path) != raw_path or _location_digest(path) != raw_binding.get("location_sha256"):
             raise ExportTrustError(
                 "trusted repository identity or checkout location changed after export"
+            )
+        common_device, common_inode = _git_common_dir_identity(path)
+        if (
+            type(raw_binding.get("git_common_dir_device")) is not int
+            or type(raw_binding.get("git_common_dir_inode")) is not int
+            or raw_binding["git_common_dir_device"] != common_device
+            or raw_binding["git_common_dir_inode"] != common_inode
+        ):
+            raise ExportTrustError(
+                "trusted repository checkout instance changed after export"
             )
         completed = subprocess.run(
             ["git", "rev-list", "--max-parents=0", "HEAD"],

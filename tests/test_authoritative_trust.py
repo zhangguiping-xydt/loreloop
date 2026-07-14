@@ -59,6 +59,25 @@ def test_trusted_export_rejects_same_history_clone_substituted_for_alias(tmp_pat
         )
 
 
+def test_trusted_export_rejects_same_history_clone_recreated_at_original_path(
+    tmp_path: Path,
+) -> None:
+    root = _repository(tmp_path / "root")
+    peer = _repository(tmp_path / "peer")
+    snapshot = capture_source_snapshot(root, {"peer": peer})
+    capsule = CapsuleArtifact(".loreloop-export.json", "{}\n", "1" * 64)
+    chain = EvidenceChain.for_workdir(root, key_dir=tmp_path / "keys")
+    _ = attest_export(chain, root, snapshot, capsule, "2" * 64, {"peer": peer})
+    original = tmp_path / "peer-original"
+    peer.rename(original)
+    subprocess.run(["git", "clone", str(original), str(peer)], check=True, capture_output=True)
+
+    with pytest.raises(ExportTrustError, match="checkout instance changed"):
+        _ = verify_trusted_export(
+            chain.verify(), root, capsule, "2" * 64, {"peer": peer}
+        )
+
+
 def test_trusted_export_rejects_unattested_capsule(tmp_path: Path) -> None:
     root = _repository(tmp_path / "root")
     capsule = CapsuleArtifact(".loreloop-export.json", "{}\n", "1" * 64)
@@ -83,3 +102,19 @@ def test_trusted_export_supports_non_git_aggregate_project_root(tmp_path: Path) 
     )
 
     assert set(verified.payload["repositories"]) == {"backend"}
+
+
+def test_trusted_export_selects_exact_capsule_when_package_id_is_shared(
+    tmp_path: Path,
+) -> None:
+    root = _repository(tmp_path / "root")
+    snapshot = capture_source_snapshot(root)
+    first = CapsuleArtifact(".loreloop-export.json", "first\n", "1" * 64)
+    second = CapsuleArtifact(".loreloop-export.json", "second\n", "3" * 64)
+    chain = EvidenceChain.for_workdir(root, key_dir=tmp_path / "keys")
+    _ = attest_export(chain, root, snapshot, first, "2" * 64)
+    _ = attest_export(chain, root, snapshot, second, "2" * 64)
+
+    verified = verify_trusted_export(chain.verify(), root, first, "2" * 64)
+
+    assert verified.payload["capsule_sha256"] == first.sha256

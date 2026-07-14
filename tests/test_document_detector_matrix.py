@@ -123,6 +123,26 @@ swagger:
     assert report.interfaces == ()
 
 
+def test_swagger_named_business_config_without_version_marker_is_not_openapi(
+    tmp_path: Path,
+) -> None:
+    root = _repository(
+        tmp_path / "backend",
+        {
+            "config/swagger-settings.yml": """
+swagger:
+  enabled: true
+  path: /swagger.json
+""",
+        },
+    )
+    snapshot = capture_source_snapshot(root)
+
+    report = detect_source_snapshot(snapshot, root)
+
+    assert report.interfaces == ()
+
+
 def test_snapshot_detection_error_identifies_repository_and_file(tmp_path: Path) -> None:
     root = _repository(
         tmp_path / "backend",

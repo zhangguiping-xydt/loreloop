@@ -128,7 +128,9 @@ Markdown in a directory, links, non-regular files, changed ASTs, and Markdown
 that is not the deterministic rendering of its AST. Unrelated non-Markdown
 operator files preserved in a directory by `export --force` remain outside the
 package and are ignored. Generate a fresh export instead of editing the Capsule
-by hand. `--trusted` additionally requires an earlier `--attest` from the same
+by hand. Early schema-v2 exports that predate portable SemanticCore evidence
+closure are rejected with a regeneration message; export them again with the
+current version. `--trusted` additionally requires an earlier `--attest` from the same
 local trust chain and unchanged repository checkout bindings.
 
 ## Local project trust is unavailable or does not match

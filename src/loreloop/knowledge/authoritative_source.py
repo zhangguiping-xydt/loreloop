@@ -23,7 +23,6 @@ from .authoritative_records import DetectionError, DetectionReport, merge_report
 from .authoritative_report_normalize import normalize_detection_report
 from .authoritative_types import SourceSnapshot
 
-_OPENAPI_NAME = re.compile(r"^(?:openapi|swagger)(?:[._-].*)?\.(?:json|ya?ml)$", re.I)
 _OPENAPI_MARKER = re.compile(
     r'''(?mx)
     ^(?:
@@ -125,13 +124,8 @@ def _is_config(path: str) -> bool:
 
 
 def _is_openapi_contract(path: str, text: str) -> bool:
-    name = path.rsplit("/", 1)[-1]
-    return bool(
-        _OPENAPI_NAME.fullmatch(name)
-        or (
-            name.lower().endswith((".json", ".yaml", ".yml"))
-            and _OPENAPI_MARKER.search(text)
-        )
+    return path.lower().endswith((".json", ".yaml", ".yml")) and bool(
+        _OPENAPI_MARKER.search(text)
     )
 
 

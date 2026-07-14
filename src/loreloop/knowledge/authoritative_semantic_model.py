@@ -35,6 +35,7 @@ class SemanticEvidence:
 class SemanticRecord:
     record_id: str
     atom_id: str
+    atom_kind: str
     row_kind: DocumentRowKind
     values: tuple[ProjectedValue, ...]
     evidence_id: str
@@ -115,6 +116,6 @@ def make_semantic_record(
         for key in payload
     )
     return (
-        SemanticRecord(identifier, atom, row_kind, values, evidence, bindings),
+        SemanticRecord(identifier, atom, atom_kind, row_kind, values, evidence, bindings),
         SemanticEvidence(evidence, source, blob.blob_sha256, start, end),
     )

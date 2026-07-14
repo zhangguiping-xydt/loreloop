@@ -61,10 +61,18 @@ def _load(source: str, path: str) -> Object:
     except json.JSONDecodeError as exc:
         raise DetectionError(f"invalid OpenAPI JSON source: {path}") from exc
     root = _object(value, "document")
-    if "openapi" not in root and "swagger" not in root:
+    has_openapi = "openapi" in root
+    has_swagger = "swagger" in root
+    if has_openapi == has_swagger:
         raise DetectionError("contract document is not OpenAPI or Swagger")
-    version = root.get("openapi", root.get("swagger"))
-    _ = _text(version, "version")
+    version = _text(root.get("openapi" if has_openapi else "swagger"), "version")
+    valid = (
+        re.fullmatch(r"3(?:\.\d+){1,2}", version) is not None
+        if has_openapi
+        else version == "2.0"
+    )
+    if not valid:
+        raise DetectionError(f"unsupported OpenAPI/Swagger version: {version}")
     return root
 
 

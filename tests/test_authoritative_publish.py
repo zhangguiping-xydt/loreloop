@@ -60,6 +60,116 @@ def test_recovery_finishes_cleanup_after_crash_immediately_after_exchange(
     assert _residue(tmp_path, output.name) == ()
 
 
+def test_recovery_finishes_cleanup_after_stage_was_partially_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "export"
+    authoritative_publish.publish_tree(
+        output,
+        (("doc.md", "old\n"), ("stale.md", "old stale\n")),
+    )
+    real_remove = authoritative_publish._remove_tree
+
+    def crash_during_cleanup(path: Path) -> None:
+        if path.exists() and path.name.startswith(".export.loreloop-stage-"):
+            (path / "doc.md").unlink(missing_ok=True)
+            raise RuntimeError("simulated cleanup crash")
+        real_remove(path)
+
+    monkeypatch.setattr(authoritative_publish, "_remove_tree", crash_during_cleanup)
+    with pytest.raises(RuntimeError, match="cleanup crash"):
+        authoritative_publish.publish_tree(output, (("doc.md", "new\n"),))
+
+    assert (output / "doc.md").read_text(encoding="utf-8") == "new\n"
+    monkeypatch.setattr(authoritative_publish, "_remove_tree", real_remove)
+    authoritative_publish.recover_publication(output)
+    assert (output / "doc.md").read_text(encoding="utf-8") == "new\n"
+    assert _residue(tmp_path, output.name) == ()
+
+
+def test_first_install_does_not_replace_an_output_that_appears_during_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "export"
+    real_install = authoritative_publish._install_no_replace
+
+    def collide(stage: Path, destination: Path) -> None:
+        destination.mkdir()
+        (destination / "operator.txt").write_text("operator\n", encoding="utf-8")
+        real_install(stage, destination)
+
+    monkeypatch.setattr(authoritative_publish, "_install_no_replace", collide)
+    with pytest.raises(authoritative_publish.PublicationError, match="appeared"):
+        authoritative_publish.publish_tree(output, (("doc.md", "new\n"),))
+
+    assert (output / "operator.txt").read_text(encoding="utf-8") == "operator\n"
+    assert not (output / "doc.md").exists()
+    assert _residue(tmp_path, output.name) == ()
+
+
+@pytest.mark.parametrize("timing", ["before", "after"])
+def test_update_preserves_operator_file_arriving_around_directory_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timing: str
+) -> None:
+    output = tmp_path / "export"
+    authoritative_publish.publish_tree(output, (("doc.md", "old\n"),))
+    real_exchange = authoritative_publish._exchange
+    real_write = authoritative_publish._atomic_json
+    journal_writes = 0
+
+    def exchange_with_late_file(stage: Path, destination: Path) -> bool:
+        if timing == "before":
+            (destination / "late.txt").write_text("operator\n", encoding="utf-8")
+        exchanged = real_exchange(stage, destination)
+        if timing == "after":
+            (destination / "late.txt").write_text("operator\n", encoding="utf-8")
+        return exchanged
+
+    def crash_after_exchange(path: Path, payload: dict[str, object]) -> None:
+        nonlocal journal_writes
+        journal_writes += 1
+        if journal_writes == 2:
+            raise RuntimeError("simulated post-exchange crash")
+        real_write(path, payload)
+
+    monkeypatch.setattr(authoritative_publish, "_exchange", exchange_with_late_file)
+    monkeypatch.setattr(authoritative_publish, "_atomic_json", crash_after_exchange)
+    with pytest.raises(RuntimeError, match="post-exchange crash"):
+        authoritative_publish.publish_tree(output, (("doc.md", "new\n"),))
+
+    assert (output / "doc.md").read_text(encoding="utf-8") == "new\n"
+    monkeypatch.setattr(authoritative_publish, "_atomic_json", real_write)
+    authoritative_publish.recover_publication(output)
+    assert (output / "late.txt").read_text(encoding="utf-8") == "operator\n"
+    assert _residue(tmp_path, output.name) == ()
+
+
+@pytest.mark.parametrize("timing", ["before", "after"])
+def test_update_preserves_operator_file_modified_around_directory_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timing: str
+) -> None:
+    output = tmp_path / "export"
+    authoritative_publish.publish_tree(output, (("doc.md", "old\n"),))
+    (output / "keep.txt").write_text("baseline\n", encoding="utf-8")
+    real_exchange = authoritative_publish._exchange
+
+    def exchange_with_operator_edit(stage: Path, destination: Path) -> bool:
+        if timing == "before":
+            (destination / "keep.txt").write_text("before\n", encoding="utf-8")
+        exchanged = real_exchange(stage, destination)
+        if timing == "after":
+            (destination / "keep.txt").write_text("after\n", encoding="utf-8")
+        return exchanged
+
+    monkeypatch.setattr(authoritative_publish, "_exchange", exchange_with_operator_edit)
+
+    authoritative_publish.publish_tree(output, (("doc.md", "new\n"),))
+
+    assert (output / "doc.md").read_text(encoding="utf-8") == "new\n"
+    assert (output / "keep.txt").read_text(encoding="utf-8") == f"{timing}\n"
+    assert _residue(tmp_path, output.name) == ()
+
+
 def test_publish_rejects_symlinks_in_preserved_operator_tree(tmp_path: Path) -> None:
     output = tmp_path / "export"
     output.mkdir()

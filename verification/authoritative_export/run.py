@@ -18,20 +18,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 CONTRACT = Path("docs/verification/authoritative-export-v5.md")
-SOURCE_BINDINGS = (
-    Path("src/loreloop/cli.py"),
-    Path("src/loreloop/companion.py"),
-    Path("src/loreloop/knowledge/authoritative_archive.py"),
-    Path("src/loreloop/knowledge/authoritative_ast_render.py"),
-    Path("src/loreloop/knowledge/authoritative_capsule.py"),
-    Path("src/loreloop/knowledge/authoritative_capsule_replay.py"),
-    Path("src/loreloop/knowledge/authoritative_document_ast.py"),
-    Path("src/loreloop/knowledge/authoritative_git.py"),
-    Path("src/loreloop/knowledge/authoritative_publish.py"),
-    Path("src/loreloop/knowledge/authoritative_semantic.py"),
-    Path("src/loreloop/knowledge/authoritative_source.py"),
-    Path("src/loreloop/knowledge/authoritative_trust.py"),
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +118,44 @@ def _filesystem(value: str) -> tuple[str, Path]:
     return label, path
 
 
+def _filesystem_metadata(items: list[tuple[str, Path]]) -> list[dict[str, int | str]]:
+    by_label = {label: path for label, path in items}
+    if set(by_label) != {"xfs", "ext4"} or len(items) != 2:
+        raise SystemExit("proof requires exactly one xfs and one ext4 filesystem")
+    evidence: list[dict[str, int | str]] = []
+    devices: set[int] = set()
+    for label, path in sorted(by_label.items()):
+        fields: dict[str, str] = {}
+        for field in ("FSTYPE", "SOURCE", "TARGET"):
+            completed = subprocess.run(
+                ["findmnt", "-n", "-o", field, "-T", str(path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            value = completed.stdout.strip()
+            if completed.returncode != 0 or not value:
+                raise SystemExit(f"cannot identify filesystem for {path}")
+            fields[field.lower()] = value
+        if fields["fstype"] != label:
+            raise SystemExit(
+                f"filesystem label {label!r} does not match {fields['fstype']!r} at {path}"
+            )
+        device = path.stat().st_dev
+        if device in devices:
+            raise SystemExit("xfs and ext4 proof roots must be different mounted devices")
+        devices.add(device)
+        evidence.append(
+            {
+                "label": label,
+                "path": str(path),
+                "device": device,
+                **fields,
+            }
+        )
+    return evidence
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
@@ -153,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("output must not be the source repository or one of its parents")
     if output.is_symlink() or (output.exists() and not output.is_dir()):
         raise SystemExit(f"unsafe output directory: {output}")
+    replace_output = False
     if output.exists() and any(output.iterdir()):
         if not args.force:
             raise SystemExit(f"output directory is not empty: {output}")
@@ -165,13 +190,19 @@ def main(argv: list[str] | None = None) -> int:
             ) from exc
         if not isinstance(existing, dict) or existing.get("schema_version") != 1:
             raise SystemExit(f"refusing to replace an unrecognized proof directory: {output}")
+        replace_output = True
+    filesystem_evidence = _filesystem_metadata(args.filesystem)
+    if replace_output:
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
     logs = output / "logs"
     logs.mkdir()
+    artifacts = output / "artifacts"
+    artifacts.mkdir()
     scratch = Path(tempfile.mkdtemp(prefix="loreloop-authoritative-proof-"))
     gates: list[GateResult] = []
     dogfood: dict[str, object] | None = None
+    wheel: dict[str, object] | None = None
     try:
         checkout = scratch / "loreloop"
         _clone_at(source, checkout, commit)
@@ -240,6 +271,89 @@ def main(argv: list[str] | None = None) -> int:
         for name, command, timeout in gate_specs:
             gates.append(
                 _run_gate(name, command, cwd=checkout, logs=logs, env=env, timeout=timeout)
+            )
+        wheels = tuple((scratch / "dist").glob("*.whl"))
+        if len(wheels) == 1:
+            wheel_source = wheels[0]
+            wheel_target = artifacts / wheel_source.name
+            shutil.copyfile(wheel_source, wheel_target)
+            with zipfile.ZipFile(wheel_target) as archive:
+                wheel_entries = tuple(sorted(archive.namelist()))
+            wheel = {
+                "path": str(wheel_target.relative_to(output)),
+                "bytes": wheel_target.stat().st_size,
+                "sha256": _sha256(wheel_target),
+                "entries": wheel_entries,
+            }
+            wheel_venv = scratch / "wheel-venv"
+            wheel_env = dict(env)
+            wheel_env.pop("PYTHONPATH", None)
+            gates.append(
+                _run_gate(
+                    "wheel-venv",
+                    ("uv", "venv", "--python", python, str(wheel_venv)),
+                    cwd=checkout,
+                    logs=logs,
+                    env=wheel_env,
+                    timeout=120,
+                )
+            )
+            gates.append(
+                _run_gate(
+                    "wheel-install",
+                    (
+                        "uv",
+                        "pip",
+                        "install",
+                        "--python",
+                        str(wheel_venv / "bin/python"),
+                        str(wheel_target),
+                    ),
+                    cwd=checkout,
+                    logs=logs,
+                    env=wheel_env,
+                    timeout=180,
+                )
+            )
+            wheel_repo = scratch / "wheel-smoke-repo"
+            wheel_repo.mkdir()
+            _git(wheel_repo, "init", "-q")
+            _git(wheel_repo, "config", "user.name", "LoreLoop Proof")
+            _git(wheel_repo, "config", "user.email", "proof@example.invalid")
+            (wheel_repo / "app.py").write_text(
+                '@app.get("/health")\ndef health(): return True\n', encoding="utf-8"
+            )
+            _git(wheel_repo, "add", "-A")
+            _git(wheel_repo, "commit", "-q", "-m", "fixture")
+            wheel_cli = wheel_venv / "bin/loreloop"
+            wheel_package = scratch / "wheel-smoke.zip"
+            gates.append(
+                _run_gate(
+                    "wheel-export-smoke",
+                    (
+                        str(wheel_cli),
+                        "knowledge",
+                        "export",
+                        "--format",
+                        "package",
+                        "--output",
+                        str(wheel_package),
+                    ),
+                    cwd=wheel_repo,
+                    logs=logs,
+                    env=wheel_env,
+                    timeout=180,
+                )
+            )
+            gates.append(
+                _run_gate(
+                    "wheel-replay-smoke",
+                    (str(wheel_cli), "knowledge", "replay", str(wheel_package)),
+                    cwd=wheel_repo,
+                    logs=logs,
+                    env=wheel_env,
+                    timeout=180,
+                )
             )
         for label, root in args.filesystem:
             base = Path(tempfile.mkdtemp(prefix=f"loreloop-{label}-", dir=root))
@@ -312,6 +426,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             if package.is_file():
+                retained_package = artifacts / "dogfood-knowledge.zip"
+                shutil.copyfile(package, retained_package)
                 with zipfile.ZipFile(package) as archive:
                     names = tuple(sorted(archive.namelist()))
                     uncompressed = sum(item.file_size for item in archive.infolist())
@@ -321,7 +437,8 @@ def main(argv: list[str] | None = None) -> int:
                     "tracked_files": len(_git(dogfood_checkout, "ls-files").splitlines()),
                     "zip_bytes": package.stat().st_size,
                     "uncompressed_bytes": uncompressed,
-                    "zip_sha256": _sha256(package),
+                    "zip_sha256": _sha256(retained_package),
+                    "path": str(retained_package.relative_to(output)),
                     "entries": names,
                 }
         tree_files = tuple(
@@ -338,8 +455,15 @@ def main(argv: list[str] | None = None) -> int:
             "proof_runner_sha256": _sha256(
                 checkout / "verification/authoritative_export/run.py"
             ),
+            "git_tree_id": _git(checkout, "rev-parse", f"{commit}^{{tree}}"),
+            "git_tree_listing_sha256": hashlib.sha256(
+                _git(checkout, "ls-tree", "-r", "--full-tree", commit).encode()
+            ).hexdigest(),
             "source_sha256": {
-                str(path): _sha256(checkout / path) for path in SOURCE_BINDINGS
+                path: _sha256(checkout / path)
+                for path in tree_files
+                if path in {"src/loreloop/cli.py", "src/loreloop/companion.py"}
+                or path.startswith("src/loreloop/knowledge/authoritative_")
             },
             "tracked_file_count": len(tree_files),
             "environment": {
@@ -347,6 +471,8 @@ def main(argv: list[str] | None = None) -> int:
                 "platform": platform.platform(),
             },
             "gates": [asdict(gate) for gate in gates],
+            "filesystems": filesystem_evidence,
+            "wheel": wheel,
             "dogfood": dogfood,
         }
         manifest_path = output / "manifest.json"
