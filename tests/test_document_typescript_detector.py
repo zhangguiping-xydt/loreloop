@@ -77,3 +77,14 @@ def test_typescript_symbol_inventory_is_limited_to_explicit_exports() -> None:
     report = detect_typescript_source(source, ".", "src/api.ts")
 
     assert [item.qualified_name for item in report.symbols] == ["publicApi"]
+
+
+def test_typescript_dependency_scan_rejects_generated_expression_fragments() -> None:
+    source = '''
+import client from "@scope/client";
+const generated = "from ') + ' from ',' from ':!1,'";
+'''
+
+    report = detect_typescript_source(source, ".", "dist/generated.js")
+
+    assert [item.name for item in report.dependencies] == ["@scope/client"]

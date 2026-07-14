@@ -43,12 +43,12 @@ class MarkdownDocument:
 
 _PURPOSES = {
     "capability_catalog": "按仓库和入口域概括源码能够直接证明的系统能力。",
-    "requirements": "收录已提交需求材料，并把权限、状态和配置事实标为实施约束。",
+    "requirements": "收录已提交需求材料，以及源码明确表达的权限、状态、错误和配置约束；各类事实不会互相替代。",
     "architecture": "展示多仓库边界、技术依赖、配置和部署证据，不把 import 清单冒充组件设计。",
     "detailed_design": "按仓库与源文件组织实现模块，完整符号事实保留在 Capsule。",
     "user_guide": "仅收录源码或需求材料明确表达的用户界面、命令入口、角色和操作约束。",
     "acceptance": "仅收录已提交验收条款和测试证据，不用接口存在性冒充业务验收。",
-    "interface_contract": "列出源码确认的接口、参数、返回类型、权限和错误契约。",
+    "interface_contract": "列出源码确认的接口，以及能够明确提取的参数、返回类型、权限和错误契约。",
     "database_design": "列出源码确认的表、字段、索引和外键关系。",
 }
 
@@ -300,6 +300,10 @@ def _gap_lines(document: MarkdownDocument) -> list[str]:
             for row in interface_rows
         ):
             gaps.append("部分接口缺少参数或返回结构；不得据此臆造字段、错误码或权限。")
+        if "PermissionRow" not in kinds:
+            gaps.append("未发现可绑定到接口的明确权限规则；接口存在不代表任意角色均可调用。")
+        if "ErrorRow" not in kinds:
+            gaps.append("未发现结构化错误码或异常响应契约；调用方仍需核对实现和运行时行为。")
     if document.family == "database_design" and "RelationRow" not in kinds:
         gaps.append("未发现显式外键关系；ER 图只展示表节点。")
     if not gaps:
@@ -332,6 +336,7 @@ def render_markdown(document: MarkdownDocument, paths: tuple[str, ...]) -> str:
             "",
         ]
     )
+    lines.extend(_gap_lines(document))
     if document.family == "database_design":
         lines.extend(_relationship_graph(document.sections))
     if document.family == "capability_catalog":
@@ -354,5 +359,4 @@ def render_markdown(document: MarkdownDocument, paths: tuple[str, ...]) -> str:
         else:
             lines.extend(_generic_table(rows, evidence))
     lines.extend(_evidence_summary(document))
-    lines.extend(_gap_lines(document))
     return "\n".join(lines).rstrip() + "\n"

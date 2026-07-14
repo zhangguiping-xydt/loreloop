@@ -46,6 +46,7 @@ _CLASS: Final = re.compile(
 _IMPORT: Final = re.compile(
     r"(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*)(['\"])(?P<name>[^'\"]+)\1"
 )
+_DEPENDENCY_SPECIFIER: Final = re.compile(r"(?:@[A-Za-z0-9_.-]+/)?[#A-Za-z0-9_][A-Za-z0-9._~:/#-]*")
 _ENV: Final = re.compile(
     r"\bprocess\.env\.(?P<property>[A-Za-z_][A-Za-z0-9_]*)|"
     + r"\b(?:process\.env|Deno\.env)\s*(?:\.get)?\s*\[?\(?\s*(['\"])(?P<call>[^'\"]+)\2"
@@ -72,6 +73,11 @@ def _dependency_name(specifier: str) -> str:
     if specifier.startswith("@"):
         return "/".join(specifier.split("/")[:2])
     return specifier.split("/", 1)[0]
+
+
+def _valid_dependency_specifier(specifier: str) -> bool:
+    """Reject string-expression fragments captured from generated JavaScript."""
+    return _DEPENDENCY_SPECIFIER.fullmatch(specifier) is not None
 
 
 def _template_literals(source: str) -> tuple[tuple[int, str], ...]:
@@ -206,6 +212,7 @@ def detect_typescript_source(source: str, repository_alias: str, path: str) -> D
         )
         for match in _IMPORT.finditer(source)
         if not match.group("name").startswith((".", "/"))
+        and _valid_dependency_specifier(match.group("name"))
     )
     configurations = tuple(
         ConfigurationRecord(
