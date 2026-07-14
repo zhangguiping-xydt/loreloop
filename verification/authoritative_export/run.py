@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 CONTRACT = Path("docs/verification/authoritative-export-v5.md")
+MIN_DOGFOOD_TRACKED_FILES = 5_000
+MIN_DOGFOOD_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+_PUBLIC_GITHUB_REMOTE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+(?:\.git)?")
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +172,41 @@ def _filesystem_metadata(items: list[tuple[str, Path]]) -> list[dict[str, int | 
     return evidence
 
 
+def _dogfood_metadata(source: Path, commit: str) -> dict[str, object]:
+    try:
+        remote_url = _git(source, "remote", "get-url", "origin")
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit("dogfood repository must have an origin remote") from exc
+    if _PUBLIC_GITHUB_REMOTE.fullmatch(remote_url) is None:
+        raise SystemExit("dogfood origin must be a public GitHub HTTPS repository URL")
+    remote_refs = tuple(
+        ref
+        for ref in _git(
+            source,
+            "for-each-ref",
+            "--format=%(refname)",
+            "--contains",
+            commit,
+            "refs/remotes/origin/",
+        ).splitlines()
+        if ref and not ref.endswith("/HEAD")
+    )
+    if not remote_refs:
+        raise SystemExit("dogfood commit must be reachable from an origin remote-tracking ref")
+    tracked_files = len(
+        _git(source, "ls-tree", "-r", "--name-only", commit).splitlines()
+    )
+    if tracked_files < MIN_DOGFOOD_TRACKED_FILES:
+        raise SystemExit(
+            f"dogfood repository must contain at least {MIN_DOGFOOD_TRACKED_FILES} tracked files"
+        )
+    return {
+        "remote_url": remote_url,
+        "remote_refs": remote_refs,
+        "tracked_files": tracked_files,
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
@@ -205,6 +244,9 @@ def main(argv: list[str] | None = None) -> int:
         replace_output = True
     if args.dogfood_repo is None:
         raise SystemExit("proof requires --dogfood-repo and a frozen large-project commit")
+    dogfood_source = args.dogfood_repo.expanduser().resolve()
+    dogfood_commit = _git(dogfood_source, "rev-parse", args.dogfood_commit)
+    dogfood_metadata = _dogfood_metadata(dogfood_source, dogfood_commit)
     filesystem_evidence = _filesystem_metadata(args.filesystem)
     if replace_output:
         shutil.rmtree(output)
@@ -393,8 +435,6 @@ def main(argv: list[str] | None = None) -> int:
             finally:
                 shutil.rmtree(base, ignore_errors=True)
         if args.dogfood_repo is not None:
-            dogfood_source = args.dogfood_repo.expanduser().resolve()
-            dogfood_commit = _git(dogfood_source, "rev-parse", args.dogfood_commit)
             dogfood_checkout = scratch / "dogfood"
             _clone_at(dogfood_source, dogfood_checkout, dogfood_commit)
             package = scratch / "dogfood-knowledge.zip"
@@ -448,7 +488,7 @@ def main(argv: list[str] | None = None) -> int:
                 dogfood = {
                     "source": str(dogfood_source),
                     "commit": dogfood_commit,
-                    "tracked_files": len(_git(dogfood_checkout, "ls-files").splitlines()),
+                    **dogfood_metadata,
                     "zip_bytes": package.stat().st_size,
                     "uncompressed_bytes": uncompressed,
                     "zip_sha256": _sha256(retained_package),
@@ -481,6 +521,8 @@ def main(argv: list[str] | None = None) -> int:
         proof_complete = (
             wheel is not None
             and dogfood is not None
+            and int(dogfood["tracked_files"]) >= MIN_DOGFOOD_TRACKED_FILES
+            and int(dogfood["uncompressed_bytes"]) >= MIN_DOGFOOD_UNCOMPRESSED_BYTES
             and required_gates <= gate_names
             and len(filesystem_evidence) == 2
         )

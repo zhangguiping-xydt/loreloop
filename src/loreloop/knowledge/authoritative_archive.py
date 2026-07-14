@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import struct
 import tempfile
 import zipfile
 from collections.abc import Iterable
@@ -17,6 +18,10 @@ MAX_ARCHIVE_FILES = 16
 MAX_ARCHIVE_COMPRESSED_BYTES = 256 * 1024 * 1024
 MAX_ARCHIVE_MEMBER_COMPRESSED_BYTES = 128 * 1024 * 1024
 MAX_ARCHIVE_COMPRESSION_RATIO = 200
+MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES = 64 * 1024
+_EOCD_SIGNATURE = b"PK\x05\x06"
+_EOCD_SIZE = 22
+_MAX_ZIP_COMMENT_BYTES = 65_535
 
 
 class ExportArchiveError(ValueError):
@@ -102,6 +107,49 @@ def _read_member(
     if len(data) != info.file_size:
         raise ExportArchiveError(f"archive entry length mismatch: {info.filename}")
     return data
+
+
+def _validate_central_directory(descriptor: int, archive_size: int) -> None:
+    """Bound entry count/metadata before ZipFile allocates its central-directory list."""
+    tail_size = min(archive_size, _EOCD_SIZE + _MAX_ZIP_COMMENT_BYTES)
+    os.lseek(descriptor, archive_size - tail_size, os.SEEK_SET)
+    tail = bytearray()
+    while len(tail) < tail_size:
+        chunk = os.read(descriptor, tail_size - len(tail))
+        if not chunk:
+            break
+        tail.extend(chunk)
+    offset = tail.rfind(_EOCD_SIGNATURE)
+    if offset < 0 or len(tail) - offset < _EOCD_SIZE:
+        raise ExportArchiveError("archive lacks a bounded end-of-central-directory record")
+    (
+        _,
+        disk_number,
+        directory_disk,
+        disk_entries,
+        total_entries,
+        directory_size,
+        directory_offset,
+        comment_size,
+    ) = struct.unpack_from("<4s4H2LH", tail, offset)
+    eocd_absolute = archive_size - tail_size + offset
+    if (
+        disk_number != 0
+        or directory_disk != 0
+        or disk_entries != total_entries
+        or total_entries == 0xFFFF
+        or directory_size == 0xFFFFFFFF
+        or directory_offset == 0xFFFFFFFF
+        or comment_size != 0
+        or eocd_absolute + _EOCD_SIZE != archive_size
+        or directory_offset + directory_size != eocd_absolute
+    ):
+        raise ExportArchiveError("archive central directory is unsupported or inconsistent")
+    if not 1 <= total_entries <= MAX_ARCHIVE_FILES:
+        raise ExportArchiveError("archive file count is outside the supported range")
+    if directory_size > MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES:
+        raise ExportArchiveError("archive central directory exceeds its size limit")
+    os.lseek(descriptor, 0, os.SEEK_SET)
 
 
 def write_export_archive(
@@ -193,6 +241,7 @@ def read_export_archive(path: Path) -> dict[str, bytes]:
         os.close(descriptor)
         raise ExportArchiveError("archive exceeds the compressed size limit")
     try:
+        _validate_central_directory(descriptor, metadata.st_size)
         with os.fdopen(descriptor, "rb") as stream:
             descriptor = -1
             with zipfile.ZipFile(stream, mode="r", allowZip64=True) as archive:

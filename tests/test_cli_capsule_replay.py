@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -136,6 +137,43 @@ def test_capsule_parser_normalizes_deep_json_and_oversized_integer_errors() -> N
     oversized_integer = b'{"value":' + b"9" * 10_000 + b"}\n"
     with pytest.raises(CapsuleIoError, match="integer is outside the safe range"):
         _ = parse_capsule(oversized_integer)
+
+
+def test_capsule_parser_rejects_wide_json_before_building_the_object_graph() -> None:
+    wide = b'{"x":[' + b"0," * authoritative_capsule_io.MAX_JSON_CONTAINER_ITEMS + b"0]}\n"
+
+    with pytest.raises(CapsuleIoError, match="array exceeds the item limit"):
+        _ = parse_capsule(wide)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="address-space proof uses Linux resource limits")
+def test_capsule_parser_rejects_12m_values_under_bounded_address_space() -> None:
+    code = """
+import resource
+from loreloop.knowledge.authoritative_capsule_io import CapsuleIoError, parse_capsule
+limit = 220_000_000
+resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+n = 12_000_000
+data = b'{"x":[' + b'0,' * (n - 1) + b'0]}\\n'
+try:
+    parse_capsule(data)
+except CapsuleIoError as exc:
+    print(exc)
+    raise SystemExit(0)
+raise SystemExit(1)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).parents[1],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "array exceeds the item limit" in result.stdout
 
 
 def test_cli_trusted_replay_requires_exact_attested_package(

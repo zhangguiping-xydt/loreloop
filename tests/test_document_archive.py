@@ -203,6 +203,36 @@ def test_archive_reader_enforces_file_count_and_expansion_limits(
         _ = read_export_archive(expanded)
 
 
+def test_archive_rejects_entry_fanout_before_zipfile_allocates_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    crowded = tmp_path / "crowded.zip"
+    with zipfile.ZipFile(crowded, "w") as archive:
+        for index in range(authoritative_archive.MAX_ARCHIVE_FILES + 1):
+            archive.writestr(f"{index}.md", b"")
+
+    def unexpected_zipfile(*args, **kwargs):
+        raise AssertionError("ZipFile must not parse an over-wide central directory")
+
+    monkeypatch.setattr(authoritative_archive.zipfile, "ZipFile", unexpected_zipfile)
+
+    with pytest.raises(ExportArchiveError, match="file count"):
+        _ = read_export_archive(crowded)
+
+
+def test_archive_rejects_oversized_central_directory_before_parsing(
+    tmp_path: Path,
+) -> None:
+    oversized = tmp_path / "oversized-central-directory.zip"
+    info = zipfile.ZipInfo("doc.md")
+    info.extra = b"X" * 65_500
+    with zipfile.ZipFile(oversized, "w") as archive:
+        archive.writestr(info, b"document")
+
+    with pytest.raises(ExportArchiveError, match="central directory exceeds"):
+        _ = read_export_archive(oversized)
+
+
 def test_archive_reader_enforces_compressed_member_total_and_ratio_limits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

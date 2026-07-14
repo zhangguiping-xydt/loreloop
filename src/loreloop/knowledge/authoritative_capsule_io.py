@@ -15,12 +15,195 @@ from .authoritative_ids import MAX_SAFE_INTEGER, IdentityContractError, canon_v4
 MAX_CAPSULE_BYTES = 128 * 1024 * 1024
 MAX_DOCUMENT_BYTES = 32 * 1024 * 1024
 MAX_MANAGED_TOTAL_BYTES = 256 * 1024 * 1024
+MAX_JSON_VALUES = 4_000_000
+MAX_JSON_OBJECT_MEMBERS = 3_000_000
+MAX_JSON_CONTAINER_ITEMS = 100_000
+MAX_JSON_DEPTH = 128
+MAX_JSON_STRING_BYTES = 8 * 1024 * 1024
+MAX_JSON_SCALAR_BYTES = 64
 _MIN_DOCUMENTS = 6
 _MAX_DOCUMENTS = 8
+
+_ROOT = 0
+_OBJECT = 1
+_ARRAY = 2
+_VALUE = 0
+_END = 1
+_PENDING = 2
+_KEY_OR_END = 3
+_KEY = 4
+_COLON = 5
+_COMMA_OR_END = 6
+_VALUE_OR_END = 7
 
 
 class CapsuleIoError(ValueError):
     """A Capsule export cannot be loaded without following unsafe paths."""
+
+
+def _skip_json_string(data: bytes, start: int) -> int:
+    index = start + 1
+    escaped = False
+    while index < len(data):
+        byte = data[index]
+        if not escaped and byte == 0x22:
+            if index - start - 1 > MAX_JSON_STRING_BYTES:
+                raise CapsuleIoError("capsule JSON string exceeds the size limit")
+            return index + 1
+        if not escaped and byte < 0x20:
+            raise CapsuleIoError("capsule JSON string contains a control byte")
+        if escaped:
+            escaped = False
+        elif byte == 0x5C:
+            escaped = True
+        index += 1
+        if index - start - 1 > MAX_JSON_STRING_BYTES:
+            raise CapsuleIoError("capsule JSON string exceeds the size limit")
+    raise CapsuleIoError("capsule JSON string is unterminated")
+
+
+def _validate_json_budget(data: bytes) -> None:
+    """Reject excessive JSON width/depth before constructing a Python object graph."""
+    # frame = [kind, state, direct child/member count]; root never increments count.
+    frames: list[list[int]] = [[_ROOT, _VALUE, 0]]
+    total_values = 0
+    total_object_members = 0
+    index = 0
+
+    def finish_value() -> None:
+        frame = frames[-1]
+        if frame[1] != _PENDING:
+            raise CapsuleIoError("capsule JSON value state is invalid")
+        frame[1] = _END if frame[0] == _ROOT else _COMMA_OR_END
+
+    def begin_value() -> None:
+        nonlocal total_values
+        frame = frames[-1]
+        if frame[0] == _ROOT:
+            if frame[1] != _VALUE:
+                raise CapsuleIoError("capsule JSON has multiple root values")
+        elif frame[0] == _OBJECT:
+            if frame[1] != _VALUE:
+                raise CapsuleIoError("capsule JSON object value is misplaced")
+        elif frame[0] == _ARRAY:
+            if frame[1] not in {_VALUE, _VALUE_OR_END}:
+                raise CapsuleIoError("capsule JSON array value is misplaced")
+            frame[2] += 1
+            if frame[2] > MAX_JSON_CONTAINER_ITEMS:
+                raise CapsuleIoError("capsule JSON array exceeds the item limit")
+        frame[1] = _PENDING
+        total_values += 1
+        if total_values > MAX_JSON_VALUES:
+            raise CapsuleIoError("capsule JSON exceeds the total value limit")
+
+    def close_container(kind: int) -> None:
+        if len(frames) == 1 or frames[-1][0] != kind:
+            raise CapsuleIoError("capsule JSON container is unbalanced")
+        frames.pop()
+        finish_value()
+
+    def start_value() -> None:
+        nonlocal index
+        begin_value()
+        byte = data[index]
+        if byte == 0x7B:
+            if len(frames) > MAX_JSON_DEPTH:
+                raise CapsuleIoError("capsule JSON nesting is too deep")
+            frames.append([_OBJECT, _KEY_OR_END, 0])
+            index += 1
+            return
+        if byte == 0x5B:
+            if len(frames) > MAX_JSON_DEPTH:
+                raise CapsuleIoError("capsule JSON nesting is too deep")
+            frames.append([_ARRAY, _VALUE_OR_END, 0])
+            index += 1
+            return
+        if byte == 0x22:
+            index = _skip_json_string(data, index)
+            finish_value()
+            return
+        scalar_start = index
+        while index < len(data) and data[index] not in b" \t\r\n,]}":
+            index += 1
+            if index - scalar_start > MAX_JSON_SCALAR_BYTES:
+                if data[scalar_start] == 0x2D or 0x30 <= data[scalar_start] <= 0x39:
+                    raise CapsuleIoError("capsule JSON integer is outside the safe range")
+                raise CapsuleIoError("capsule JSON scalar exceeds the size limit")
+        if index == scalar_start:
+            raise CapsuleIoError("capsule JSON value is invalid")
+        finish_value()
+
+    while index < len(data):
+        byte = data[index]
+        if byte in b" \t\r\n":
+            index += 1
+            continue
+        frame = frames[-1]
+        kind, state = frame[0], frame[1]
+        if kind == _ROOT:
+            if state == _VALUE:
+                start_value()
+                continue
+            if state == _END:
+                raise CapsuleIoError("capsule JSON has trailing data")
+            raise CapsuleIoError("capsule JSON root state is invalid")
+        if kind == _OBJECT:
+            if state in {_KEY_OR_END, _KEY}:
+                if byte == 0x7D and state == _KEY_OR_END:
+                    index += 1
+                    close_container(_OBJECT)
+                    continue
+                if byte != 0x22:
+                    raise CapsuleIoError("capsule JSON object key must be a string")
+                index = _skip_json_string(data, index)
+                frame[2] += 1
+                total_object_members += 1
+                if frame[2] > MAX_JSON_CONTAINER_ITEMS:
+                    raise CapsuleIoError("capsule JSON object exceeds the member limit")
+                if total_object_members > MAX_JSON_OBJECT_MEMBERS:
+                    raise CapsuleIoError("capsule JSON exceeds the total object member limit")
+                frame[1] = _COLON
+                continue
+            if state == _COLON:
+                if byte != 0x3A:
+                    raise CapsuleIoError("capsule JSON object member lacks a colon")
+                frame[1] = _VALUE
+                index += 1
+                continue
+            if state == _VALUE:
+                start_value()
+                continue
+            if state == _COMMA_OR_END:
+                if byte == 0x2C:
+                    frame[1] = _KEY
+                    index += 1
+                    continue
+                if byte == 0x7D:
+                    index += 1
+                    close_container(_OBJECT)
+                    continue
+                raise CapsuleIoError("capsule JSON object lacks a comma or closing brace")
+            raise CapsuleIoError("capsule JSON object state is invalid")
+        if state in {_VALUE_OR_END, _VALUE}:
+            if byte == 0x5D and state == _VALUE_OR_END:
+                index += 1
+                close_container(_ARRAY)
+                continue
+            start_value()
+            continue
+        if state == _COMMA_OR_END:
+            if byte == 0x2C:
+                frame[1] = _VALUE
+                index += 1
+                continue
+            if byte == 0x5D:
+                index += 1
+                close_container(_ARRAY)
+                continue
+            raise CapsuleIoError("capsule JSON array lacks a comma or closing bracket")
+        raise CapsuleIoError("capsule JSON array state is invalid")
+    if len(frames) != 1 or frames[0][1] != _END:
+        raise CapsuleIoError("capsule JSON is incomplete")
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, JsonValue]]) -> dict[str, JsonValue]:
@@ -145,6 +328,7 @@ def parse_capsule(data: bytes) -> Mapping[str, JsonValue]:
     """Load exact canonical JSON while rejecting duplicate keys and non-UTF-8 bytes."""
     if len(data) > MAX_CAPSULE_BYTES:
         raise CapsuleIoError("capsule exceeds the supported size limit")
+    _validate_json_budget(data)
     try:
         content = data.decode("utf-8")
         parsed = cast(
