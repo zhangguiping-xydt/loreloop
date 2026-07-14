@@ -28,6 +28,31 @@ def test_proof_runner_uses_a_closed_environment_for_test_gates(
     assert environment["HTTPS_PROXY"] == "http://proxy.example.invalid"
 
 
+def test_proof_runner_reuses_installed_playwright_browsers_with_isolated_home(
+    tmp_path: Path, monkeypatch
+) -> None:
+    operator_home = tmp_path / "operator-home"
+    browser_cache = operator_home / ".cache" / "ms-playwright"
+    browser_cache.mkdir(parents=True)
+    proof_home = tmp_path / "proof-home"
+    monkeypatch.setenv("HOME", str(operator_home))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+    namespace = runpy.run_path(str(RUNNER))
+
+    installed = namespace["_playwright_browsers_path"]()
+    environment = namespace["_proof_environment"](
+        ROOT,
+        proof_home,
+        playwright_browsers_path=installed,
+    )
+
+    assert installed == browser_cache.resolve()
+    assert environment["HOME"] == str(proof_home)
+    assert environment["XDG_CONFIG_HOME"] == str(proof_home)
+    assert environment["PLAYWRIGHT_BROWSERS_PATH"] == str(browser_cache.resolve())
+
+
 def test_proof_runner_refuses_to_delete_source_repository() -> None:
     result = subprocess.run(
         [sys.executable, str(RUNNER), "--output", str(ROOT), "--force"],

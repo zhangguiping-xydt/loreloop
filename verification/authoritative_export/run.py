@@ -80,7 +80,31 @@ def _anonymous_git_environment(home: Path) -> dict[str, str]:
     return environment
 
 
-def _proof_environment(checkout: Path, home: Path) -> dict[str, str]:
+def _playwright_browsers_path() -> Path | None:
+    """Locate an installed browser cache before replacing the operator HOME."""
+    candidates: list[Path] = []
+    configured = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if configured and configured != "0":
+        candidates.append(Path(configured).expanduser())
+    cache_home = os.environ.get("XDG_CACHE_HOME")
+    if cache_home:
+        candidates.append(Path(cache_home).expanduser() / "ms-playwright")
+    operator_home = os.environ.get("HOME")
+    if operator_home:
+        candidates.append(Path(operator_home).expanduser() / ".cache" / "ms-playwright")
+    candidates.append(Path.home() / ".cache" / "ms-playwright")
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate.resolve()
+    return None
+
+
+def _proof_environment(
+    checkout: Path,
+    home: Path,
+    *,
+    playwright_browsers_path: Path | None = None,
+) -> dict[str, str]:
     """Build a closed gate environment without caller-controlled test selection."""
     environment = {
         name: os.environ[name] for name in _PROOF_ENV_PASSTHROUGH if name in os.environ
@@ -97,6 +121,8 @@ def _proof_environment(checkout: Path, home: Path) -> dict[str, str]:
             "GIT_TERMINAL_PROMPT": "0",
         }
     )
+    if playwright_browsers_path is not None:
+        environment["PLAYWRIGHT_BROWSERS_PATH"] = str(playwright_browsers_path)
     return environment
 
 
@@ -319,7 +345,12 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"contract is absent from frozen commit: {CONTRACT}")
         proof_home = scratch / "proof-home"
         proof_home.mkdir(mode=0o700)
-        env = _proof_environment(checkout, proof_home)
+        playwright_browsers_path = _playwright_browsers_path()
+        env = _proof_environment(
+            checkout,
+            proof_home,
+            playwright_browsers_path=playwright_browsers_path,
+        )
         python = sys.executable
         gate_specs: list[tuple[str, tuple[str, ...], int]] = [
             ("pytest-collect", (python, "-m", "pytest", "--collect-only", "-q"), 300),
@@ -649,6 +680,11 @@ def main(argv: list[str] | None = None) -> int:
                 "policy": "proof-environment-whitelist-v1",
                 "pytest_plugin_autoload": False,
                 "passthrough": list(_PROOF_ENV_PASSTHROUGH),
+                "playwright_browsers_path": (
+                    str(playwright_browsers_path)
+                    if playwright_browsers_path is not None
+                    else None
+                ),
             },
             "gates": [asdict(gate) for gate in gates],
             "filesystems": filesystem_evidence,
