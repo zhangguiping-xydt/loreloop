@@ -1,7 +1,0 @@
-$ /media/vdc/code/ai/loreloop/.venv/bin/python -m pytest -q tests/test_authoritative_publish.py --basetemp=/media/vdc/loreloop-ext4-4t288yhy/pytest
-
-[stdout]
-.............                                                            [100%]
-13 passed in 0.61s
-
-[stderr]

@@ -6,6 +6,7 @@ usage: loreloop knowledge export [-h] [--stale]
                                  [--output OUTPUT]
                                  [--project-name PROJECT_NAME]
                                  [--requirements PATH] [--force] [--attest]
+                                 [--include-web]
 
 options:
   -h, --help            show this help message and exit
@@ -24,5 +25,7 @@ options:
                         non-empty directory
   --attest              append an optional local trust-chain attestation for
                         the exported package
+  --include-web         include current Web entries that are both operator-
+                        approved and browser-verified
 
 [stderr]

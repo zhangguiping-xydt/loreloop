@@ -1,6 +1,6 @@
 {
   "contract": "docs/verification/authoritative-export-v5.md",
-  "contract_sha256": "172bff816bfc2f8f2f71724d93a481f7317a3b2adead9cb48c8cb07e4c79aa6f",
+  "contract_sha256": "f20ccdaada03e25205d6d1ad1569e5e86dcd9fcb80aa6cc5a6ca1a8fe7913ea2",
   "dogfood": {
     "commit": "0455028a3cd25d87f76bc389f89261eee658657a",
     "entries": [
@@ -16,7 +16,7 @@
     ],
     "path": "artifacts/dogfood-knowledge.zip",
     "public_ref": "refs/heads/main",
-    "public_ref_tip": "e4aa176c824a615d53855903006429dc14df4b75",
+    "public_ref_tip": "c1191cdf2fbbea4cc9797d7f110a4e0acf50d3c7",
     "remote_url": "https://github.com/openclaw/openclaw.git",
     "source": "/media/vdc/worktree/openclaw-discord-probe",
     "tracked_files": 20167,
@@ -80,10 +80,10 @@
         "--collect-only",
         "-q"
       ],
-      "duration_seconds": 3.274,
+      "duration_seconds": 3.072,
       "exit_code": 0,
       "log": "logs/01-pytest-collect.log",
-      "log_sha256": "845e37a7e76a2d5d453bc3952fc1ca9c6d82061de23372432c0385fbf2e26236",
+      "log_sha256": "f808aa75c7d7e68844556101015b87c780c5171fd4e20e4062579b7121bc8c96",
       "name": "pytest-collect"
     },
     {
@@ -93,10 +93,10 @@
         "pytest",
         "-q"
       ],
-      "duration_seconds": 93.417,
+      "duration_seconds": 152.755,
       "exit_code": 0,
       "log": "logs/02-full-test-suite.log",
-      "log_sha256": "a080616cb33b9fd75b2794f8864c01f4fc30cf7b7874e3ef454c7e65767dcc64",
+      "log_sha256": "bae359f63fe57ba02e110904678244fa03a00201580c27e8429a4fe72bd8f385",
       "name": "full-test-suite"
     },
     {
@@ -107,7 +107,7 @@
         "tests",
         "plugins"
       ],
-      "duration_seconds": 0.056,
+      "duration_seconds": 0.065,
       "exit_code": 0,
       "log": "logs/03-ruff.log",
       "log_sha256": "69462bc0ee6dcbd9d0df1bce9a612c8fd36794653b17d42b8e7cd50c55e6eed0",
@@ -123,7 +123,7 @@
         "src/loreloop/example",
         "-lll"
       ],
-      "duration_seconds": 3.589,
+      "duration_seconds": 4.656,
       "exit_code": 0,
       "log": "logs/04-bandit-medium-high.log",
       "log_sha256": "9cb9c83cff124bef8e41702bc8e7d053eecf66448ed6783cd846bbac51e23982",
@@ -140,10 +140,10 @@
         "tests/test_document_detector_matrix.py",
         "tests/test_document_git_snapshot.py"
       ],
-      "duration_seconds": 25.3,
+      "duration_seconds": 33.128,
       "exit_code": 0,
       "log": "logs/05-six-seven-eight-and-aggregate.log",
-      "log_sha256": "b205131051fd3a681798702a4f8858502a1f48c5e152be7ed40a96f02712e7dd",
+      "log_sha256": "90c926f8c092a087943f9069c0bd273257262fe4cb93ff77337f46192754a6d1",
       "name": "six-seven-eight-and-aggregate"
     },
     {
@@ -157,10 +157,10 @@
         "tests/test_cli_capsule_replay.py",
         "tests/test_authoritative_trust.py"
       ],
-      "duration_seconds": 21.246,
+      "duration_seconds": 20.631,
       "exit_code": 0,
       "log": "logs/06-capsule-mutants-and-trust.log",
-      "log_sha256": "20e4066a455a399224228ce1909b72f234ebd23e98d705b146dadc24c59ca3a7",
+      "log_sha256": "47ffd6b10f1bf31a2aa2acc7c73e166837908bd918cfba68161dbca29685b5d9",
       "name": "capsule-mutants-and-trust"
     },
     {
@@ -169,12 +169,12 @@
         "build",
         "--wheel",
         "--out-dir",
-        "/tmp/loreloop-authoritative-proof-iash7eru/dist"
+        "/tmp/loreloop-authoritative-proof-bo_fcqnp/dist"
       ],
-      "duration_seconds": 21.969,
+      "duration_seconds": 3.404,
       "exit_code": 0,
       "log": "logs/07-wheel.log",
-      "log_sha256": "42e4aa86cf989be5712fbe082ec7b8faf45903b9f4506820deb44ea214ef1683",
+      "log_sha256": "c81bb3a6da2928be9ec96d8ec3440514f0e72ffa45d8a85c112bfd5be2945357",
       "name": "wheel"
     },
     {
@@ -186,10 +186,10 @@
         "export",
         "--help"
       ],
-      "duration_seconds": 0.317,
+      "duration_seconds": 0.348,
       "exit_code": 0,
       "log": "logs/08-cli-package-help.log",
-      "log_sha256": "272f9c1bd56a6b2f4a9221255c3c20579236bbd39373a6e3e01c27dce1145b45",
+      "log_sha256": "c0c743074aff4986d93ec6ebf08f80725e7fe0a2ddb26a9019b86dbf414301e3",
       "name": "cli-package-help"
     },
     {
@@ -198,12 +198,12 @@
         "venv",
         "--python",
         "/media/vdc/code/ai/loreloop/.venv/bin/python",
-        "/tmp/loreloop-authoritative-proof-iash7eru/wheel-venv"
+        "/tmp/loreloop-authoritative-proof-bo_fcqnp/wheel-venv"
       ],
-      "duration_seconds": 0.208,
+      "duration_seconds": 0.193,
       "exit_code": 0,
       "log": "logs/09-wheel-venv.log",
-      "log_sha256": "8ddc3799bb57cdc5c0db20eb7c9e6482e593ae8d02814b1b5df9dfeb596c160b",
+      "log_sha256": "b853e227acbf25f0d68aaec5f59510d372eb702bfb744193a9986bd09a199eff",
       "name": "wheel-venv"
     },
     {
@@ -212,42 +212,42 @@
         "pip",
         "install",
         "--python",
-        "/tmp/loreloop-authoritative-proof-iash7eru/wheel-venv/bin/python",
-        "/media/vdc/code/ai/loreloop/verification/authoritative_export/results/de06a5f/artifacts/loreloop-0.1.0-py3-none-any.whl"
+        "/tmp/loreloop-authoritative-proof-bo_fcqnp/wheel-venv/bin/python",
+        "/media/vdc/code/ai/loreloop/verification/authoritative_export/results/23958fe/artifacts/loreloop-0.1.0-py3-none-any.whl"
       ],
-      "duration_seconds": 0.164,
+      "duration_seconds": 0.226,
       "exit_code": 0,
       "log": "logs/10-wheel-install.log",
-      "log_sha256": "11a963eaba72a059474dde9822727b792489e06c5b0ca12995e7b05b27ee3d74",
+      "log_sha256": "bf524e2a93e50f30a0d8b244beaa3300dc6277056ff9cea8cd8a6c1601d47ab6",
       "name": "wheel-install"
     },
     {
       "command": [
-        "/tmp/loreloop-authoritative-proof-iash7eru/wheel-venv/bin/loreloop",
+        "/tmp/loreloop-authoritative-proof-bo_fcqnp/wheel-venv/bin/loreloop",
         "knowledge",
         "export",
         "--format",
         "package",
         "--output",
-        "/tmp/loreloop-authoritative-proof-iash7eru/wheel-smoke.zip"
+        "/tmp/loreloop-authoritative-proof-bo_fcqnp/wheel-smoke.zip"
       ],
-      "duration_seconds": 0.913,
+      "duration_seconds": 0.829,
       "exit_code": 0,
       "log": "logs/11-wheel-export-smoke.log",
-      "log_sha256": "86a31526a8eded6330264d30b504139391bdd033b777e4fed35f540bcaf9e56d",
+      "log_sha256": "33160cf385341589eb420a4df7ba6d295d004ec455057705e6bd37a8b19a912b",
       "name": "wheel-export-smoke"
     },
     {
       "command": [
-        "/tmp/loreloop-authoritative-proof-iash7eru/wheel-venv/bin/loreloop",
+        "/tmp/loreloop-authoritative-proof-bo_fcqnp/wheel-venv/bin/loreloop",
         "knowledge",
         "replay",
-        "/tmp/loreloop-authoritative-proof-iash7eru/wheel-smoke.zip"
+        "/tmp/loreloop-authoritative-proof-bo_fcqnp/wheel-smoke.zip"
       ],
-      "duration_seconds": 0.56,
+      "duration_seconds": 0.537,
       "exit_code": 0,
       "log": "logs/12-wheel-replay-smoke.log",
-      "log_sha256": "b719bc18b5fd5be056ae313c45f7ab1018e7a00eec897e5a8adb6f028e9cf1c2",
+      "log_sha256": "27aa9cf2dbb35ed0e2be6db37ec1c75090e079e8e0bfa017111eeec04d31aae5",
       "name": "wheel-replay-smoke"
     },
     {
@@ -257,12 +257,12 @@
         "pytest",
         "-q",
         "tests/test_authoritative_publish.py",
-        "--basetemp=/tmp/loreloop-xfs-f0_66zdp/pytest"
+        "--basetemp=/tmp/loreloop-xfs-hwxzqv7d/pytest"
       ],
-      "duration_seconds": 1.151,
+      "duration_seconds": 1.103,
       "exit_code": 0,
       "log": "logs/13-publication-xfs.log",
-      "log_sha256": "9a654735c3b21498f8eedb12782b9d3144ca51d8bcfb5b7e9f272e311723a22b",
+      "log_sha256": "bd70b20b8a258abd3a64e3b113c2be1b9d3289e0b3b627dbcc1c624de70ed203",
       "name": "publication-xfs"
     },
     {
@@ -272,12 +272,12 @@
         "pytest",
         "-q",
         "tests/test_authoritative_publish.py",
-        "--basetemp=/media/vdc/loreloop-ext4-4t288yhy/pytest"
+        "--basetemp=/media/vdc/loreloop-ext4-a731dh1x/pytest"
       ],
-      "duration_seconds": 1.004,
+      "duration_seconds": 1.616,
       "exit_code": 0,
       "log": "logs/14-publication-ext4.log",
-      "log_sha256": "0b2ad1a84adeeaf770bdaf774a4e83202d54a0e220327ff7d34fe6c634319da9",
+      "log_sha256": "3629a1ae4356fa8da0f606817790b17cd31c278d534212f8b3521412e9b90a9a",
       "name": "publication-ext4"
     },
     {
@@ -291,7 +291,7 @@
         "https://github.com/openclaw/openclaw.git",
         "+refs/heads/main:refs/loreloop-proof/public-dogfood"
       ],
-      "duration_seconds": 5.056,
+      "duration_seconds": 2.341,
       "exit_code": 0,
       "log": "logs/15-dogfood-public-fetch.log",
       "log_sha256": "7a1e16ab43822dcef89a48198cacf8c83368734ea3d941025997f919f8ffc608",
@@ -305,7 +305,7 @@
         "0455028a3cd25d87f76bc389f89261eee658657a",
         "refs/loreloop-proof/public-dogfood"
       ],
-      "duration_seconds": 0.048,
+      "duration_seconds": 0.031,
       "exit_code": 0,
       "log": "logs/16-dogfood-public-ancestry.log",
       "log_sha256": "1f6e591c53953cccd09883a37dc885ab56c423c46eeee60f3c168138eb5c9741",
@@ -321,14 +321,14 @@
         "--format",
         "package",
         "--output",
-        "/tmp/loreloop-authoritative-proof-iash7eru/dogfood-knowledge.zip",
+        "/tmp/loreloop-authoritative-proof-bo_fcqnp/dogfood-knowledge.zip",
         "--project-name",
         "dogfood"
       ],
-      "duration_seconds": 196.982,
+      "duration_seconds": 200.079,
       "exit_code": 0,
       "log": "logs/17-large-project-export.log",
-      "log_sha256": "86d1b19a91e8c6052d1df21bc479f38e0e1297f1713d9c0c8e1100585379f2a8",
+      "log_sha256": "1a57db61a77ef37575badd838e380eff20c677b51b3618b9f0ec8ebe735d9010",
       "name": "large-project-export"
     },
     {
@@ -338,25 +338,25 @@
         "loreloop.cli",
         "knowledge",
         "replay",
-        "/tmp/loreloop-authoritative-proof-iash7eru/dogfood-knowledge.zip"
+        "/tmp/loreloop-authoritative-proof-bo_fcqnp/dogfood-knowledge.zip"
       ],
-      "duration_seconds": 235.886,
+      "duration_seconds": 206.987,
       "exit_code": 0,
       "log": "logs/18-large-project-replay.log",
-      "log_sha256": "46f7c4858fbce142f1c7b6b1d3fb15e6834126013b84911e605dbebd323d976c",
+      "log_sha256": "313ea8f9bfede9f6102a3ce1a11d11b8dc764df72bc6c01198630119c1d79cbb",
       "name": "large-project-replay"
     }
   ],
-  "git_tree_id": "5f8871675d9588a5cf5ee8af37b85bbe8ecfa906",
-  "git_tree_listing_sha256": "efba8b88c7a841f044a5255a10856cb2cebfd71415720c30d4397a7bdffde133",
-  "implementation_commit": "de06a5fa0e00e7c9e8d2218058896d3aec1e8b2a",
+  "git_tree_id": "560f740bfae9cff799ea0fa07cda93a4a701214d",
+  "git_tree_listing_sha256": "c007dfce50230f6a86df5d3e7ec326057788e3aa85194ffbb2e9856367e994d3",
+  "implementation_commit": "23958fe249ae79038e426a25dc3fb6e986f6821b",
   "proof_runner_sha256": "4a7f512301d7f1b602927ce474bceaf0c1ced8e71cc1948926389726a442adf3",
   "schema_version": 1,
   "source_sha256": {
     "src/loreloop/__init__.py": "91447944015cec709e8aa7655f7e9d64e1e4508e7023a57fe3746911c0fc6fed",
     "src/loreloop/agents.py": "c4b47de6e1cbf63d0b15011063058b71042048423d49bd42c9a79df5468de0a1",
-    "src/loreloop/cli.py": "0da6e9f87b0eb76ba44cd3817453c332fbeb19ffff285c7e2914738c7b0228bc",
-    "src/loreloop/companion.py": "7ddae8fa3b45bdb225240d3a92ea689b85c4b56c95bb12ad76a586d5b7faf8ca",
+    "src/loreloop/cli.py": "7d3c1c4e0839fac20b0dc45d032a0e358fc9353b0e3c8bacd8cf75b354263509",
+    "src/loreloop/companion.py": "92aa927742143ed2bca8ccfd3022cb7e5b2fa7349767c47dfee5e8941c5eda0b",
     "src/loreloop/delegate/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "src/loreloop/delegate/context_pack.py": "1376974148eee69cfccb28f82fe77bc9479668c80b41e676bbb188574af2d684",
     "src/loreloop/delegate/expand.py": "d95eabc5d6edfe45ee2ff6096c64ad8ca1a68b468b4dc1fc5f97dff8fb4d2c5a",
@@ -374,15 +374,15 @@
     "src/loreloop/federation/reader.py": "29a02f35c36d280b507efa45b02acf98292804af768f6b6d7caf229c89b3df95",
     "src/loreloop/federation/registry.py": "d56f580bbb98a8d45066b2576f42d41caced8719d4c3e14997768f971c851769",
     "src/loreloop/knowledge/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "src/loreloop/knowledge/authoritative_archive.py": "df28631b6019851c62abb878a54c210b5077d2abf41c587b08e3fbb8e9fc05ca",
-    "src/loreloop/knowledge/authoritative_ast.py": "365db8cda348d1cf781eb9df70b461dafa883512187a44708958413e0af1b027",
+    "src/loreloop/knowledge/authoritative_archive.py": "44aa3f74376a62aa470aeaea02c914d99f6f1586c717faf89ab1ecf4bf8cef93",
+    "src/loreloop/knowledge/authoritative_ast.py": "7791310b2951d7a315a4887c561212def6cff05973f3ea2152a1755abace1c6e",
     "src/loreloop/knowledge/authoritative_ast_render.py": "838f9e55d4ba608e4a7307f700a58b13190060ef356e961cdee86dbe2d175c17",
     "src/loreloop/knowledge/authoritative_bindings.py": "0a2762eb14f95fefa8284e8524cfc47e71963cc7a7301edfb11e4c14fbd3f0f9",
     "src/loreloop/knowledge/authoritative_capsule.py": "5e2161177095a96817cb41029388b0cf8b2b68eb38aec2ba2798cf81d46294e0",
     "src/loreloop/knowledge/authoritative_capsule_io.py": "d2a1252a63784ee9da4aaaebb0772cde73ed1a612087dd5dcfa8b2f2ac5e040e",
     "src/loreloop/knowledge/authoritative_capsule_render.py": "9770702f582fcba6b849b9b2dd1fdbb0795477b47deb5e0571031d56af6cc6f1",
-    "src/loreloop/knowledge/authoritative_capsule_replay.py": "beacba9203fcf540502ce19931720d233490d2a1ff7a168fa5b8e6c60ea91dfa",
-    "src/loreloop/knowledge/authoritative_coverage.py": "c070c95a6820462496fa1d01e0a7cabe0871ed967b5e3b971b63dfb29deab683",
+    "src/loreloop/knowledge/authoritative_capsule_replay.py": "782b9389ba304d8be91675bb45e74c487edb6dcc12d8b3397ec718090fa98de8",
+    "src/loreloop/knowledge/authoritative_coverage.py": "7d2caf33cea46052e003bdce49af5e86cd5f19cd277de18b9b94a7c7a695c8f4",
     "src/loreloop/knowledge/authoritative_detector_common.py": "3dbf5545d4365d02720cfa172dd0c2bffaa6447ef0521e6717b313cedd96f049",
     "src/loreloop/knowledge/authoritative_detector_config.py": "6bdcb3a52a7ac45d49c15ffc9bb0e8149da875d81f444766c3d70c6d796d6de3",
     "src/loreloop/knowledge/authoritative_detector_csharp.py": "a44669a76388b0a3060a50d10c912762c871d29ec8d69e26b62516394419bfac",
@@ -407,27 +407,29 @@
     "src/loreloop/knowledge/authoritative_detector_typescript.py": "5c5dfefeebf4db8aa5972e2660919a299588b8db7d593e68ea03cf60bcdbdaf5",
     "src/loreloop/knowledge/authoritative_detector_ui.py": "1ad3ae0dbe8ec0b48f8e607d2a3504c857f2ad2557ca275b21dfbdfa6913eb31",
     "src/loreloop/knowledge/authoritative_detector_yaml.py": "75fbfdab7fbdab830ba93c7c6722e1a121e5a4fc129008bd5eb15e49523cd594",
-    "src/loreloop/knowledge/authoritative_document_ast.py": "28ec588c0eea348b5af290784d6c26a3e0c1db6d32065efb0200fb6592bf06de",
+    "src/loreloop/knowledge/authoritative_document_ast.py": "1ab17fa276aaefadbaaa88ddff40e02e135968f2e430ee68d28c83c949dd16c7",
     "src/loreloop/knowledge/authoritative_document_render.py": "ec2cd0bcf1ebbfd92ba1634fc7c13bc6941999c7e2ef2ac3837de403f0b2b5af",
-    "src/loreloop/knowledge/authoritative_document_routes.py": "cb66a6aff3cbc2277d08d5a52916cd63163f9328a46124943e1010fd55b25100",
+    "src/loreloop/knowledge/authoritative_document_routes.py": "9f60c69ac7ad442fe5188a8f6b80d3bd2d10c4fd9341457cb38877a4a26213e2",
     "src/loreloop/knowledge/authoritative_documents.py": "c091d93b7879e751956402d3f45acce6d2154fb801d0235d6faee368d4b870fb",
     "src/loreloop/knowledge/authoritative_git.py": "248c1e0fd6fef189a8db16f3ad655f3d5e01389b341e4537c4fe1eeebc2b26ad",
     "src/loreloop/knowledge/authoritative_git_objects.py": "95883707eb81665efb606c34f56724ea9bbffa24e896c2f79e853ad05312e861",
-    "src/loreloop/knowledge/authoritative_ids.py": "1c02b45bff110d07e2f4a3f4e95a0eab697bcf4684c3fbd0739f7d7af2397e21",
-    "src/loreloop/knowledge/authoritative_markdown_render.py": "dcb1e574a1377fe02985ebaabaa09433ae429752c9bcdf0f353399d92122a06f",
+    "src/loreloop/knowledge/authoritative_ids.py": "34d0f63d1cd2f758b8dd24e6f35b74c90871c0b2fee1d7a99d9eeed757401a05",
+    "src/loreloop/knowledge/authoritative_markdown_render.py": "006d7539c57530d4527219db9f7ef7c44a016bb081ac8cb1107c915557d20da4",
     "src/loreloop/knowledge/authoritative_publish.py": "f9df19b75744ab5637476c53defe22e4b5dc375e57dd4c3aa21f14784df46fb8",
-    "src/loreloop/knowledge/authoritative_records.py": "4b2227088e96f94eb5d18c9ba06f2c48225d4787c6c464218605745ec01367ee",
+    "src/loreloop/knowledge/authoritative_records.py": "11553a7a58115453e0ae1ea1878a0f2ae7ebc6fd0c2d8458bccbd4ea70766300",
     "src/loreloop/knowledge/authoritative_redaction.py": "0bc543660d465ffd434db921c8fabb9abacb3cb9c66978f597c7f320228a8a16",
-    "src/loreloop/knowledge/authoritative_report_normalize.py": "5a86dc7f689e2e2142489410e2b42d07c4a734e9aad813e1517c4ece5586af6e",
+    "src/loreloop/knowledge/authoritative_report_normalize.py": "d48d6270b8c2b74393e4521003674864d97830f892106fa2e4f4eaaff215a666",
     "src/loreloop/knowledge/authoritative_requirements_input.py": "b6da22d82e94fda00fe04b7b68e7159d571494e0a65b7d020392989044f9c554",
+    "src/loreloop/knowledge/authoritative_search.py": "9df73996cc57f3a55e678f3fb23c83d39d6fd4159c3a0ab98841ae3268326606",
     "src/loreloop/knowledge/authoritative_semantic.py": "a1eceb460b01f9aa8d2a67be6d7a154d7f4e81f7fc08ca46a5d2346be526abc5",
     "src/loreloop/knowledge/authoritative_semantic_model.py": "314e8cd7724ca6517f701d20e598065a9089fce140f7b9828745e26b2fd91e44",
-    "src/loreloop/knowledge/authoritative_semantic_records.py": "079c2c05f76bc44164aea2f025c6090ea3770dce8534a45b6359f1e58f1ed39b",
+    "src/loreloop/knowledge/authoritative_semantic_records.py": "6c3c3c2459117a6d1850ea2282a35eb6e1c14b2847042dc3f965bdc5ebf6778c",
     "src/loreloop/knowledge/authoritative_source.py": "ee4d3442bdc2bf0028ab46e616dcb89ea10e456bfcafeec7e1ddbbeb81199683",
     "src/loreloop/knowledge/authoritative_trust.py": "274c4810739f0ddad7bb49a81f9367be06752c00cf3c23953e1daec88872eb0a",
     "src/loreloop/knowledge/authoritative_types.py": "29651882f39d7a2bde26c4f4401e42065e6a840fec24b64ce0a90538949a65b7",
+    "src/loreloop/knowledge/authoritative_web_input.py": "4421530fa6b8c2123152e1d0fcfb290106116b4ca20dcbce04298857dfc09139",
     "src/loreloop/knowledge/code_reverse.py": "54cd56cf4857bd85b8b960cc86fb762436727c48ef38e59511caa1e858b30bdd",
-    "src/loreloop/knowledge/endorsement.py": "6ffb64c6a84a710fdd717cfce33abff74dc653d77193b3f1fbeffc7f1f969246",
+    "src/loreloop/knowledge/endorsement.py": "2f02d2e7dcf7d3f3c37154dcda3d4dee55102bd921bc1429883bd495e982c5dd",
     "src/loreloop/knowledge/harvest.py": "4d3b349971886996be262f0dfb7968f13d807d473a4809b468aac8eb1d3d18f6",
     "src/loreloop/knowledge/model.py": "f49e34086eae35953d74dd8040103c4b75a2132935a84c2316348d882d82ca45",
     "src/loreloop/knowledge/repos.py": "eefa4f7c69ab7ebf53f14e4f2bb381fb528c0f20998fdccc0c8ffbc292a61955",
@@ -445,9 +447,9 @@
     "src/loreloop/webexplore/web_reverse.py": "2f2eb1e5675d9174e2c4235b60407bf2adb828a6cd0635d5e3591f267200e3d5"
   },
   "status": "passed",
-  "tracked_file_count": 249,
+  "tracked_file_count": 252,
   "wheel": {
-    "bytes": 251141,
+    "bytes": 257077,
     "entries": [
       "loreloop-0.1.0.dist-info/METADATA",
       "loreloop-0.1.0.dist-info/RECORD",
@@ -522,12 +524,14 @@
       "loreloop/knowledge/authoritative_redaction.py",
       "loreloop/knowledge/authoritative_report_normalize.py",
       "loreloop/knowledge/authoritative_requirements_input.py",
+      "loreloop/knowledge/authoritative_search.py",
       "loreloop/knowledge/authoritative_semantic.py",
       "loreloop/knowledge/authoritative_semantic_model.py",
       "loreloop/knowledge/authoritative_semantic_records.py",
       "loreloop/knowledge/authoritative_source.py",
       "loreloop/knowledge/authoritative_trust.py",
       "loreloop/knowledge/authoritative_types.py",
+      "loreloop/knowledge/authoritative_web_input.py",
       "loreloop/knowledge/code_reverse.py",
       "loreloop/knowledge/endorsement.py",
       "loreloop/knowledge/harvest.py",
@@ -547,6 +551,6 @@
       "loreloop/webexplore/web_reverse.py"
     ],
     "path": "artifacts/loreloop-0.1.0-py3-none-any.whl",
-    "sha256": "1a29a3b4a469ca597b0989152794a0d2f0108780a2dbc6f130517a1f4b4b7902"
+    "sha256": "53f2901eedeac6679b45fb65e73eba94f02f4cb643af6c1e0221171455bc89f7"
   }
 }
