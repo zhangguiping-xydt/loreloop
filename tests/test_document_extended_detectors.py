@@ -36,6 +36,11 @@ class HealthRoutes {
     assert [(item.method, item.path, item.name) for item in java_report.interfaces] == [
         ("POST", "/api/users/{id}", "update")
     ]
+    assert java_report.interfaces[0].return_type == "User"
+    assert tuple(
+        (item.name, item.annotation, item.required)
+        for item in java_report.interfaces[0].parameters
+    ) == (("id", "String", True),)
     assert {item.qualified_name for item in java_report.symbols} == {"UserController", "update"}
     assert [item.key for item in java_report.configurations] == ["APP_REGION"]
     assert [item.name for item in java_report.dependencies] == [
@@ -48,6 +53,32 @@ class HealthRoutes {
         "HealthRoutes",
         "install",
     }
+
+
+def test_jvm_detector_binds_spring_parameter_annotations_and_return_type() -> None:
+    source = """
+@RequestMapping("/users")
+public class UserController {
+  @PostMapping("/{id}")
+  public Response<UserDto> update(
+      @PathVariable("id") String id,
+      @RequestParam(required = false) String locale,
+      @RequestBody UserRequest request
+  ) { return service.update(id, request); }
+}
+"""
+
+    report = detect_extended_source(source, "backend", "src/UserController.java")
+
+    interface = report.interfaces[0]
+    assert interface.return_type == "Response<UserDto>"
+    assert tuple(
+        (item.name, item.annotation, item.required) for item in interface.parameters
+    ) == (
+        ("id", "String", True),
+        ("locale", "String", False),
+        ("request", "UserRequest", True),
+    )
 
 
 def test_go_detector_extracts_routes_symbols_environment_and_imports() -> None:

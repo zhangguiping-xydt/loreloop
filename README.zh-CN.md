@@ -141,7 +141,7 @@ loreloop knowledge review
 ```bash
 loreloop knowledge export \
   --format package \
-  --output knowledge-export.zip \
+  --output baseline.zip \
   --project-name your-project \
   --requirements docs/requirements.md
 ```
@@ -152,7 +152,7 @@ ZIP 包内结构如下：
 包内的 Capsule JSON。
 
 ```text
-knowledge-export.zip
+baseline.zip
 ├── your-project-功能清单.md
 ├── your-project-需求规格.md
 ├── your-project-系统架构.md
@@ -174,15 +174,15 @@ TypeORM、常见 migration、OpenAPI/Swagger、GraphQL、protobuf、Docker、Com
 `.loreloop-export.json` 可以在没有源码、数据库或密钥的机器上证明整套文档没有缺失或篡改：
 
 ```bash
-loreloop knowledge replay knowledge-export.zip
+loreloop knowledge replay baseline.zip
 ```
 
 如果还要证明“这份包由当前项目的本地信任域确认过”，导出时显式加 `--attest`，重放时加
 `--trusted`：
 
 ```bash
-loreloop knowledge export --format package --output knowledge-export.zip --attest
-loreloop knowledge replay knowledge-export.zip --trusted
+loreloop knowledge export --format package --output baseline.zip --attest
+loreloop knowledge replay baseline.zip --trusted
 ```
 
 `--format docs` 作为兼容别名继续保留，也仍可输出目录。默认的 `--format audit` 是另一种单文件逐条

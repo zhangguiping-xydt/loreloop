@@ -2534,7 +2534,7 @@ def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys)
     assert "recommend moving/deleting `.loreloop` manually" in text
     assert "specific, explicit instruction" in text
     assert "name: loreloop" in text
-    assert "knowledge export --format package --output loreloop-knowledge.zip" in text
+    assert "knowledge export --format package --output baseline.zip" in text
     assert "never issue a shell tool call with its command omitted" in text
 
     # idempotent: second run must not duplicate the gitignore line
@@ -2572,7 +2572,7 @@ def test_cli_init_installs_codex_companion_skill(workdir, monkeypatch, capsys):
     assert 'Run `loreloop begin "<task>"`' in text
     assert "Keep the user in this host coding-agent session" in text
     assert "loreloop trust recover --from <directory>" in text
-    assert "knowledge export --format package --output loreloop-knowledge.zip" in text
+    assert "knowledge export --format package --output baseline.zip" in text
     assert "installed companion skill for Codex" in capsys.readouterr().out
 
 

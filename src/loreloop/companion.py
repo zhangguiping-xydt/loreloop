@@ -55,7 +55,7 @@ When the operator asks to export project knowledge, a knowledge baseline, or
 reverse-engineered project documents, export the deliverable package rather
 than the legacy entry audit:
 
-    loreloop knowledge export --format package --output loreloop-knowledge.zip
+    loreloop knowledge export --format package --output baseline.zip
 
 The ZIP contains six fixed Markdown documents, evidence-backed optional
 interface/database documents, and the portable Capsule. `--format docs` is a
@@ -69,7 +69,7 @@ string shown above; never issue a shell tool call with its command omitted. Do
 not add `--force` unless the operator explicitly authorizes replacing an
 existing output. Verify a produced package with:
 
-    loreloop knowledge replay loreloop-knowledge.zip
+    loreloop knowledge replay baseline.zip
 
 ## Local trust recovery
 

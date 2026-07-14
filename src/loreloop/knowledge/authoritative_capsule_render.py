@@ -1,13 +1,18 @@
-"""Independently render Capsule AST payloads for portable replay."""
+"""Render a validated Capsule AST through the canonical Markdown projection."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TypeAlias
 
 from .authoritative_capsule import JsonValue
-
-JsonScalar: TypeAlias = None | bool | int | str
+from .authoritative_markdown_render import (
+    EvidenceLocation,
+    MarkdownDocument,
+    MarkdownRow,
+    MarkdownSection,
+    Scalar,
+    render_markdown,
+)
 
 
 class CapsuleRenderError(ValueError):
@@ -38,161 +43,76 @@ def _integer(value: JsonValue | None, label: str) -> int:
     return value
 
 
-def _scalar(value: JsonValue | None, label: str) -> JsonScalar:
+def _scalar(value: JsonValue | None, label: str) -> Scalar:
     if value is None or isinstance(value, (bool, int, str)):
         return value
     raise CapsuleRenderError(f"{label} must be a scalar")
 
 
-def _cell(value: str) -> str:
-    return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("`", "&#96;")
-        .replace("|", "\\|")
-        .replace("\r", " ")
-        .replace("\n", " ")
-    )
-
-
-def _value(value: JsonScalar) -> str:
-    if value is None:
-        return "-"
-    if isinstance(value, bool):
-        return "是" if value else "否"
-    return str(value)
-
-
-def _row_values(row: Mapping[str, JsonValue]) -> dict[str, JsonScalar]:
-    result: dict[str, JsonScalar] = {}
-    for index, item in enumerate(_array(row.get("values"), "AST row values")):
-        projected = _mapping(item, f"AST row value {index}")
-        pointer = _text(projected.get("pointer"), "AST value pointer")
-        result[pointer.removeprefix("/")] = _scalar(projected.get("value"), "AST value")
-    return result
-
-
-def _rows(value: JsonValue | None, label: str) -> tuple[Mapping[str, JsonValue], ...]:
-    return tuple(_mapping(item, label) for item in _array(value, label))
-
-
-def _table(rows: tuple[Mapping[str, JsonValue], ...]) -> list[str]:
-    columns = tuple(
-        dict.fromkeys(
-            _text(item.get("pointer"), "AST value pointer").removeprefix("/")
-            for row in rows
-            for item in (
-                _mapping(value, "AST row value")
-                for value in _array(row.get("values"), "AST row values")
+def _row(value: JsonValue, label: str) -> MarkdownRow:
+    row = _mapping(value, label)
+    values: list[tuple[str, Scalar]] = []
+    for index, raw in enumerate(_array(row.get("values"), f"{label} values")):
+        projected = _mapping(raw, f"{label} value {index}")
+        pointer = _text(projected.get("pointer"), f"{label} value pointer")
+        values.append(
+            (
+                pointer.removeprefix("/"),
+                _scalar(projected.get("value"), f"{label} value"),
             )
         )
+    evidence = tuple(
+        _text(item, f"{label} evidence id")
+        for item in _array(row.get("evidence_ids"), f"{label} evidence ids")
     )
-    headers = ("record_id", *columns, "evidence")
-    lines = [
-        "| " + " | ".join(headers) + " |",
-        "|" + "|".join("---" for _ in headers) + "|",
-    ]
-    for row in rows:
-        values = _row_values(row)
-        cells = [f"`{_text(row.get('record_id'), 'AST record id')}`"]
-        cells.extend(_cell(_value(values.get(column))) for column in columns)
-        evidence = (
-            _text(item, "AST evidence id")
-            for item in _array(row.get("evidence_ids"), "AST evidence ids")
-        )
-        cells.append("<br>".join(f"`{item}`" for item in evidence) or "-")
-        lines.append("| " + " | ".join(cells) + " |")
-    return [*lines, ""]
-
-
-def _relationship_graph(sections: list[JsonValue]) -> list[str]:
-    rows = tuple(
-        row
-        for section_value in sections
-        for row in _rows(_mapping(section_value, "AST section").get("rows"), "AST rows")
-        if row.get("row_kind") in {"CurrentDataRow", "RelationRow"}
+    return MarkdownRow(
+        _text(row.get("row_kind"), f"{label} kind"),
+        _text(row.get("record_id"), f"{label} id"),
+        tuple(values),
+        evidence,
     )
-    table_names: list[str] = []
-    relations: list[dict[str, JsonScalar]] = []
-    for row in rows:
-        values = _row_values(row)
-        for key in ("table", "referenced_table"):
-            name = values.get(key)
-            if isinstance(name, str) and name not in table_names:
-                table_names.append(name)
-        if row.get("row_kind") == "RelationRow":
-            relations.append(values)
-    if not table_names:
-        return []
-    identifiers = {name: f"T{index:03d}" for index, name in enumerate(table_names, 1)}
-    lines = [
-        "## ER 关系图",
-        "",
-        "该图仅表达源码中的外键方向，不推断业务基数。",
-        "",
-        "```mermaid",
-        "flowchart LR",
-        *(f'    {identifiers[name]}["{_cell(name)}"]' for name in table_names),
-    ]
-    for values in relations:
-        table, referenced = values.get("table"), values.get("referenced_table")
-        if isinstance(table, str) and isinstance(referenced, str):
-            label = f"{_value(values.get('columns'))} → {_value(values.get('referenced_columns'))}"
-            lines.append(
-                f'    {identifiers[table]} -->|"{_cell(label)}"| {identifiers[referenced]}'
-            )
-    return [*lines, "```", ""]
 
 
-def _evidence(ast: Mapping[str, JsonValue]) -> list[str]:
-    rows = _rows(ast.get("evidence_rows"), "AST evidence rows")
-    lines = ["## 证据索引", ""]
-    if not rows:
-        return [*lines, "本文件没有源记录。", ""]
-    lines.extend(["| evidence_id | repository | path | line |", "|---|---|---|---:|"])
-    for row in rows:
-        values = _row_values(row)
-        lines.append(
-            f"| `{_text(row.get('record_id'), 'evidence record id')}` | "
-            + f"`{_cell(_value(values.get('repository_alias')))}` | "
-            + f"`{_cell(_value(values.get('path')))}` | {_value(values.get('line'))} |"
-        )
-    return [*lines, ""]
-
-
-def render_capsule_ast(ast_value: JsonValue, paths: tuple[str, ...]) -> str:
-    """Render one stored AST without importing source or detector objects."""
-    ast = _mapping(ast_value, "document AST")
+def _document(ast: Mapping[str, JsonValue]) -> MarkdownDocument:
     header = _mapping(ast.get("header"), "AST authority header")
     coverage = _mapping(header.get("coverage"), "AST coverage")
-    sections = _array(ast.get("sections"), "AST sections")
+    raw_family = ast.get("required_family") or ast.get("optional_family")
+    family = _text(raw_family, "AST document family")
     package = header.get("package_id")
     if package is not None and not isinstance(package, str):
         raise CapsuleRenderError("AST package id must be text or null")
-    lines = [f"# {_cell(_text(ast.get('title'), 'AST title'))}", "", "## 文档导航", ""]
-    lines.extend(f"- [{path[:-3]}]({path})" for path in paths)
-    lines.extend(
-        [
-            "",
-            "## 权威边界",
-            "",
-            f"- Authority: `{_text(header.get('authority_label'), 'AST authority')}`",
-            f"- Package ID: `{package or '-'}`",
-            f"- Repository configuration: `{_text(header.get('repository_config_digest'), 'AST repository digest')}`",
-            f"- Records: {_integer(coverage.get('record_total'), 'AST record total')}",
-            "",
-        ]
+    sections: list[MarkdownSection] = []
+    for index, raw in enumerate(_array(ast.get("sections"), "AST sections")):
+        section = _mapping(raw, f"AST section {index}")
+        rows = tuple(
+            _row(item, f"AST section {index} row")
+            for item in _array(section.get("rows"), f"AST section {index} rows")
+        )
+        sections.append(
+            MarkdownSection(_text(section.get("title"), "AST section title"), rows)
+        )
+    evidence: list[tuple[str, EvidenceLocation]] = []
+    for index, raw in enumerate(_array(ast.get("evidence_rows"), "AST evidence rows")):
+        row = _row(raw, f"AST evidence row {index}")
+        values = dict(row.values)
+        repository = values.get("repository_alias")
+        path = values.get("path")
+        line = values.get("line")
+        if not isinstance(repository, str) or not isinstance(path, str) or not isinstance(line, int):
+            raise CapsuleRenderError(f"AST evidence row {index} has invalid source values")
+        evidence.append((row.record_id, EvidenceLocation(repository, path, line)))
+    return MarkdownDocument(
+        _text(ast.get("title"), "AST title"),
+        family,
+        _text(header.get("authority_label"), "AST authority"),
+        package,
+        _text(header.get("repository_config_digest"), "AST repository digest"),
+        _integer(coverage.get("record_total"), "AST record total"),
+        tuple(sections),
+        tuple(evidence),
     )
-    if ast.get("optional_family") == "database_design":
-        lines.extend(_relationship_graph(sections))
-    for section_value in sections:
-        section = _mapping(section_value, "AST section")
-        lines.extend([f"## {_cell(_text(section.get('title'), 'AST section title'))}", ""])
-        rows = _rows(section.get("rows"), "AST rows")
-        lines.extend(_table(rows) if rows else ["没有源记录。", ""])
-    lines.extend(_evidence(ast))
-    lines.extend(
-        ["## 证据限制", "", "未在提交态需求材料或源码中明确表达的业务结论不会被补写。", ""]
-    )
-    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_capsule_ast(ast_value: JsonValue, paths: tuple[str, ...]) -> str:
+    """Render one stored AST after the replay layer validates its exact projection."""
+    return render_markdown(_document(_mapping(ast_value, "document AST")), paths)

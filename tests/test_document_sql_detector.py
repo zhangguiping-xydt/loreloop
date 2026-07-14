@@ -39,6 +39,31 @@ def test_sql_detector_extracts_columns_keys_foreign_keys_and_indexes() -> None:
     assert report.indexes[0].unique is True
 
 
+def test_sql_detector_treats_mysql_inline_keys_as_indexes_not_columns() -> None:
+    sql = """
+    CREATE TABLE employee_ratio (
+        id BIGINT NOT NULL,
+        employee_id VARCHAR(32) NOT NULL,
+        city_code VARCHAR(32) NOT NULL,
+        PRIMARY KEY (id),
+        KEY `idx_employee_city` (`employee_id`, `city_code`),
+        UNIQUE KEY `uk_employee` (`employee_id`)
+    );
+    """
+
+    report = detect_sql_source(sql, "backend", "schema.sql")
+
+    assert tuple(column.name for column in report.tables[0].columns) == (
+        "id",
+        "employee_id",
+        "city_code",
+    )
+    assert tuple((item.name, item.columns, item.unique) for item in report.indexes) == (
+        ("idx_employee_city", ("employee_id", "city_code"), False),
+        ("uk_employee", ("employee_id",), True),
+    )
+
+
 def test_sql_detector_rejects_unclosed_explicit_schema() -> None:
     # Given: source claims to create a table but the schema is incomplete.
     # When / Then: applicability fails closed instead of silently omitting the table.

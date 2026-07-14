@@ -61,7 +61,7 @@ reverse-engineered project documents, export the deliverable package rather
 than the legacy entry audit:
 
 ```text
-loreloop knowledge export --format package --output loreloop-knowledge.zip
+loreloop knowledge export --format package --output baseline.zip
 ```
 
 The ZIP contains six fixed Markdown documents, evidence-backed optional
@@ -77,7 +77,7 @@ not add `--force` unless the operator explicitly authorizes replacing an
 existing output. Verify a produced package with:
 
 ```text
-loreloop knowledge replay loreloop-knowledge.zip
+loreloop knowledge replay baseline.zip
 ```
 
 ## Recover local trust without exposing internals

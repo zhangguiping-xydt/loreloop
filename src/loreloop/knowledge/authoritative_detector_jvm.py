@@ -11,6 +11,7 @@ from .authoritative_records import (
     DependencyRecord,
     DetectionReport,
     InterfaceRecord,
+    ParameterRecord,
     SymbolRecord,
 )
 
@@ -48,6 +49,16 @@ _NEXT_FUNCTION: Final = re.compile(
     r"(?:(?:public|private|protected|internal|open|override|suspend|static|final)\s+)*"
     + r"(?:fun\s+|[\w$.<>?\[\], ]+\s+)(?P<name>[A-Za-z_$][\w$]*)\s*\("
 )
+_JAVA_ROUTE_FUNCTION: Final = re.compile(
+    r"(?m)^\s*(?:@[\w$.]+(?:\([^\n]*\))?\s*)*"
+    + r"(?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?"
+    + r"(?P<return>[\w$.<>?\[\], ]+)\s+(?P<name>[A-Za-z_$][\w$]*)\s*\("
+)
+_KOTLIN_ROUTE_FUNCTION: Final = re.compile(
+    r"(?m)^\s*(?:@[\w$.]+(?:\([^\n]*\))?\s*)*"
+    + r"(?:public\s+|private\s+|protected\s+|internal\s+|open\s+|override\s+|"
+    + r"suspend\s+)*fun\s+(?P<name>[A-Za-z_$][\w$]*)\s*\("
+)
 _KTOR_ROUTE: Final = re.compile(
     r"(?m)^\s*(?P<method>get|post|put|patch|delete|head|options)\s*"
     + r"\(\s*\"(?P<path>[^\"]+)\"\s*\)\s*\{"
@@ -66,14 +77,95 @@ def _join(prefix: str, path: str) -> str:
     return combined if combined != "" else "/"
 
 
+def _split_parameters(raw: str) -> tuple[str, ...]:
+    items: list[str] = []
+    start = 0
+    depth = 0
+    for index, character in enumerate(raw):
+        if character in "<([":
+            depth += 1
+        elif character in ">)]" and depth:
+            depth -= 1
+        elif character == "," and depth == 0:
+            items.append(raw[start:index].strip())
+            start = index + 1
+    items.append(raw[start:].strip())
+    return tuple(item for item in items if item)
+
+
+def _parameters(raw: str, *, kotlin: bool) -> tuple[ParameterRecord, ...]:
+    parameters: list[ParameterRecord] = []
+    for item in _split_parameters(raw):
+        required = not bool(
+            re.search(r"@Nullable\b|required\s*=\s*false|\?\s*(?:=|$)", item)
+        )
+        without_annotations = re.sub(r"@[\w$.]+(?:\([^)]*\))?\s*", "", item).strip()
+        without_annotations = re.sub(r"\bfinal\s+", "", without_annotations).strip()
+        if kotlin and ":" in without_annotations:
+            name, annotation = without_annotations.split(":", 1)
+            annotation = annotation.split("=", 1)[0].strip()
+            parameters.append(ParameterRecord(name.strip(), annotation or None, required))
+            continue
+        tokens = without_annotations.split()
+        if len(tokens) < 2:
+            continue
+        parameters.append(ParameterRecord(tokens[-1], " ".join(tokens[:-1]), required))
+    return tuple(parameters)
+
+
+def _route_function(
+    tail: str, *, kotlin: bool
+) -> tuple[str, tuple[ParameterRecord, ...], str | None] | None:
+    pattern = _KOTLIN_ROUTE_FUNCTION if kotlin else _JAVA_ROUTE_FUNCTION
+    match = pattern.search(tail)
+    if match is None or re.search(r"\b(?:class|interface|object|record)\b", tail[: match.start()]):
+        return None
+    opening = match.end() - 1
+    depth = 0
+    closing: int | None = None
+    for index in range(opening, len(tail)):
+        character = tail[index]
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                closing = index
+                break
+    if closing is None:
+        return None
+    remainder = tail[closing + 1 : closing + 200]
+    if "{" not in remainder:
+        return None
+    if kotlin:
+        return_match = re.match(r"\s*(?::\s*(?P<return>[^={\n]+))?", remainder)
+        return_type = (
+            (return_match.group("return") if return_match is not None else "") or ""
+        ).strip() or None
+    else:
+        return_type = (match.group("return") or "").strip() or None
+    return (
+        match.group("name"),
+        _parameters(tail[opening + 1 : closing], kotlin=kotlin),
+        return_type,
+    )
+
+
 def _spring_interfaces(source: str, alias: str, path: str) -> tuple[InterfaceRecord, ...]:
     records: list[InterfaceRecord] = []
     prefixes = tuple(_PREFIX.finditer(source))
+    kotlin = path.lower().endswith(".kt")
     for match in _SPRING_ROUTE.finditer(source):
         tail = source[match.end() : match.end() + 500]
-        function = _NEXT_FUNCTION.search(tail)
-        if function is None or re.search(r"\b(?:class|interface|object|record)\b", tail[: function.start()]):
-            continue
+        function = _route_function(tail, kotlin=kotlin)
+        if function is None:
+            fallback = _NEXT_FUNCTION.search(tail)
+            if fallback is None or re.search(
+                r"\b(?:class|interface|object|record)\b", tail[: fallback.start()]
+            ):
+                continue
+            function = (fallback.group("name"), (), None)
+        function_name, parameters, return_type = function
         args = match.group("args") or ""
         path_match = _ROUTE_PATH.search(args)
         route_path = "" if path_match is None else path_match.group("path")
@@ -85,11 +177,11 @@ def _spring_interfaces(source: str, alias: str, path: str) -> tuple[InterfaceRec
         records.append(
             InterfaceRecord(
                 "http",
-                function.group("name"),
+                function_name,
                 method,
                 _join(prefix, route_path),
-                (),
-                None,
+                parameters,
+                return_type,
                 source_ref(alias, path, source, match.start()),
             )
         )

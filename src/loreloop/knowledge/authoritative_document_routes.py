@@ -22,8 +22,8 @@ DOCUMENT_ROUTES = (
             {
                 DocumentRowKind.INTERFACE,
                 DocumentRowKind.COMMAND,
+                DocumentRowKind.UI_SURFACE,
                 DocumentRowKind.REQUIREMENT,
-                DocumentRowKind.ACCEPTANCE,
                 DocumentRowKind.PERMISSION,
             }
         ),
@@ -34,10 +34,10 @@ DOCUMENT_ROUTES = (
         frozenset(
             {
                 DocumentRowKind.REQUIREMENT,
-                DocumentRowKind.INTERFACE,
-                DocumentRowKind.COMMAND,
                 DocumentRowKind.PERMISSION,
                 DocumentRowKind.CONFIGURATION,
+                DocumentRowKind.STATE,
+                DocumentRowKind.ERROR,
             }
         ),
     ),
@@ -48,8 +48,9 @@ DOCUMENT_ROUTES = (
             {
                 DocumentRowKind.DEPENDENCY,
                 DocumentRowKind.CONFIGURATION,
-                DocumentRowKind.INTERFACE,
-                DocumentRowKind.COMMAND,
+                DocumentRowKind.DEPLOYMENT,
+                DocumentRowKind.MODULE_REPORT,
+                DocumentRowKind.APPLICABILITY,
             }
         ),
     ),
@@ -58,14 +59,11 @@ DOCUMENT_ROUTES = (
         "详细设计",
         frozenset(
             {
-                DocumentRowKind.INTERFACE,
-                DocumentRowKind.COMMAND,
                 DocumentRowKind.MODULE,
-                DocumentRowKind.PERMISSION,
-                DocumentRowKind.CONFIGURATION,
-                DocumentRowKind.DEPENDENCY,
-                DocumentRowKind.CURRENT_DATA,
-                DocumentRowKind.RELATION,
+                DocumentRowKind.IMPLEMENTATION_FACT,
+                DocumentRowKind.STATE,
+                DocumentRowKind.ERROR,
+                DocumentRowKind.ANNOTATION,
             }
         ),
     ),
@@ -74,10 +72,10 @@ DOCUMENT_ROUTES = (
         "用户手册",
         frozenset(
             {
-                DocumentRowKind.INTERFACE,
+                DocumentRowKind.UI_SURFACE,
                 DocumentRowKind.COMMAND,
-                DocumentRowKind.CONFIGURATION,
                 DocumentRowKind.REQUIREMENT,
+                DocumentRowKind.PERMISSION,
             }
         ),
     ),
@@ -87,23 +85,34 @@ DOCUMENT_ROUTES = (
         frozenset(
             {
                 DocumentRowKind.ACCEPTANCE,
+                DocumentRowKind.TEST,
                 DocumentRowKind.REQUIREMENT,
-                DocumentRowKind.INTERFACE,
-                DocumentRowKind.COMMAND,
-                DocumentRowKind.CONFIGURATION,
-                DocumentRowKind.CURRENT_DATA,
             }
         ),
     ),
     DocumentRoute(
         OptionalDocumentFamily.INTERFACE_CONTRACT,
         "接口契约",
-        frozenset({DocumentRowKind.INTERFACE, DocumentRowKind.COMMAND, DocumentRowKind.PERMISSION}),
+        frozenset(
+            {
+                DocumentRowKind.INTERFACE,
+                DocumentRowKind.COMMAND,
+                DocumentRowKind.PERMISSION,
+                DocumentRowKind.ERROR,
+            }
+        ),
     ),
     DocumentRoute(
         OptionalDocumentFamily.DATABASE_DESIGN,
         "数据库设计",
-        frozenset({DocumentRowKind.CURRENT_DATA, DocumentRowKind.RELATION}),
+        frozenset(
+            {
+                DocumentRowKind.CURRENT_DATA,
+                DocumentRowKind.HISTORICAL_DATA,
+                DocumentRowKind.MIGRATION_OPERATION,
+                DocumentRowKind.RELATION,
+            }
+        ),
     ),
 )
 
@@ -114,12 +123,23 @@ ROUTED_ROW_KINDS = frozenset(
 SECTION_ROUTES = {
     DocumentRowKind.INTERFACE: ("interfaces", "HTTP 接口"),
     DocumentRowKind.COMMAND: ("commands", "命令入口"),
+    DocumentRowKind.UI_SURFACE: ("ui-surfaces", "用户界面与操作入口"),
     DocumentRowKind.MODULE: ("modules", "模块与符号"),
+    DocumentRowKind.MODULE_REPORT: ("module-reports", "模块报告"),
     DocumentRowKind.PERMISSION: ("permissions", "权限规则"),
     DocumentRowKind.CONFIGURATION: ("configuration", "配置契约"),
     DocumentRowKind.DEPENDENCY: ("dependencies", "依赖关系"),
+    DocumentRowKind.DEPLOYMENT: ("deployment", "部署与运行环境"),
+    DocumentRowKind.STATE: ("states", "状态与生命周期"),
+    DocumentRowKind.ERROR: ("errors", "错误与异常契约"),
+    DocumentRowKind.TEST: ("tests", "测试证据"),
     DocumentRowKind.REQUIREMENT: ("requirements", "需求材料"),
     DocumentRowKind.ACCEPTANCE: ("acceptance", "验收准则"),
     DocumentRowKind.CURRENT_DATA: ("data", "数据模型"),
+    DocumentRowKind.HISTORICAL_DATA: ("historical-data", "历史数据"),
+    DocumentRowKind.MIGRATION_OPERATION: ("migration", "数据迁移"),
     DocumentRowKind.RELATION: ("relations", "数据关系"),
+    DocumentRowKind.APPLICABILITY: ("applicability", "适用性"),
+    DocumentRowKind.ANNOTATION: ("annotations", "实现注解"),
+    DocumentRowKind.IMPLEMENTATION_FACT: ("implementation", "实现事实"),
 }

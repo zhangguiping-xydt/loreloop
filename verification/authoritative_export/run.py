@@ -460,7 +460,6 @@ def main(argv: list[str] | None = None) -> int:
                         "fetch",
                         "--quiet",
                         "--no-tags",
-                        "--filter=blob:none",
                         str(dogfood_metadata["remote_url"]),
                         f"+{dogfood_metadata['public_ref']}:{public_target}",
                     ),

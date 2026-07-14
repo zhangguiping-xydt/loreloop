@@ -63,7 +63,11 @@ def test_semantic_core_routes_into_exact_typed_document_ast_set(tmp_path: Path) 
         for section in document.sections
         for row in section.rows
     )
-    assert all(document.evidence_rows for document in document_set.documents)
+    assert all(
+        bool(document.evidence_rows)
+        == any(section.rows for section in document.sections)
+        for document in document_set.documents
+    )
 
 
 def test_document_ast_rejects_semantic_records_outside_closed_routes(tmp_path: Path) -> None:
@@ -87,7 +91,7 @@ def test_document_ast_rejects_semantic_records_outside_closed_routes(tmp_path: P
     )
     unsupported = replace(
         core,
-        records=(replace(core.records[0], row_kind=DocumentRowKind.UI_SURFACE),),
+        records=(replace(core.records[0], row_kind=DocumentRowKind.EVIDENCE),),
         evidence=(core.evidence[0],),
     )
 

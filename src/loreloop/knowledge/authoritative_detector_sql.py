@@ -26,6 +26,11 @@ _CREATE_INDEX: Final = re.compile(
     + rf"(?P<name>{_IDENT})\s+ON\s+(?P<table>{_IDENT})\s*\((?P<columns>[^)]+)\)",
     re.IGNORECASE,
 )
+_INLINE_INDEX: Final = re.compile(
+    r"^(?P<unique>UNIQUE\s+)?(?:KEY|INDEX)\s+"
+    + rf"(?P<name>{_IDENT})\s*\((?P<columns>[^)]+)\)",
+    re.IGNORECASE,
+)
 _FOREIGN_KEY: Final = re.compile(
     r"FOREIGN\s+KEY\s*\((?P<columns>[^)]+)\)\s+REFERENCES\s+"
     + rf"(?P<table>{_IDENT})\s*\((?P<refs>[^)]+)\)",
@@ -102,7 +107,10 @@ def _split_clauses(body: str) -> tuple[str, ...]:
 
 def _column(clause: str) -> DatabaseColumn | None:
     if re.match(
-        r"^(?:CONSTRAINT\b|PRIMARY\s+KEY\b|FOREIGN\s+KEY\b|UNIQUE\b|CHECK\b)", clause, re.IGNORECASE
+        r"^(?:CONSTRAINT\b|PRIMARY\s+KEY\b|FOREIGN\s+KEY\b|"
+        r"(?:UNIQUE\s+)?(?:KEY|INDEX)\b|UNIQUE\b|CHECK\b)",
+        clause,
+        re.IGNORECASE,
     ):
         return None
     match = re.match(rf"(?P<name>{_IDENT})\s+(?P<rest>.+)$", clause, re.DOTALL)
@@ -124,14 +132,29 @@ def _column(clause: str) -> DatabaseColumn | None:
     )
 
 
-def _table(sql: str, match: re.Match[str], source: SourceRef) -> tuple[DatabaseTable, int]:
+def _table(
+    sql: str, match: re.Match[str], source: SourceRef
+) -> tuple[DatabaseTable, tuple[DatabaseIndex, ...], int]:
     opening = match.end() - 1
     closing = _closing_parenthesis(sql, opening)
     clauses = _split_clauses(sql[opening + 1 : closing])
     columns = tuple(column for clause in clauses if (column := _column(clause)) is not None)
     primary = tuple(column.name for column in columns if column.primary_key)
     foreign_keys: list[ForeignKeyRecord] = []
+    indexes: list[DatabaseIndex] = []
     for clause in clauses:
+        inline_index = _INLINE_INDEX.match(clause)
+        if inline_index is not None:
+            indexes.append(
+                DatabaseIndex(
+                    name=_name(inline_index.group("name")),
+                    table=_name(match.group("name")),
+                    columns=_names(inline_index.group("columns")),
+                    unique=inline_index.group("unique") is not None,
+                    source=source,
+                )
+            )
+            continue
         table_match = _FOREIGN_KEY.search(clause)
         if table_match is not None:
             foreign_keys.append(
@@ -163,6 +186,7 @@ def _table(sql: str, match: re.Match[str], source: SourceRef) -> tuple[DatabaseT
             foreign_keys=tuple(dict.fromkeys(foreign_keys)),
             source=source,
         ),
+        tuple(indexes),
         closing,
     )
 
@@ -175,23 +199,30 @@ def detect_sql_source(
 ) -> DetectionReport:
     """Extract explicit tables, columns, keys, constraints, and indexes."""
     tables: list[DatabaseTable] = []
+    inline_indexes: list[DatabaseIndex] = []
     position = 0
     while match := _CREATE_TABLE.search(sql, position):
         line = base_line + sql[: match.start()].count("\n")
-        table, position = _table(sql, match, SourceRef(repository_alias, path, line))
-        tables.append(table)
-    indexes = tuple(
-        DatabaseIndex(
-            name=_name(match.group("name")),
-            table=_name(match.group("table")),
-            columns=_names(match.group("columns")),
-            unique=match.group("unique") is not None,
-            source=SourceRef(
-                repository_alias,
-                path,
-                base_line + sql[: match.start()].count("\n"),
-            ),
+        table, table_indexes, position = _table(
+            sql, match, SourceRef(repository_alias, path, line)
         )
-        for match in _CREATE_INDEX.finditer(sql)
+        tables.append(table)
+        inline_indexes.extend(table_indexes)
+    indexes = (
+        *inline_indexes,
+        *(
+            DatabaseIndex(
+                name=_name(match.group("name")),
+                table=_name(match.group("table")),
+                columns=_names(match.group("columns")),
+                unique=match.group("unique") is not None,
+                source=SourceRef(
+                    repository_alias,
+                    path,
+                    base_line + sql[: match.start()].count("\n"),
+                ),
+            )
+            for match in _CREATE_INDEX.finditer(sql)
+        ),
     )
     return DetectionReport(tables=tuple(tables), indexes=indexes)

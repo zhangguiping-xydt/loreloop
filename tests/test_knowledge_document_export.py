@@ -98,19 +98,46 @@ def create_user(name: str) -> dict[str, str]:
     assert capsule.is_file() and '"package_id"' in capsule.read_text(encoding="utf-8")
     interface = (target / "demo-接口契约.md").read_text(encoding="utf-8")
     database = (target / "demo-数据库设计.md").read_text(encoding="utf-8")
+    capabilities = (target / "demo-功能清单.md").read_text(encoding="utf-8")
     requirements = (target / "demo-需求规格.md").read_text(encoding="utf-8")
+    architecture = (target / "demo-系统架构.md").read_text(encoding="utf-8")
+    detailed = (target / "demo-详细设计.md").read_text(encoding="utf-8")
+    user_guide = (target / "demo-用户手册.md").read_text(encoding="utf-8")
     assert "POST" in interface and "/users" in interface and "name:str*" in interface
     assert "<script>" not in interface and "&lt;script&gt;" in interface
+    assert "## 源码能力域" in capabilities and capabilities != interface
+    assert "repository" in interface and ":app.py#L" in interface
     assert "users" in database and "id" in database and "name" in database
     assert "## ER 关系图" in database and "flowchart LR" in database
     assert "REQ-BIZ-001" in requirements and "管理员可以创建用户" in requirements
     assert "current_user.role != 'admin'" in requirements
+    assert "## HTTP 接口" not in requirements
+    assert "## HTTP 接口" not in architecture
+    assert "## HTTP 接口" not in detailed
+    assert "## HTTP 接口" not in user_guide
+    assert requirements != user_guide
     acceptance = (target / "demo-验收规格.md").read_text(encoding="utf-8")
     assert "创建成功后返回用户标识" in acceptance
+    assert "## 证据索引" not in "".join(
+        path.read_text(encoding="utf-8") for path in target.glob("*.md")
+    )
     assert "must-not-leak" not in "".join(
         path.read_text(encoding="utf-8") for path in target.glob("*.md")
     )
     assert not (repo / ".loreloop").exists()
+
+
+def test_package_export_defaults_to_baseline_zip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repository(tmp_path / "demo", {"app.py": "VALUE = 1\n"})
+    monkeypatch.chdir(repo)
+
+    assert main(["knowledge", "export", "--format", "package"]) == 0
+
+    package = repo / "baseline.zip"
+    assert package.is_file()
+    assert main(["knowledge", "replay", str(package)]) == 0
 
 
 def test_cli_docs_export_emits_only_six_documents_without_optional_evidence(
@@ -128,6 +155,13 @@ def test_cli_docs_export_emits_only_six_documents_without_optional_evidence(
     assert len(tuple(target.glob("*.md"))) == 6
     assert not tuple(target.glob("*接口契约.md"))
     assert not tuple(target.glob("*数据库设计.md"))
+    requirements = (target / "library-需求规格.md").read_text(encoding="utf-8")
+    user_guide = (target / "library-用户手册.md").read_text(encoding="utf-8")
+    acceptance = (target / "library-验收规格.md").read_text(encoding="utf-8")
+    assert "不能作为完整业务需求规格" in requirements
+    assert "无法形成可执行用户操作手册" in user_guide
+    assert "不能用于正式项目验收" in acceptance
+    assert len({requirements, user_guide, acceptance}) == 3
 
 
 def test_cli_package_export_supports_a_non_git_aggregate_project_root(

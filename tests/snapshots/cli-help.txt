@@ -555,7 +555,8 @@ options:
                         audit entries or deterministic project package; docs
                         is a compatibility alias
   --output OUTPUT       audit Markdown file, source-docs directory, or
-                        deliverable .zip package
+                        deliverable .zip package; package/docs defaults to
+                        baseline.zip
   --project-name PROJECT_NAME
                         project name used in source documents
   --requirements PATH   committed Markdown requirements; use repo:NAME/path

@@ -2359,19 +2359,13 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
     from .knowledge.authoritative_source import detect_snapshot_blobs, read_snapshot_blobs
     from .knowledge.repos import RepoConfigError, load_repos
 
-    if not args.output:
-        raise CLIError(
-            "project package export needs an output path",
-            "--format package creates a ZIP or directory package and cannot print it to stdout",
-            "repeat with `--output <name>.zip`",
-        )
     if args.stale:
         raise CLIError(
             "source document export does not accept --stale",
             "the source snapshot is rebuilt from the current clean Git commits",
             "remove --stale and retry, or use --format audit for knowledge-entry drift",
         )
-    output = Path(args.output)
+    output = Path(args.output or "baseline.zip")
     archive_output = is_archive_output(output)
     output_existed: bool | None = None
     try:
@@ -3089,7 +3083,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="audit entries or deterministic project package; docs is a compatibility alias",
     )
     p_knowledge_export.add_argument(
-        "--output", help="audit Markdown file, source-docs directory, or deliverable .zip package"
+        "--output",
+        help=(
+            "audit Markdown file, source-docs directory, or deliverable .zip package; "
+            "package/docs defaults to baseline.zip"
+        ),
     )
     p_knowledge_export.add_argument("--project-name", help="project name used in source documents")
     p_knowledge_export.add_argument(

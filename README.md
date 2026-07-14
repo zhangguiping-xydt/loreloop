@@ -151,7 +151,7 @@ is supported when its member repositories have been declared with
 ```bash
 loreloop knowledge export \
   --format package \
-  --output knowledge-export.zip \
+  --output baseline.zip \
   --project-name your-project \
   --requirements docs/requirements.md
 ```
@@ -162,7 +162,7 @@ These are reviewable Markdown files, not Word/DOCX documents; the Capsule JSON
 is the machine-verifiable representation used by replay.
 
 ```text
-knowledge-export.zip
+baseline.zip
 ├── your-project-功能清单.md
 ├── your-project-需求规格.md
 ├── your-project-系统架构.md
@@ -188,15 +188,15 @@ The Capsule can prove the package closure on a machine with no source, database,
 or key:
 
 ```bash
-loreloop knowledge replay knowledge-export.zip
+loreloop knowledge replay baseline.zip
 ```
 
 For an optional local trust-chain assertion, export with `--attest` and replay
 with `--trusted`:
 
 ```bash
-loreloop knowledge export --format package --output knowledge-export.zip --attest
-loreloop knowledge replay knowledge-export.zip --trusted
+loreloop knowledge export --format package --output baseline.zip --attest
+loreloop knowledge replay baseline.zip --trusted
 ```
 
 `--format docs` remains a compatibility alias and can still target a directory.
