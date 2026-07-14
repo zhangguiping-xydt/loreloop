@@ -76,6 +76,7 @@ def normalize_detection_report(report: DetectionReport) -> DetectionReport:
                 item.name,
                 item.framework,
                 item.scope,
+                item.cases,
             ),
         ),
         configurations=_unique(

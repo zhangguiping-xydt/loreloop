@@ -58,8 +58,8 @@ public class UserServiceTest {
     report = detect_test_source(source, "backend", "src/test/java/UserServiceTest.java")
 
     assert is_supported_test_evidence_path("src/test/java/UserServiceTest.java")
-    assert [(item.name, item.framework, item.scope) for item in report.tests] == [
-        ("createsUser", "junit", "integration")
+    assert [(item.name, item.framework, item.scope, item.cases) for item in report.tests] == [
+        ("UserServiceTest", "junit4", "integration", ("createsUser",))
     ]
     assert report.tests[0].source.line == 6
 

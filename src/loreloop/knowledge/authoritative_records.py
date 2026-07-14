@@ -70,6 +70,7 @@ class TestRecord:
     name: str
     framework: str
     scope: Literal["unit", "integration", "unknown"]
+    cases: tuple[str, ...]
     source: SourceRef
 
 

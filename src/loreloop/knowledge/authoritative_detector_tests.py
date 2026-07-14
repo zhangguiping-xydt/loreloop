@@ -78,7 +78,9 @@ def _framework(source: str, path: str) -> str:
     if lower.endswith((".java", ".kt")):
         if "org.testng" in source:
             return "testng"
-        if "org.junit.jupiter" in source:
+        if "import org.junit.Test" in source or "org.junit.runner" in source:
+            return "junit4"
+        if "org.junit.jupiter.api.Test" in source or "org.junit.jupiter.params" in source:
             return "junit5"
         return "junit"
     if lower.endswith(".py"):
@@ -124,14 +126,18 @@ def detect_test_source(source: str, repository_alias: str, path: str) -> Detecti
         matches = tuple((match.start(), match.group("name")) for match in pattern.finditer(source))
     framework = _framework(source, path)
     scope = _scope(source)
+    if not matches:
+        return DetectionReport()
+    cases = tuple(dict.fromkeys(name for _, name in matches))
+    first_offset = matches[0][0]
     return DetectionReport(
-        tests=tuple(
+        tests=(
             TestRecord(
-                name,
+                PurePosixPath(path).stem,
                 framework,
                 scope,
-                SourceRef(repository_alias, path, _line(source, offset)),
-            )
-            for offset, name in matches
+                cases,
+                SourceRef(repository_alias, path, _line(source, first_offset)),
+            ),
         )
     )

@@ -110,7 +110,13 @@ def build_semantic_records(
             DocumentRowKind.TEST,
             "test",
             item.source,
-            {"name": item.name, "framework": item.framework, "scope": item.scope},
+            {
+                "name": item.name,
+                "framework": item.framework,
+                "scope": item.scope,
+                "case_count": len(item.cases),
+                "cases": ", ".join(item.cases),
+            },
         )
     for item in report.configurations:
         _add(
