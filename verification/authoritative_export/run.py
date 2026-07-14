@@ -172,27 +172,22 @@ def _filesystem_metadata(items: list[tuple[str, Path]]) -> list[dict[str, int | 
     return evidence
 
 
-def _dogfood_metadata(source: Path, commit: str) -> dict[str, object]:
+def _dogfood_metadata(source: Path, commit: str, remote_ref: str) -> dict[str, object]:
     try:
         remote_url = _git(source, "remote", "get-url", "origin")
     except subprocess.CalledProcessError as exc:
         raise SystemExit("dogfood repository must have an origin remote") from exc
     if _PUBLIC_GITHUB_REMOTE.fullmatch(remote_url) is None:
         raise SystemExit("dogfood origin must be a public GitHub HTTPS repository URL")
-    remote_refs = tuple(
-        ref
-        for ref in _git(
-            source,
-            "for-each-ref",
-            "--format=%(refname)",
-            "--contains",
-            commit,
-            "refs/remotes/origin/",
-        ).splitlines()
-        if ref and not ref.endswith("/HEAD")
-    )
-    if not remote_refs:
-        raise SystemExit("dogfood commit must be reachable from an origin remote-tracking ref")
+    if not remote_ref.startswith("refs/remotes/origin/") or remote_ref.endswith("/HEAD"):
+        raise SystemExit("dogfood remote ref must name a concrete refs/remotes/origin/* ref")
+    try:
+        remote_ref_tip = _git(source, "rev-parse", "--verify", remote_ref)
+        _git(source, "merge-base", "--is-ancestor", commit, remote_ref)
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(
+            f"dogfood commit must be reachable from remote-tracking ref {remote_ref}"
+        ) from exc
     tracked_files = len(
         _git(source, "ls-tree", "-r", "--name-only", commit).splitlines()
     )
@@ -202,7 +197,8 @@ def _dogfood_metadata(source: Path, commit: str) -> dict[str, object]:
         )
     return {
         "remote_url": remote_url,
-        "remote_refs": remote_refs,
+        "remote_ref": remote_ref,
+        "remote_ref_tip": remote_ref_tip,
         "tracked_files": tracked_files,
     }
 
@@ -214,6 +210,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--commit", default="HEAD")
     parser.add_argument("--dogfood-repo", type=Path)
     parser.add_argument("--dogfood-commit", default="HEAD")
+    parser.add_argument(
+        "--dogfood-remote-ref", default="refs/remotes/origin/main"
+    )
     parser.add_argument("--filesystem", action="append", type=_filesystem, default=[])
     parser.add_argument("--force", action="store_true")
     return parser
@@ -246,7 +245,9 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("proof requires --dogfood-repo and a frozen large-project commit")
     dogfood_source = args.dogfood_repo.expanduser().resolve()
     dogfood_commit = _git(dogfood_source, "rev-parse", args.dogfood_commit)
-    dogfood_metadata = _dogfood_metadata(dogfood_source, dogfood_commit)
+    dogfood_metadata = _dogfood_metadata(
+        dogfood_source, dogfood_commit, args.dogfood_remote_ref
+    )
     filesystem_evidence = _filesystem_metadata(args.filesystem)
     if replace_output:
         shutil.rmtree(output)
