@@ -117,11 +117,17 @@ def _tree_has_expected_managed(
     if not root.exists():
         return False
     actual = _tree_manifest(root)
-    return all(
-        actual.get(relative) == identity
+    actual_managed = {
+        relative: identity
+        for relative, identity in actual.items()
+        if relative.split("/", 1)[0] in managed_filenames
+    }
+    expected_managed = {
+        relative: identity
         for relative, identity in expected.items()
         if relative.split("/", 1)[0] in managed_filenames
-    )
+    }
+    return actual_managed == expected_managed
 
 
 def _journal_path(output: Path) -> Path:
@@ -254,12 +260,10 @@ def recover_publication(output: Path) -> None:
     try:
         journal = json.loads(journal_path.read_text(encoding="utf-8"))
         stage_name = journal["stage_name"]
-        expected_new = journal["new_digest"]
-        expected_old = journal["old_digest"]
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
         raise PublicationError(f"invalid publication journal: {journal_path}") from exc
     if (
-        journal.get("version") not in {1, 2}
+        journal.get("version") not in {1, 2, 3}
         or journal.get("target_name") != output.name
         or not isinstance(stage_name, str)
         or Path(stage_name).name != stage_name
@@ -267,7 +271,17 @@ def recover_publication(output: Path) -> None:
     ):
         raise PublicationError(f"publication journal does not belong to {output}")
     stage = output.parent / stage_name
-    if journal["version"] == 2:
+    if journal["version"] == 3 and journal.get("state") == "staging":
+        _remove_tree(stage)
+        journal_path.unlink()
+        _fsync_directory(output.parent)
+        return
+    try:
+        expected_new = journal["new_digest"]
+        expected_old = journal["old_digest"]
+    except KeyError as exc:
+        raise PublicationError(f"invalid publication journal: {journal_path}") from exc
+    if journal["version"] in {2, 3}:
         expected_tree = _validated_manifest(journal.get("new_tree"))
         managed_filenames = _managed_names(journal.get("managed_filenames"))
         if _manifest_digest(expected_tree) != expected_new:
@@ -276,7 +290,13 @@ def recover_publication(output: Path) -> None:
             _preserve_operator_files(stage, output, managed_filenames, expected_tree)
             _sync_tree(output)
             _remove_tree(stage)
-        elif _tree_digest(stage if stage.exists() else None) == expected_new:
+        elif (
+            _tree_digest(stage if stage.exists() else None) == expected_new
+            and (
+                expected_old is None
+                or _tree_digest(output if output.exists() else None) == expected_old
+            )
+        ):
             _remove_tree(stage)
         else:
             raise PublicationError("publication recovery found an unrecognized target/stage state")
@@ -372,6 +392,7 @@ def publish_tree(
     files: Iterable[tuple[str, str]],
     *,
     managed_filenames: Iterable[str] = (),
+    expected_output_exists: bool | None = None,
 ) -> None:
     """Install a complete tree; on Linux, updates switch with one directory exchange."""
     output = output.absolute()
@@ -380,10 +401,24 @@ def publish_tree(
     managed = frozenset((*managed_filenames, *published_filenames))
     output.parent.mkdir(parents=True, exist_ok=True)
     recover_publication(output)
+    if expected_output_exists is None:
+        expected_output_exists = output.exists()
+    if expected_output_exists and not output.exists():
+        raise PublicationError(f"output directory disappeared while export was running: {output}")
     stage = output.parent / f".{output.name}.loreloop-stage-{uuid.uuid4().hex}"
-    stage.mkdir(mode=0o700)
+    journal = {
+        "version": 3,
+        "target_name": output.name,
+        "stage_name": stage.name,
+        "old_digest": None,
+        "managed_filenames": sorted(managed),
+        "state": "staging",
+    }
+    _atomic_json(_journal_path(output), journal)
     try:
-        _copy_existing(output, stage)
+        stage.mkdir(mode=0o700)
+        if expected_output_exists:
+            _copy_existing(output, stage)
         for filename in managed:
             if Path(filename).name != filename:
                 raise PublicationError(f"invalid managed filename: {filename}")
@@ -401,17 +436,23 @@ def publish_tree(
         _sync_tree(stage)
         new_tree = _tree_manifest(stage)
         new_digest = _manifest_digest(new_tree)
-        old_digest = _tree_digest(output if output.exists() else None)
-        journal = {
-            "version": 2,
-            "target_name": output.name,
-            "stage_name": stage.name,
-            "old_digest": old_digest,
-            "new_digest": new_digest,
-            "new_tree": new_tree,
-            "managed_filenames": sorted(managed),
-            "state": "install_intent",
-        }
+        old_digest = (
+            _tree_digest(output if output.exists() else None)
+            if expected_output_exists
+            else None
+        )
+        if expected_output_exists and old_digest is None:
+            raise PublicationError(
+                f"output directory disappeared while export was running: {output}"
+            )
+        journal.update(
+            {
+                "old_digest": old_digest,
+                "new_digest": new_digest,
+                "new_tree": new_tree,
+                "state": "install_intent",
+            }
+        )
         _atomic_json(_journal_path(output), journal)
         if old_digest is not None:
             if not _exchange(stage, output):
@@ -433,6 +474,16 @@ def publish_tree(
         _journal_path(output).unlink()
         _fsync_directory(output.parent)
     except BaseException:
-        if not _journal_path(output).exists():
+        journal_path = _journal_path(output)
+        if not journal_path.exists():
             _remove_tree(stage)
+        else:
+            try:
+                pending = json.loads(journal_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                pending = None
+            if isinstance(pending, dict) and pending.get("state") == "staging":
+                _remove_tree(stage)
+                journal_path.unlink()
+                _fsync_directory(output.parent)
         raise

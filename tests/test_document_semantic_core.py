@@ -38,11 +38,16 @@ def test_semantic_core_binds_requirements_and_source_to_stable_records(tmp_path:
     snapshot = capture_source_snapshot(repo)
     blobs = read_snapshot_blobs(snapshot, repo)
     report = detect_source_snapshot(snapshot, repo, requirements=("requirements.md",))
-    first = build_semantic_core(snapshot, blobs, report)
-    second = build_semantic_core(snapshot, blobs, report)
+    first = build_semantic_core(snapshot, blobs, report, project_name="demo")
+    second = build_semantic_core(snapshot, blobs, report, project_name="demo")
+    renamed = build_semantic_core(snapshot, blobs, report, project_name="renamed")
 
     # Then: package/core IDs are deterministic and every record has exact evidence bindings.
     assert first == second
+    assert first.project_name == "demo"
+    assert renamed.project_name == "renamed"
+    assert renamed.semantic_core_sha256 != first.semantic_core_sha256
+    assert renamed.package_id != first.package_id
     assert {record.row_kind.value for record in first.records} >= {
         "InterfaceRow",
         "RequirementRow",
@@ -61,7 +66,9 @@ def test_semantic_core_binds_requirements_and_source_to_stable_records(tmp_path:
     moved_snapshot = capture_source_snapshot(repo)
     moved_blobs = read_snapshot_blobs(moved_snapshot, repo)
     moved_report = detect_source_snapshot(moved_snapshot, repo, requirements=("requirements.md",))
-    moved = build_semantic_core(moved_snapshot, moved_blobs, moved_report)
+    moved = build_semantic_core(
+        moved_snapshot, moved_blobs, moved_report, project_name="demo"
+    )
     moved_interface = next(
         record for record in moved.records if record.row_kind.value == "InterfaceRow"
     )

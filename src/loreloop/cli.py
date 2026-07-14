@@ -2352,6 +2352,7 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
     from .knowledge.authoritative_document_ast import build_document_ast_set
     from .knowledge.authoritative_coverage import render_coverage_summary
     from .knowledge.authoritative_git import GitSnapshotError, capture_source_snapshot
+    from .knowledge.authoritative_ast import AstViolation
     from .knowledge.authoritative_records import DetectionError
     from .knowledge.authoritative_ids import IdentityContractError
     from .knowledge.authoritative_semantic import build_semantic_core
@@ -2372,11 +2373,12 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
         )
     output = Path(args.output)
     archive_output = is_archive_output(output)
+    output_existed: bool | None = None
     try:
         if archive_output:
             ensure_archive_output_ready(output, force=args.force)
         else:
-            ensure_source_output_ready(output, force=args.force)
+            output_existed = ensure_source_output_ready(output, force=args.force)
         peers = load_repos(workdir)
         print("capturing clean Git source snapshot...", file=sys.stderr)
         snapshot = capture_source_snapshot(workdir, peers)
@@ -2388,8 +2390,8 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
         blobs = read_snapshot_blobs(snapshot, workdir, peers)
         report = detect_snapshot_blobs(blobs, requirements=requirements)
         project_name = args.project_name or workdir.name
-        core = build_semantic_core(snapshot, blobs, report)
-        document_set = build_document_ast_set(project_name, core)
+        core = build_semantic_core(snapshot, blobs, report, project_name=project_name)
+        document_set = build_document_ast_set(core)
         documents = render_document_set(document_set)
         print(
             render_coverage_summary(snapshot, blobs, report, len(document_set.documents)),
@@ -2405,6 +2407,7 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
                 output,
                 export_files,
                 managed_filenames=(*source_document_filenames(project_name), CAPSULE_FILENAME),
+                expected_output_exists=output_existed,
             )
         if args.attest:
             from .knowledge.authoritative_trust import attest_export
@@ -2422,6 +2425,7 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
         SourceDocumentError,
         ExportArchiveError,
         GitSnapshotError,
+        AstViolation,
         DetectionError,
         IdentityContractError,
         RepoConfigError,

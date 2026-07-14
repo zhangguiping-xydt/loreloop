@@ -28,6 +28,7 @@ def normalize_detection_report(report: DetectionReport) -> DetectionReport:
         interfaces=_unique(
             report.interfaces,
             lambda item: (
+                item.source.repository_alias,
                 item.kind,
                 item.name,
                 item.method,
@@ -48,19 +49,37 @@ def normalize_detection_report(report: DetectionReport) -> DetectionReport:
         ),
         permissions=_unique(
             report.permissions,
-            lambda item: (item.subject, item.operator, item.expected, item.expression),
+            lambda item: (
+                item.source.repository_alias,
+                item.subject,
+                item.operator,
+                item.expected,
+                item.expression,
+            ),
         ),
         configurations=_unique(
             report.configurations,
-            lambda item: (item.key, item.default, item.required, item.redacted),
+            lambda item: (
+                item.source.repository_alias,
+                item.key,
+                item.default,
+                item.required,
+                item.redacted,
+            ),
         ),
         dependencies=_unique(
             report.dependencies,
-            lambda item: (item.name, item.requirement, item.scope),
+            lambda item: (
+                item.source.repository_alias,
+                item.name,
+                item.requirement,
+                item.scope,
+            ),
         ),
         requirements=_unique(
             report.requirements,
             lambda item: (
+                item.source.repository_alias,
                 item.external_id,
                 item.title,
                 item.statement,
@@ -70,11 +89,16 @@ def normalize_detection_report(report: DetectionReport) -> DetectionReport:
         ),
         acceptances=_unique(
             report.acceptances,
-            lambda item: (item.requirement_external_id, item.statement),
+            lambda item: (
+                item.source.repository_alias,
+                item.requirement_external_id,
+                item.statement,
+            ),
         ),
         tables=_unique(
             report.tables,
             lambda item: (
+                item.source.repository_alias,
                 item.name,
                 item.columns,
                 item.primary_key,
@@ -83,6 +107,12 @@ def normalize_detection_report(report: DetectionReport) -> DetectionReport:
         ),
         indexes=_unique(
             report.indexes,
-            lambda item: (item.name, item.table, item.columns, item.unique),
+            lambda item: (
+                item.source.repository_alias,
+                item.name,
+                item.table,
+                item.columns,
+                item.unique,
+            ),
         ),
     )

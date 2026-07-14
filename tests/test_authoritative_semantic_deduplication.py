@@ -28,6 +28,7 @@ def test_semantic_core_collapses_identical_record_identity(tmp_path) -> None:
         snapshot,
         read_snapshot_blobs(snapshot, repo),
         DetectionReport(dependencies=(item, item)),
+        project_name="demo",
     )
 
     assert len(core.records) == 1

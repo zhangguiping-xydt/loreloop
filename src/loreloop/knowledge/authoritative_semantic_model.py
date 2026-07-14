@@ -44,6 +44,7 @@ class SemanticRecord:
 
 @dataclass(frozen=True, slots=True)
 class SemanticCore:
+    project_name: str
     trust_domain_id: str
     repository_config_digest: str
     source_snapshot_sha256: str

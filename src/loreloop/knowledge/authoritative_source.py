@@ -11,29 +11,21 @@ from pathlib import Path
 from .authoritative_detector_config import detect_config_source
 from .authoritative_detector_extended import detect_extended_source, is_extended_source
 from .authoritative_detector_graphql import detect_graphql_source
-from .authoritative_detector_openapi import detect_openapi_source
+from .authoritative_detector_openapi import detect_openapi_source, has_supported_openapi_root
 from .authoritative_detector_prisma import detect_prisma_schema
 from .authoritative_detector_proto import detect_proto_source
 from .authoritative_detector_python import detect_python_source
 from .authoritative_detector_sql import detect_sql_source
 from .authoritative_detector_typescript import detect_typescript_source
-from .authoritative_git import GitSnapshotError, verify_source_snapshot_metadata
-from .authoritative_git_objects import GitObjectError, read_blob_batch
+from .authoritative_git import (
+    GitSnapshotError,
+    read_blob_batch,
+    verify_source_snapshot_metadata,
+)
 from .authoritative_records import DetectionError, DetectionReport, merge_reports
 from .authoritative_report_normalize import normalize_detection_report
 from .authoritative_types import SourceSnapshot
 
-_OPENAPI_MARKER = re.compile(
-    r'''(?mx)
-    ^(?:
-        openapi\s*:\s*["']?3(?:\.\d+){1,2}["']?\s*(?:\#.*)?
-      | swagger\s*:\s*["']?2\.0["']?\s*(?:\#.*)?
-      | [ \t]*\{?[ \t]*["']openapi["']\s*:\s*["']3(?:\.\d+){1,2}["']
-      | [ \t]*\{?[ \t]*["']swagger["']\s*:\s*["']2\.0["']
-    )
-    ''',
-    re.I,
-)
 _AUXILIARY_SEGMENTS = frozenset(
     {"test", "tests", "__tests__", "fixtures", "snapshots", "__snapshots__"}
 )
@@ -83,12 +75,9 @@ def read_snapshot_blobs(
     for repository in snapshot.repositories:
         repo = paths[repository.alias]
         entries = tuple(entry for entry in repository.entries if entry.mode not in {"120000", "160000"})
-        try:
-            payloads = read_blob_batch(
-                repo, tuple(entry.object_id.git_sha1_hex() for entry in entries)
-            )
-        except GitObjectError as exc:
-            raise GitSnapshotError(str(exc)) from exc
+        payloads = read_blob_batch(
+            repo, tuple(entry.object_id.git_sha1_hex() for entry in entries)
+        )
         for entry in entries:
             data = payloads[entry.object_id.git_sha1_hex()]
             digest = hashlib.sha256(data).hexdigest()
@@ -124,8 +113,8 @@ def _is_config(path: str) -> bool:
 
 
 def _is_openapi_contract(path: str, text: str) -> bool:
-    return path.lower().endswith((".json", ".yaml", ".yml")) and bool(
-        _OPENAPI_MARKER.search(text)
+    return path.lower().endswith((".json", ".yaml", ".yml")) and has_supported_openapi_root(
+        text
     )
 
 

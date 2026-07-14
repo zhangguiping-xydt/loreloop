@@ -9,10 +9,14 @@ import zipfile
 from collections.abc import Iterable
 from pathlib import Path
 
+from . import authoritative_capsule_io as capsule_io
+from .authoritative_capsule import CAPSULE_FILENAME
 from .authoritative_documents import SourceDocument
 
 MAX_ARCHIVE_FILES = 16
-MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+MAX_ARCHIVE_COMPRESSED_BYTES = 256 * 1024 * 1024
+MAX_ARCHIVE_MEMBER_COMPRESSED_BYTES = 128 * 1024 * 1024
+MAX_ARCHIVE_COMPRESSION_RATIO = 200
 
 
 class ExportArchiveError(ValueError):
@@ -52,6 +56,54 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _managed_limit(filename: str) -> int:
+    return (
+        capsule_io.MAX_CAPSULE_BYTES
+        if filename == CAPSULE_FILENAME
+        else capsule_io.MAX_DOCUMENT_BYTES
+    )
+
+
+def _validate_member(info: zipfile.ZipInfo) -> None:
+    _safe_filename(info.filename)
+    if info.is_dir() or info.flag_bits & 0x1:
+        raise ExportArchiveError(f"archive entry is not a plain file: {info.filename}")
+    unix_mode = info.external_attr >> 16
+    file_type = stat.S_IFMT(unix_mode)
+    if file_type not in {0, stat.S_IFREG}:
+        raise ExportArchiveError(f"archive entry is not a regular file: {info.filename}")
+    if info.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}:
+        raise ExportArchiveError(f"archive entry uses unsupported compression: {info.filename}")
+    if info.compress_size > MAX_ARCHIVE_MEMBER_COMPRESSED_BYTES:
+        raise ExportArchiveError(
+            f"archive member exceeds its compressed size limit: {info.filename}"
+        )
+    if info.file_size and (
+        info.compress_size == 0
+        or info.file_size > info.compress_size * MAX_ARCHIVE_COMPRESSION_RATIO
+    ):
+        raise ExportArchiveError(
+            f"archive member exceeds the compression ratio limit: {info.filename}"
+        )
+
+
+def _read_member(
+    archive: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    *,
+    limit: int,
+) -> bytes:
+    if info.file_size > limit:
+        raise ExportArchiveError(f"archive member exceeds its expanded size limit: {info.filename}")
+    with archive.open(info, mode="r") as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise ExportArchiveError(f"archive member exceeds its expanded size limit: {info.filename}")
+    if len(data) != info.file_size:
+        raise ExportArchiveError(f"archive entry length mismatch: {info.filename}")
+    return data
+
+
 def write_export_archive(
     output: Path,
     documents: Iterable[SourceDocument],
@@ -61,14 +113,25 @@ def write_export_archive(
     """Write one reproducible archive and atomically replace its destination."""
     output = output.absolute()
     output.parent.mkdir(parents=True, exist_ok=True)
-    items = tuple(sorted(documents, key=lambda document: document.filename))
-    filenames = tuple(document.filename for document in items)
+    items = tuple(
+        sorted(
+            ((document.filename, document.content.encode("utf-8")) for document in documents),
+            key=lambda item: item[0],
+        )
+    )
+    filenames = tuple(filename for filename, _ in items)
     if len(filenames) != len(set(filenames)):
         raise ExportArchiveError("archive contains duplicate filenames")
     if not 1 <= len(items) <= MAX_ARCHIVE_FILES:
         raise ExportArchiveError("archive file count is outside the supported range")
-    for filename in filenames:
+    total = 0
+    for filename, content in items:
         _safe_filename(filename)
+        if len(content) > _managed_limit(filename):
+            raise ExportArchiveError(f"archive member exceeds its expanded size limit: {filename}")
+        total += len(content)
+    if total > capsule_io.MAX_MANAGED_TOTAL_BYTES:
+        raise ExportArchiveError("archive expands beyond the managed total size limit")
     descriptor, raw_temporary = tempfile.mkstemp(
         prefix=f".{output.name}.loreloop-stage-", suffix=".zip", dir=output.parent
     )
@@ -82,12 +145,17 @@ def write_export_archive(
             compresslevel=9,
             allowZip64=True,
         ) as archive:
-            for document in items:
-                info = zipfile.ZipInfo(document.filename, date_time=(1980, 1, 1, 0, 0, 0))
+            for filename, content in items:
+                info = zipfile.ZipInfo(filename, date_time=(1980, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.create_system = 3
                 info.external_attr = (stat.S_IFREG | 0o644) << 16
-                archive.writestr(info, document.content.encode("utf-8"), compresslevel=9)
+                archive.writestr(info, content, compresslevel=9)
+        if temporary.stat().st_size > MAX_ARCHIVE_COMPRESSED_BYTES:
+            raise ExportArchiveError("archive exceeds the compressed size limit")
+        with zipfile.ZipFile(temporary, mode="r", allowZip64=True) as produced:
+            for info in produced.infolist():
+                _validate_member(info)
         with temporary.open("rb") as stream:
             os.fsync(stream.fileno())
         os.chmod(temporary, 0o644)
@@ -109,7 +177,7 @@ def write_export_archive(
 
 
 def read_export_archive(path: Path) -> dict[str, bytes]:
-    """Read a bounded flat ZIP without accepting links, paths, or duplicate entries."""
+    """Read a bounded flat ZIP, loading Capsule first and only its exact managed set."""
     if path.is_symlink():
         raise ExportArchiveError(f"export archive must not be a symlink: {path}")
     descriptor = -1
@@ -121,7 +189,9 @@ def read_export_archive(path: Path) -> dict[str, bytes]:
     if not stat.S_ISREG(metadata.st_mode):
         os.close(descriptor)
         raise ExportArchiveError(f"export archive is not a regular file: {path}")
-    files: dict[str, bytes] = {}
+    if metadata.st_size > MAX_ARCHIVE_COMPRESSED_BYTES:
+        os.close(descriptor)
+        raise ExportArchiveError("archive exceeds the compressed size limit")
     try:
         with os.fdopen(descriptor, "rb") as stream:
             descriptor = -1
@@ -129,37 +199,56 @@ def read_export_archive(path: Path) -> dict[str, bytes]:
                 entries = archive.infolist()
                 if not 1 <= len(entries) <= MAX_ARCHIVE_FILES:
                     raise ExportArchiveError("archive file count is outside the supported range")
-                total = 0
+                by_name: dict[str, zipfile.ZipInfo] = {}
                 for info in entries:
-                    _safe_filename(info.filename)
-                    if info.filename in files:
+                    _validate_member(info)
+                    if info.filename in by_name:
                         raise ExportArchiveError(
                             f"archive contains duplicate filename: {info.filename}"
                         )
-                    if info.is_dir() or info.flag_bits & 0x1:
+                    by_name[info.filename] = info
+                capsule_info = by_name.get(CAPSULE_FILENAME)
+                if capsule_info is None:
+                    raise ExportArchiveError(f"archive is missing {CAPSULE_FILENAME}")
+                capsule = _read_member(
+                    archive,
+                    capsule_info,
+                    limit=capsule_io.MAX_CAPSULE_BYTES,
+                )
+                filenames = capsule_io.managed_document_filenames(capsule)
+                expected = {CAPSULE_FILENAME, *filenames}
+                missing = expected - set(by_name)
+                extras = set(by_name) - expected
+                if missing or extras:
+                    raise ExportArchiveError(
+                        f"archive file set mismatch; missing={sorted(missing)}, extra={sorted(extras)}"
+                    )
+                declared_total = capsule_info.file_size + sum(
+                    by_name[filename].file_size for filename in filenames
+                )
+                if declared_total > capsule_io.MAX_MANAGED_TOTAL_BYTES:
+                    raise ExportArchiveError("archive expands beyond the managed total size limit")
+                files = {CAPSULE_FILENAME: capsule}
+                total = len(capsule)
+                for filename in filenames:
+                    data = _read_member(
+                        archive,
+                        by_name[filename],
+                        limit=capsule_io.MAX_DOCUMENT_BYTES,
+                    )
+                    total += len(data)
+                    if total > capsule_io.MAX_MANAGED_TOTAL_BYTES:
                         raise ExportArchiveError(
-                            f"archive entry is not a plain file: {info.filename}"
+                            "archive expands beyond the managed total size limit"
                         )
-                    unix_mode = info.external_attr >> 16
-                    file_type = stat.S_IFMT(unix_mode)
-                    if file_type not in {0, stat.S_IFREG}:
-                        raise ExportArchiveError(
-                            f"archive entry is not a regular file: {info.filename}"
-                        )
-                    total += info.file_size
-                    if total > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
-                        raise ExportArchiveError(
-                            "archive expands beyond the supported size limit"
-                        )
-                    data = archive.read(info)
-                    if len(data) != info.file_size:
-                        raise ExportArchiveError(
-                            f"archive entry length mismatch: {info.filename}"
-                        )
-                    files[info.filename] = data
-    except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+                    files[filename] = data
+                return files
+    except ExportArchiveError:
+        raise
+    except capsule_io.CapsuleIoError as exc:
+        raise ExportArchiveError(f"archive Capsule is invalid: {exc}") from exc
+    except (OSError, zipfile.BadZipFile, RuntimeError, EOFError, ValueError) as exc:
         raise ExportArchiveError(f"cannot read export archive: {exc}") from exc
     finally:
         if descriptor >= 0:
             os.close(descriptor)
-    return files

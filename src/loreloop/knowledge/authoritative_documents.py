@@ -46,13 +46,14 @@ class SourceDocument:
     content: str
 
 
-def _project_name(value: str) -> str:
+def normalize_project_name(value: str) -> str:
+    """Return the single canonical project name used by every export layer."""
     safe = _UNSAFE_NAME.sub("-", value.strip()).strip(".-_")[:80]
     return safe or "project"
 
 
 def source_document_filenames(project_name: str) -> tuple[str, ...]:
-    project = _project_name(project_name)
+    project = normalize_project_name(project_name)
     return tuple(f"{project}-{family}.md" for family in _DOCUMENT_FAMILIES)
 
 
@@ -69,7 +70,7 @@ def build_source_documents(
     report: DetectionReport,
 ) -> tuple[SourceDocument, ...]:
     """Build six fixed documents plus source-supported interface/database documents."""
-    project = _project_name(project_name)
+    project = normalize_project_name(project_name)
     families = [(family, family) for family in _DOCUMENT_FAMILIES[:6]]
     if report.interface_document_applicable:
         families.append(("接口契约", "接口契约"))
@@ -152,13 +153,14 @@ def build_source_documents(
     )
 
 
-def ensure_source_output_ready(output: Path, *, force: bool) -> None:
+def ensure_source_output_ready(output: Path, *, force: bool) -> bool:
     if output.is_symlink():
         raise SourceDocumentError(f"output directory must not be a symlink: {output}")
     if output.exists() and not output.is_dir():
         raise SourceDocumentError(f"output path is not a directory: {output}")
     if output.exists() and any(output.iterdir()) and not force:
         raise SourceDocumentError(f"output directory is not empty: {output}")
+    return output.exists()
 
 
 def write_source_documents(
@@ -166,6 +168,7 @@ def write_source_documents(
     documents: tuple[SourceDocument, ...],
     *,
     managed_filenames: tuple[str, ...] = (),
+    expected_output_exists: bool | None = None,
 ) -> None:
     """Publish the complete document set as one crash-recoverable tree transaction."""
     try:
@@ -173,6 +176,7 @@ def write_source_documents(
             output,
             ((document.filename, document.content) for document in documents),
             managed_filenames=managed_filenames,
+            expected_output_exists=expected_output_exists,
         )
     except PublicationError as exc:
         raise SourceDocumentError(str(exc)) from exc

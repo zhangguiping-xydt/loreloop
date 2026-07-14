@@ -168,6 +168,8 @@ knowledge-export.zip
 TypeScript/JavaScript、Java/Kotlin、Go、Rust、C#、SQL、SQLAlchemy、Django ORM、Prisma、
 TypeORM、常见 migration、OpenAPI/Swagger、GraphQL、protobuf、Docker、Compose 和 Kubernetes。
 终端会列出各仓库文件数、检测器覆盖、事实数量和未语义解析的文件类型。
+规范化后的 `--project-name` 也属于 SemanticCore 身份，因此文件名、AST、Markdown 和 package ID
+来自同一条确定性投影链，不是可以脱离证据单独修改的标签。
 
 `.loreloop-export.json` 可以在没有源码、数据库或密钥的机器上证明整套文档没有缺失或篡改：
 

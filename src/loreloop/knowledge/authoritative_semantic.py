@@ -11,6 +11,7 @@ from .authoritative_ids import (
     require_unique_ids,
     semantic_core_sha256,
 )
+from .authoritative_documents import normalize_project_name
 from .authoritative_records import DetectionError, DetectionReport
 from .authoritative_semantic_model import SemanticContext, SemanticCore
 from .authoritative_semantic_records import build_semantic_records
@@ -76,6 +77,8 @@ def build_semantic_core(
     snapshot: SourceSnapshot,
     blobs: tuple[SnapshotBlob, ...],
     report: DetectionReport,
+    *,
+    project_name: str,
 ) -> SemanticCore:
     """Bind every detected fact to exact committed bytes and stable semantic IDs."""
     trust, config, snapshot_digest = _identities(snapshot)
@@ -90,12 +93,14 @@ def build_semantic_core(
     )
     records, evidence = build_semantic_records(context, report)
     require_unique_ids(tuple(record.record_id for record in records))
+    project = normalize_project_name(project_name)
     provisional = SemanticCore(
-        trust, config, snapshot_digest, records, evidence, "0" * 64, "0" * 64
+        project, trust, config, snapshot_digest, records, evidence, "0" * 64, "0" * 64
     )
     payload = semantic_core_payload(provisional)
     core_digest = semantic_core_sha256(payload)
     return SemanticCore(
+        project,
         trust,
         config,
         snapshot_digest,
@@ -133,6 +138,7 @@ def semantic_core_payload(core: SemanticCore) -> CanonicalInput:
         for evidence in core.evidence
     ]
     return {
+        "project_name": core.project_name,
         "trust_domain_id": core.trust_domain_id,
         "repository_config_digest": core.repository_config_digest,
         "source_snapshot_sha256": core.source_snapshot_sha256,

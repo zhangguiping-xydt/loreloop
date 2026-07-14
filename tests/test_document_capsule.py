@@ -36,8 +36,13 @@ def test_capsule_binds_core_full_ast_and_markdown_without_raw_git_or_secrets(
     _git(repo, "commit", "-m", "initial")
     snapshot = capture_source_snapshot(repo)
     blobs = read_snapshot_blobs(snapshot, repo)
-    core = build_semantic_core(snapshot, blobs, detect_source_snapshot(snapshot, repo))
-    document_set = build_document_ast_set("demo", core)
+    core = build_semantic_core(
+        snapshot,
+        blobs,
+        detect_source_snapshot(snapshot, repo),
+        project_name="demo",
+    )
+    document_set = build_document_ast_set(core)
     documents = render_document_set(document_set)
 
     # When: Capsule creation and independent recomputation run.

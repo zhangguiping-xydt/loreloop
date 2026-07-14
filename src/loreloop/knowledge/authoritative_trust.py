@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from ..evidence.chain import EvidenceChain, EvidenceRecord
 from .authoritative_capsule import CapsuleArtifact
+from .authoritative_git import (
+    GitSnapshotError,
+    capture_source_snapshot,
+    git_common_dir_identity,
+    repository_snapshot_sha256,
+    source_snapshot_sha256,
+)
 from .authoritative_types import SourceSnapshot
 
 ATTESTATION_EVENT = "authoritative_export_attested"
@@ -23,30 +29,6 @@ def _location_digest(path: Path) -> str:
     return hashlib.sha256(
         b"loreloop-repository-location-v1\0" + str(path.resolve()).encode("utf-8")
     ).hexdigest()
-
-
-def _git_common_dir_identity(path: Path) -> tuple[int, int]:
-    completed = subprocess.run(
-        ["git", "rev-parse", "--git-common-dir"],
-        cwd=path,
-        check=False,
-        capture_output=True,
-    )
-    if completed.returncode != 0:
-        raise ExportTrustError(f"cannot inspect trusted Git checkout: {path}")
-    raw = completed.stdout.decode("utf-8", errors="replace").strip()
-    if not raw:
-        raise ExportTrustError(f"trusted Git checkout has no common directory: {path}")
-    common = Path(raw)
-    if not common.is_absolute():
-        common = path / common
-    try:
-        metadata = common.resolve().stat()
-    except OSError as exc:
-        raise ExportTrustError(f"cannot inspect trusted Git common directory: {path}") from exc
-    if metadata.st_dev < 0 or metadata.st_ino <= 0:
-        raise ExportTrustError(f"trusted Git common directory has no stable local identity: {path}")
-    return metadata.st_dev, metadata.st_ino
 
 
 def _repository_paths(
@@ -71,21 +53,28 @@ def repository_bindings(
     snapshot: SourceSnapshot,
     root: Path,
     peers: Mapping[str, Path] | None = None,
-) -> dict[str, dict[str, str]]:
+) -> dict[str, dict[str, str | int]]:
     """Bind each alias to both Git lineage and this reviewed checkout location."""
     paths = _repository_paths(snapshot, root, peers)
-    bindings: dict[str, dict[str, str]] = {}
+    bindings: dict[str, dict[str, str | int]] = {}
     for repository in snapshot.repositories:
         identity = repository.repository_identity_sha256
         if identity is None:
             raise ExportTrustError(f"repository {repository.alias!r} has no stable identity")
-        common_device, common_inode = _git_common_dir_identity(paths[repository.alias])
+        try:
+            common_device, common_inode = git_common_dir_identity(paths[repository.alias])
+        except GitSnapshotError as exc:
+            raise ExportTrustError(str(exc)) from exc
         bindings[repository.alias] = {
             "repository_identity_sha256": identity,
             "location_sha256": _location_digest(paths[repository.alias]),
             "checkout_path": str(paths[repository.alias]),
             "git_common_dir_device": common_device,
             "git_common_dir_inode": common_inode,
+            "commit_id": repository.commit_id.hex,
+            "tree_id": repository.tree_id.hex,
+            "index_sha256": repository.index_sha256,
+            "source_snapshot_sha256": repository_snapshot_sha256(repository),
         }
     return bindings
 
@@ -104,6 +93,7 @@ def attest_export(
         {
             "package_id": package_id,
             "capsule_sha256": capsule.sha256,
+            "source_snapshot_sha256": source_snapshot_sha256(snapshot),
             "repositories": repository_bindings(snapshot, workdir, peers),
         },
     )
@@ -136,6 +126,21 @@ def verify_trusted_export(
     stored = record.payload.get("repositories")
     if not isinstance(stored, dict):
         raise ExportTrustError("trusted repository bindings are invalid")
+    stored_snapshot = record.payload.get("source_snapshot_sha256")
+    if not isinstance(stored_snapshot, str):
+        raise ExportTrustError("trusted source snapshot binding is invalid; attest a fresh export")
+    try:
+        current_snapshot = capture_source_snapshot(workdir, peers, require_clean=False)
+    except GitSnapshotError as exc:
+        raise ExportTrustError(f"cannot verify trusted source snapshot: {exc}") from exc
+    current_snapshot_digest = source_snapshot_sha256(current_snapshot)
+    if not hmac.compare_digest(stored_snapshot, current_snapshot_digest):
+        raise ExportTrustError("trusted repository source snapshot changed after export")
+    current_bindings = repository_bindings(current_snapshot, workdir, peers)
+    if set(current_bindings) != set(stored):
+        raise ExportTrustError(
+            "trusted repository identity or checkout location changed after export"
+        )
     configured = {name: path.resolve() for name, path in (peers or {}).items()}
     if "." in stored:
         configured["."] = workdir.resolve()
@@ -150,30 +155,24 @@ def verify_trusted_export(
             raise ExportTrustError(
                 "trusted repository identity or checkout location changed after export"
             )
-        common_device, common_inode = _git_common_dir_identity(path)
-        if (
-            type(raw_binding.get("git_common_dir_device")) is not int
-            or type(raw_binding.get("git_common_dir_inode")) is not int
-            or raw_binding["git_common_dir_device"] != common_device
-            or raw_binding["git_common_dir_inode"] != common_inode
+        current = current_bindings.get(alias)
+        if current is None:
+            raise ExportTrustError("trusted repository bindings are invalid")
+        for field in (
+            "repository_identity_sha256",
+            "git_common_dir_device",
+            "git_common_dir_inode",
+            "commit_id",
+            "tree_id",
+            "index_sha256",
+            "source_snapshot_sha256",
         ):
-            raise ExportTrustError(
-                "trusted repository checkout instance changed after export"
-            )
-        completed = subprocess.run(
-            ["git", "rev-list", "--max-parents=0", "HEAD"],
-            cwd=path,
-            check=False,
-            capture_output=True,
-        )
-        roots = tuple(sorted(line for line in completed.stdout.splitlines() if line))
-        identity = hashlib.sha256(
-            b"loreloop-git-roots-v1\0" + b"\0".join(roots)
-        ).hexdigest()
-        if completed.returncode != 0 or not roots or not hmac.compare_digest(
-            identity, str(raw_binding.get("repository_identity_sha256"))
-        ):
-            raise ExportTrustError("trusted repository lineage changed after export")
+            if raw_binding.get(field) != current.get(field):
+                if field in {"git_common_dir_device", "git_common_dir_inode"}:
+                    raise ExportTrustError(
+                        "trusted repository checkout instance changed after export"
+                    )
+                raise ExportTrustError("trusted repository source snapshot changed after export")
     if set(configured) != {alias for alias in stored if not alias.startswith("submodule:")}:
         raise ExportTrustError(
             "trusted repository identity or checkout location changed after export"

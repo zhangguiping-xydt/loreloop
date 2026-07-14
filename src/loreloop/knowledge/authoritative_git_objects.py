@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Literal
 
+from .authoritative_git import git_environment
 from .authoritative_types import GitObjectId, SnapshotEntry
 
 _TREE_RECORD = re.compile(rb"(100644|100755|120000|160000) (blob|commit) ([0-9a-f]{40})\t")
@@ -20,7 +21,12 @@ class GitObjectError(RuntimeError):
 
 def _git(repo: Path, *args: str, input_data: bytes | None = None) -> bytes:
     completed = subprocess.run(
-        ["git", *args], cwd=repo, input=input_data, check=False, capture_output=True
+        ["git", *args],
+        cwd=repo,
+        env=git_environment(),
+        input=input_data,
+        check=False,
+        capture_output=True,
     )
     if completed.returncode != 0:
         raise GitObjectError("Git object read failed")

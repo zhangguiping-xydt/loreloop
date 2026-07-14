@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from loreloop.cli import main
-from loreloop.knowledge import authoritative_archive
+from loreloop.knowledge import authoritative_archive, authoritative_capsule_io
 from loreloop.knowledge.authoritative_archive import (
     ExportArchiveError,
     read_export_archive,
@@ -194,12 +194,91 @@ def test_archive_reader_enforces_file_count_and_expansion_limits(
     with pytest.raises(ExportArchiveError, match="file count"):
         _ = read_export_archive(crowded)
 
+    repo = _repository(tmp_path / "repo")
     expanded = tmp_path / "expanded.zip"
-    with zipfile.ZipFile(expanded, "w") as archive:
-        archive.writestr("doc.md", b"four")
-    monkeypatch.setattr(authoritative_archive, "MAX_ARCHIVE_UNCOMPRESSED_BYTES", 3)
-    with pytest.raises(ExportArchiveError, match="size limit"):
+    monkeypatch.chdir(repo)
+    assert main(["knowledge", "export", "--format", "package", "--output", str(expanded)]) == 0
+    monkeypatch.setattr(authoritative_capsule_io, "MAX_DOCUMENT_BYTES", 3)
+    with pytest.raises(ExportArchiveError, match="expanded size limit"):
         _ = read_export_archive(expanded)
+
+
+def test_archive_reader_enforces_compressed_member_total_and_ratio_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compressed = tmp_path / "compressed.zip"
+    with zipfile.ZipFile(compressed, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(".loreloop-export.json", b"x" * 10_000)
+
+    monkeypatch.setattr(authoritative_archive, "MAX_ARCHIVE_COMPRESSION_RATIO", 2)
+    with pytest.raises(ExportArchiveError, match="compression ratio"):
+        _ = read_export_archive(compressed)
+
+    monkeypatch.setattr(authoritative_archive, "MAX_ARCHIVE_COMPRESSION_RATIO", 200)
+    monkeypatch.setattr(authoritative_archive, "MAX_ARCHIVE_MEMBER_COMPRESSED_BYTES", 1)
+    with pytest.raises(ExportArchiveError, match="member exceeds its compressed size"):
+        _ = read_export_archive(compressed)
+
+    monkeypatch.setattr(
+        authoritative_archive,
+        "MAX_ARCHIVE_MEMBER_COMPRESSED_BYTES",
+        128 * 1024 * 1024,
+    )
+    monkeypatch.setattr(
+        authoritative_archive,
+        "MAX_ARCHIVE_COMPRESSED_BYTES",
+        compressed.stat().st_size - 1,
+    )
+    with pytest.raises(ExportArchiveError, match="archive exceeds the compressed size"):
+        _ = read_export_archive(compressed)
+
+
+def test_archive_reads_capsule_before_rejecting_unbound_large_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repository(tmp_path / "repo")
+    package = tmp_path / "package.zip"
+    monkeypatch.chdir(repo)
+    assert main(["knowledge", "export", "--format", "package", "--output", str(package)]) == 0
+    files = read_export_archive(package)
+    extra = tmp_path / "extra.zip"
+    with zipfile.ZipFile(extra, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for filename, content in files.items():
+            archive.writestr(filename, content)
+        archive.writestr("unbound.bin", os.urandom(8 * 1024 * 1024))
+
+    opened: list[str] = []
+    real_open = zipfile.ZipFile.open
+
+    def track_open(self, name, *args, **kwargs):
+        opened.append(name.filename if isinstance(name, zipfile.ZipInfo) else str(name))
+        return real_open(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", track_open)
+    with pytest.raises(ExportArchiveError, match="file set mismatch"):
+        _ = read_export_archive(extra)
+
+    assert opened == [".loreloop-export.json"]
+
+
+def test_archive_enforces_capsule_and_managed_total_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repository(tmp_path / "repo")
+    package = tmp_path / "package.zip"
+    monkeypatch.chdir(repo)
+    assert main(["knowledge", "export", "--format", "package", "--output", str(package)]) == 0
+    with zipfile.ZipFile(package) as archive:
+        capsule_size = archive.getinfo(".loreloop-export.json").file_size
+
+    monkeypatch.setattr(authoritative_capsule_io, "MAX_CAPSULE_BYTES", capsule_size - 1)
+    with pytest.raises(ExportArchiveError, match="expanded size limit"):
+        _ = read_export_archive(package)
+
+    monkeypatch.setattr(authoritative_capsule_io, "MAX_CAPSULE_BYTES", 128 * 1024 * 1024)
+    monkeypatch.setattr(authoritative_capsule_io, "MAX_MANAGED_TOTAL_BYTES", capsule_size)
+    with pytest.raises(ExportArchiveError, match="managed total size limit"):
+        _ = read_export_archive(package)
 
 
 def test_force_archive_replace_keeps_old_package_if_install_fails(

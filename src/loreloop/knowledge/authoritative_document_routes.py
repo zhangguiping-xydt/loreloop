@@ -107,6 +107,10 @@ DOCUMENT_ROUTES = (
     ),
 )
 
+ROUTED_ROW_KINDS = frozenset(
+    row_kind for route in DOCUMENT_ROUTES for row_kind in route.row_kinds
+)
+
 SECTION_ROUTES = {
     DocumentRowKind.INTERFACE: ("interfaces", "HTTP 接口"),
     DocumentRowKind.COMMAND: ("commands", "命令入口"),

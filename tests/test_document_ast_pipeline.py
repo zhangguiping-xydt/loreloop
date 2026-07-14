@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
-from loreloop.knowledge.authoritative_ast import OptionalDocumentFamily
+import pytest
+
+from loreloop.knowledge.authoritative_ast import (
+    AstViolation,
+    DocumentRowKind,
+    OptionalDocumentFamily,
+)
 from loreloop.knowledge.authoritative_document_ast import build_document_ast_set
 from loreloop.knowledge.authoritative_git import capture_source_snapshot
 from loreloop.knowledge.authoritative_semantic import build_semantic_core
@@ -32,10 +39,10 @@ def test_semantic_core_routes_into_exact_typed_document_ast_set(tmp_path: Path) 
     snapshot = capture_source_snapshot(repo)
     blobs = read_snapshot_blobs(snapshot, repo)
     report = detect_source_snapshot(snapshot, repo)
-    core = build_semantic_core(snapshot, blobs, report)
+    core = build_semantic_core(snapshot, blobs, report, project_name="demo")
 
     # When: the package-neutral document AST routing closes.
-    document_set = build_document_ast_set("demo", core)
+    document_set = build_document_ast_set(core)
 
     # Then: 6+2 families, package identity, evidence, and bindings are explicit.
     assert len(document_set.documents) == 8
@@ -57,3 +64,32 @@ def test_semantic_core_routes_into_exact_typed_document_ast_set(tmp_path: Path) 
         for row in section.rows
     )
     assert all(document.evidence_rows for document in document_set.documents)
+
+
+def test_document_ast_rejects_semantic_records_outside_closed_routes(tmp_path: Path) -> None:
+    repo = tmp_path / "project"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.name", "LoreLoop Test")
+    _git(repo, "config", "user.email", "loreloop@example.invalid")
+    _ = (repo / "app.py").write_text(
+        '@app.get("/health")\ndef health(): return True\n', encoding="utf-8"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "initial")
+    snapshot = capture_source_snapshot(repo)
+    blobs = read_snapshot_blobs(snapshot, repo)
+    core = build_semantic_core(
+        snapshot,
+        blobs,
+        detect_source_snapshot(snapshot, repo),
+        project_name="demo",
+    )
+    unsupported = replace(
+        core,
+        records=(replace(core.records[0], row_kind=DocumentRowKind.UI_SURFACE),),
+        evidence=(core.evidence[0],),
+    )
+
+    with pytest.raises(AstViolation, match="outside the closed document routing matrix"):
+        build_document_ast_set(unsupported)

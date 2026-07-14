@@ -30,6 +30,15 @@ class GateResult:
     log_sha256: str
 
 
+def _git_environment() -> dict[str, str]:
+    environment = {
+        name: value for name, value in os.environ.items() if not name.startswith("GIT_")
+    }
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    return environment
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -42,6 +51,7 @@ def _git(repo: Path, *args: str) -> str:
     completed = subprocess.run(
         ["git", *args],
         cwd=repo,
+        env=_git_environment(),
         check=True,
         capture_output=True,
         text=True,
@@ -99,11 +109,13 @@ def _run_gate(
 def _clone_at(source: Path, destination: Path, commit: str) -> None:
     subprocess.run(
         ["git", "clone", "--quiet", "--no-hardlinks", str(source), str(destination)],
+        env=_git_environment(),
         check=True,
     )
     subprocess.run(
         ["git", "checkout", "--quiet", "--detach", commit],
         cwd=destination,
+        env=_git_environment(),
         check=True,
     )
 
@@ -191,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(existing, dict) or existing.get("schema_version") != 1:
             raise SystemExit(f"refusing to replace an unrecognized proof directory: {output}")
         replace_output = True
+    if args.dogfood_repo is None:
+        raise SystemExit("proof requires --dogfood-repo and a frozen large-project commit")
     filesystem_evidence = _filesystem_metadata(args.filesystem)
     if replace_output:
         shutil.rmtree(output)
@@ -446,9 +460,35 @@ def main(argv: list[str] | None = None) -> int:
             for line in _git(checkout, "ls-tree", "-r", "--name-only", commit).splitlines()
             if line
         )
+        gate_names = {gate.name for gate in gates}
+        required_gates = {
+            "full-test-suite",
+            "ruff",
+            "bandit-medium-high",
+            "six-seven-eight-and-aggregate",
+            "capsule-mutants-and-trust",
+            "wheel",
+            "cli-package-help",
+            "wheel-venv",
+            "wheel-install",
+            "wheel-export-smoke",
+            "wheel-replay-smoke",
+            "publication-xfs",
+            "publication-ext4",
+            "large-project-export",
+            "large-project-replay",
+        }
+        proof_complete = (
+            wheel is not None
+            and dogfood is not None
+            and required_gates <= gate_names
+            and len(filesystem_evidence) == 2
+        )
         manifest = {
             "schema_version": 1,
-            "status": "passed" if all(gate.exit_code == 0 for gate in gates) else "failed",
+            "status": "passed"
+            if proof_complete and all(gate.exit_code == 0 for gate in gates)
+            else "failed",
             "implementation_commit": commit,
             "contract": str(CONTRACT),
             "contract_sha256": _sha256(contract),
@@ -462,8 +502,7 @@ def main(argv: list[str] | None = None) -> int:
             "source_sha256": {
                 path: _sha256(checkout / path)
                 for path in tree_files
-                if path in {"src/loreloop/cli.py", "src/loreloop/companion.py"}
-                or path.startswith("src/loreloop/knowledge/authoritative_")
+                if path.startswith("src/loreloop/") and path.endswith(".py")
             },
             "tracked_file_count": len(tree_files),
             "environment": {

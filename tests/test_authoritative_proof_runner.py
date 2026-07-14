@@ -37,3 +37,16 @@ def test_proof_runner_force_requires_a_recognized_prior_manifest(tmp_path: Path)
     assert result.returncode != 0
     assert "without a proof manifest" in result.stderr
     assert (output / "keep.txt").read_text(encoding="utf-8") == "operator data\n"
+
+
+def test_proof_runner_requires_large_project_dogfood(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, str(RUNNER), "--output", str(tmp_path / "proof")],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "requires --dogfood-repo" in result.stderr

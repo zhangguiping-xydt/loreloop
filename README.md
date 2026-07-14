@@ -180,6 +180,9 @@ cover Python, TypeScript/JavaScript, Java/Kotlin, Go, Rust, C#, SQL,
 SQLAlchemy, Django ORM, Prisma, TypeORM, common migrations, OpenAPI/Swagger,
 GraphQL, protobuf, Docker, Compose, and Kubernetes. The CLI prints repository,
 detector, fact, document, and unsupported-suffix coverage.
+The normalized `--project-name` is part of the SemanticCore identity, so names,
+ASTs, Markdown, and package IDs are one deterministic projection rather than
+independent labels.
 
 The Capsule can prove the package closure on a machine with no source, database,
 or key:

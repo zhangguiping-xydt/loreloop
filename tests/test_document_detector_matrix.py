@@ -143,6 +143,64 @@ swagger:
     assert report.interfaces == ()
 
 
+@pytest.mark.parametrize(
+    ("path", "content"),
+    (
+        (
+            "config/settings.json",
+            '''{
+  "service": {
+    "swagger": "2.0",
+    "enabled": true
+  }
+}
+''',
+        ),
+        (
+            "config/settings.yml",
+            '''service:
+  openapi: "3.0.3"
+  enabled: true
+''',
+        ),
+    ),
+)
+def test_nested_business_version_fields_are_not_openapi(
+    tmp_path: Path, path: str, content: str
+) -> None:
+    root = _repository(tmp_path / "backend", {path: content})
+    snapshot = capture_source_snapshot(root)
+
+    report = detect_source_snapshot(snapshot, root)
+
+    assert report.interfaces == ()
+
+
+def test_root_openapi_marker_is_detected_when_it_is_not_the_first_json_field(
+    tmp_path: Path,
+) -> None:
+    root = _repository(
+        tmp_path / "backend",
+        {
+            "contracts/openapi.json": '''{
+  "info": {"title": "demo", "version": "1"},
+  "openapi": "3.0.3",
+  "paths": {
+    "/health": {
+      "get": {"responses": {"200": {"description": "ok"}}}
+    }
+  }
+}
+'''
+        },
+    )
+    snapshot = capture_source_snapshot(root)
+
+    report = detect_source_snapshot(snapshot, root)
+
+    assert tuple(item.path for item in report.interfaces) == ("/health",)
+
+
 def test_snapshot_detection_error_identifies_repository_and_file(tmp_path: Path) -> None:
     root = _repository(
         tmp_path / "backend",

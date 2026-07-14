@@ -49,8 +49,9 @@ def export_dir(tmp_path: Path) -> Path:
         snapshot,
         read_snapshot_blobs(snapshot, repo),
         detect_source_snapshot(snapshot, repo),
+        project_name="demo",
     )
-    document_set = build_document_ast_set("demo", core)
+    document_set = build_document_ast_set(core)
     documents = render_document_set(document_set)
     capsule = build_capsule(core, document_set, documents)
     output = tmp_path / "export"
@@ -252,7 +253,9 @@ def test_replay_rejects_json_identity_tampering_and_duplicate_fields(export_dir:
         replay_capsule_directory(export_dir)
 
 
-def test_replay_rejects_missing_extra_and_unsafe_paths(export_dir: Path) -> None:
+def test_replay_rejects_missing_and_unsafe_paths_but_ignores_unmanaged_files(
+    export_dir: Path,
+) -> None:
     result = replay_capsule_directory(export_dir)
     missing = export_dir / result.documents[0]
     original = missing.read_bytes()
@@ -261,8 +264,9 @@ def test_replay_rejects_missing_extra_and_unsafe_paths(export_dir: Path) -> None
         replay_capsule_directory(export_dir)
     missing.write_bytes(original)
     _ = (export_dir / "extra.md").write_text("extra", encoding="utf-8")
-    with pytest.raises(CapsuleReplayError, match="file set mismatch"):
-        replay_capsule_directory(export_dir)
+    replayed = replay_capsule_directory(export_dir)
+    assert replayed.documents == result.documents
+    assert (export_dir / "extra.md").read_text(encoding="utf-8") == "extra"
     (export_dir / "extra.md").unlink()
 
     payload = _payload(export_dir)

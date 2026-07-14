@@ -123,6 +123,58 @@ def test_capture_source_snapshot_rejects_duplicate_repository_roots(tmp_path: Pa
         _ = capture_source_snapshot(root, {"duplicate": root})
 
 
+def test_capture_rejects_peer_that_is_also_a_discovered_submodule(tmp_path: Path) -> None:
+    dependency = _repository(tmp_path / "dependency", {"lib.py": "VALUE = 1\n"})
+    root = _repository(tmp_path / "root", {"app.py": "VALUE = 1\n"})
+    _ = _git(
+        root,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(dependency),
+        "vendor/dependency",
+    )
+    _ = _git(root, "commit", "-am", "add submodule")
+
+    with pytest.raises(GitSnapshotError, match="same repository"):
+        _ = capture_source_snapshot(
+            root, {"dependency": root / "vendor" / "dependency"}
+        )
+
+
+def test_capture_rejects_linked_worktree_as_a_second_repository_alias(tmp_path: Path) -> None:
+    root = _repository(tmp_path / "root", {"app.py": "VALUE = 1\n"})
+    linked = tmp_path / "linked"
+    _ = _git(root, "worktree", "add", str(linked))
+
+    with pytest.raises(GitSnapshotError, match="same repository"):
+        _ = capture_source_snapshot(root, {"linked": linked})
+
+
+def test_capture_ignores_caller_git_repository_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repository(tmp_path / "root", {"app.py": "VALUE = 1\n"})
+    expected_head = _git(root, "rev-parse", "HEAD")
+    invalid = str(tmp_path / "attacker-controlled")
+    for name in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+    ):
+        monkeypatch.setenv(name, invalid)
+
+    snapshot = capture_source_snapshot(root)
+
+    assert snapshot.repositories[0].commit_id.hex == expected_head
+
+
 def test_capture_source_snapshot_supports_non_git_aggregate_with_declared_repositories(
     tmp_path: Path,
 ) -> None:

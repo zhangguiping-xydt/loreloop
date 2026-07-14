@@ -16,6 +16,7 @@ from .authoritative_capsule import CAPSULE_FILENAME, JsonValue
 from .authoritative_capsule_io import CapsuleIoError, parse_capsule, read_export_files
 from .authoritative_capsule_render import CapsuleRenderError, render_capsule_ast
 from .authoritative_document_ast import build_document_ast_set
+from .authoritative_documents import normalize_project_name
 from .authoritative_ids import (
     AtomIdentity,
     EvidenceIdentity,
@@ -57,12 +58,17 @@ _AST_KEYS = {
 }
 _SEMANTIC_KEYS = {
     "evidence",
+    "project_name",
     "records",
     "repository_config_digest",
     "source_snapshot_sha256",
     "trust_domain_id",
 }
-_LEGACY_SEMANTIC_KEYS = _SEMANTIC_KEYS - {"evidence"}
+_LEGACY_SEMANTIC_KEY_SETS = {
+    frozenset(_SEMANTIC_KEYS - {"evidence"}),
+    frozenset(_SEMANTIC_KEYS - {"project_name"}),
+    frozenset(_SEMANTIC_KEYS - {"project_name", "evidence"}),
+}
 _SEMANTIC_RECORD_KEYS = {
     "atom_id",
     "atom_kind",
@@ -332,9 +338,9 @@ def _validate_core(root: Mapping[str, JsonValue]) -> SemanticCore:
     if root.get("schema_version") != 2:
         raise CapsuleReplayError("unsupported capsule schema version; expected version 2")
     semantic = _mapping(root.get("semantic_core"), "semantic core")
-    if set(semantic) == _LEGACY_SEMANTIC_KEYS:
+    if frozenset(semantic) in _LEGACY_SEMANTIC_KEY_SETS:
         raise CapsuleReplayError(
-            "legacy capsule lacks deterministic SemanticCore evidence closure; regenerate it"
+            "legacy capsule lacks deterministic SemanticCore generation inputs; regenerate it"
         )
     _keys(semantic, _SEMANTIC_KEYS, "semantic core")
     core_digest = _sha256(root.get("semantic_core_sha256"), "semantic core digest")
@@ -343,6 +349,9 @@ def _validate_core(root: Mapping[str, JsonValue]) -> SemanticCore:
     package = _sha256(root.get("package_id"), "package id")
     if package_id(core_digest) != package:
         raise CapsuleReplayError("package id mismatch")
+    project = _text(semantic.get("project_name"), "project name")
+    if normalize_project_name(project) != project:
+        raise CapsuleReplayError("semantic core project name is not canonical")
     trust = _sha256(semantic.get("trust_domain_id"), "trust domain id")
     repository = _sha256(
         semantic.get("repository_config_digest"), "repository configuration digest"
@@ -350,7 +359,9 @@ def _validate_core(root: Mapping[str, JsonValue]) -> SemanticCore:
     snapshot = _sha256(semantic.get("source_snapshot_sha256"), "source snapshot digest")
     evidence = _semantic_evidence(semantic.get("evidence"))
     records = _semantic_records(semantic.get("records"), evidence, trust, repository)
-    core = SemanticCore(trust, repository, snapshot, records, evidence, core_digest, package)
+    core = SemanticCore(
+        project, trust, repository, snapshot, records, evidence, core_digest, package
+    )
     if canon_v4(semantic_core_payload(core)) != canon_v4(semantic):
         raise CapsuleReplayError("semantic core is not in deterministic portable form")
     return core
@@ -376,21 +387,8 @@ def _validate_applicability(value: JsonValue | None, optional: set[str]) -> None
         raise CapsuleReplayError("optional document applicability families are invalid")
 
 
-def _project_name(documents: tuple[Mapping[str, JsonValue], ...]) -> str:
-    for document in documents:
-        ast = _mapping(document.get("ast"), "document AST")
-        if ast.get("required_family") != "capability_catalog":
-            continue
-        title = _text(ast.get("title"), "capability catalog title")
-        suffix = " 功能清单"
-        if not title.endswith(suffix) or len(title) == len(suffix):
-            raise CapsuleReplayError("capability catalog title cannot identify the project")
-        return title[: -len(suffix)]
-    raise CapsuleReplayError("capsule lacks the capability catalog project identity")
-
-
-def _expected_applicability(core: SemanticCore, project_name: str) -> JsonValue:
-    document_set = build_document_ast_set(project_name, core)
+def _expected_applicability(core: SemanticCore) -> JsonValue:
+    document_set = build_document_ast_set(core)
     return [
         {
             "family": item.family.value,
@@ -435,8 +433,7 @@ def _validate_documents(
         ast_digest = hashlib.sha256(canon_v4(ast)).hexdigest()
         if ast_digest != _sha256(document.get("ast_sha256"), f"AST digest for {filename}"):
             raise CapsuleReplayError(f"document AST digest mismatch: {filename}")
-    project_name = _project_name(documents)
-    expected_set = build_document_ast_set(project_name, core)
+    expected_set = build_document_ast_set(core)
     if len(expected_set.documents) != len(documents):
         raise CapsuleReplayError("document set is not the deterministic SemanticCore projection")
     required: set[str] = set()
@@ -491,7 +488,7 @@ def _validate_documents(
         raise CapsuleReplayError("document families are incomplete or invalid")
     _validate_applicability(root.get("applicability"), optional)
     if canon_v4(root.get("applicability")) != canon_v4(
-        _expected_applicability(core, project_name)
+        _expected_applicability(core)
     ):
         raise CapsuleReplayError(
             "document applicability is not the deterministic SemanticCore projection"
@@ -520,7 +517,7 @@ def _replay_capsule_files(
             core,
             allow_extra_non_markdown=allow_extra_non_markdown,
         )
-    except (CapsuleRenderError, IdentityContractError) as exc:
+    except (AstViolation, CapsuleRenderError, IdentityContractError) as exc:
         raise CapsuleReplayError(f"document AST cannot be replayed: {exc}") from exc
     claim = CapsuleTrustClaim(
         hashlib.sha256(capsule_bytes).hexdigest(),

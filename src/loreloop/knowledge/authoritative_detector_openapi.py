@@ -19,6 +19,12 @@ from .authoritative_records import (
 
 Object: TypeAlias = Mapping[str, YamlValue]
 _METHODS = ("get", "post", "put", "patch", "delete", "head", "options", "trace")
+_YAML_ROOT_VERSION = re.compile(
+    r'''(?mx)
+    ^(?P<key_quote>["']?)(?P<key>openapi|swagger)(?P=key_quote)\s*:\s*
+    (?P<value_quote>["']?)(?P<version>[^\s#"']+)(?P=value_quote)\s*(?:\#.*)?$
+    '''
+)
 
 
 def _object(value: YamlValue, label: str) -> Object:
@@ -50,6 +56,77 @@ def _json_object(pairs: list[tuple[str, YamlValue]]) -> dict[str, YamlValue]:
             raise DetectionError(f"duplicate OpenAPI JSON key: {key}")
         result[key] = value
     return result
+
+
+def _supported_version(key: str, value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    if key == "openapi":
+        return re.fullmatch(r"3(?:\.\d+){1,2}", value) is not None
+    return key == "swagger" and value == "2.0"
+
+
+def _json_root_versions(source: str) -> tuple[tuple[str, object], ...]:
+    """Read only top-level JSON fields, retaining markers found before later syntax errors."""
+    decoder = json.JSONDecoder()
+    index = 0
+    length = len(source)
+
+    def whitespace(position: int) -> int:
+        while position < length and source[position].isspace():
+            position += 1
+        return position
+
+    index = whitespace(index)
+    if index >= length or source[index] != "{":
+        return ()
+    index += 1
+    markers: list[tuple[str, object]] = []
+    while True:
+        index = whitespace(index)
+        if index >= length or source[index] == "}":
+            return tuple(markers)
+        try:
+            key, index = decoder.raw_decode(source, index)
+        except json.JSONDecodeError:
+            return tuple(markers)
+        if not isinstance(key, str):
+            return tuple(markers)
+        index = whitespace(index)
+        if index >= length or source[index] != ":":
+            return tuple(markers)
+        index = whitespace(index + 1)
+        try:
+            value, index = decoder.raw_decode(source, index)
+        except json.JSONDecodeError:
+            return tuple(markers)
+        if key in {"openapi", "swagger"}:
+            markers.append((key, value))
+        index = whitespace(index)
+        if index >= length or source[index] == "}":
+            return tuple(markers)
+        if source[index] != ",":
+            return tuple(markers)
+        index += 1
+
+
+def has_supported_openapi_root(source: str) -> bool:
+    """Return true only for a supported root-level OpenAPI/Swagger version marker."""
+    stripped = source.lstrip()
+    if stripped.startswith("{"):
+        return any(_supported_version(key, value) for key, value in _json_root_versions(source))
+    try:
+        parsed = parse_yaml_contract(source)
+    except DetectionError:
+        parsed = None
+    if isinstance(parsed, dict) and any(
+        _supported_version(key, parsed.get(key)) for key in ("openapi", "swagger")
+    ):
+        return True
+    for match in _YAML_ROOT_VERSION.finditer(source):
+        if _supported_version(match.group("key"), match.group("version")):
+            return True
+    return False
 
 
 def _load(source: str, path: str) -> Object:

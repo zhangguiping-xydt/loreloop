@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -45,7 +46,7 @@ def test_recovery_finishes_cleanup_after_crash_immediately_after_exchange(
     def crash_on_installed(path: Path, payload: dict[str, object]) -> None:
         nonlocal calls
         calls += 1
-        if calls == 2:
+        if calls == 3:
             raise RuntimeError("simulated crash")
         real_write(path, payload)
 
@@ -128,7 +129,7 @@ def test_update_preserves_operator_file_arriving_around_directory_exchange(
     def crash_after_exchange(path: Path, payload: dict[str, object]) -> None:
         nonlocal journal_writes
         journal_writes += 1
-        if journal_writes == 2:
+        if journal_writes == 3:
             raise RuntimeError("simulated post-exchange crash")
         real_write(path, payload)
 
@@ -186,3 +187,117 @@ def test_publish_rejects_symlinks_in_preserved_operator_tree(tmp_path: Path) -> 
     assert outside.read_text(encoding="utf-8") == "outside\n"
     assert not (output / "doc.md").exists()
     assert _residue(tmp_path, output.name) == ()
+
+
+def test_preflight_absence_remains_no_replace_until_first_install(tmp_path: Path) -> None:
+    output = tmp_path / "export"
+    output.mkdir()
+    (output / "operator.txt").write_text("operator\n", encoding="utf-8")
+
+    with pytest.raises(authoritative_publish.PublicationError, match="appeared"):
+        authoritative_publish.publish_tree(
+            output,
+            (("doc.md", "new\n"),),
+            expected_output_exists=False,
+        )
+
+    assert (output / "operator.txt").read_text(encoding="utf-8") == "operator\n"
+    assert not (output / "doc.md").exists()
+    assert _residue(tmp_path, output.name) == ()
+
+
+def test_recovery_discards_partial_stage_created_before_install_intent(tmp_path: Path) -> None:
+    output = tmp_path / "export"
+    stage = tmp_path / ".export.loreloop-stage-interrupted"
+    stage.mkdir()
+    (stage / "partial.md").write_text("partial\n", encoding="utf-8")
+    journal = tmp_path / ".export.loreloop-journal.json"
+    journal.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "target_name": "export",
+                "stage_name": stage.name,
+                "old_digest": None,
+                "managed_filenames": ["doc.md"],
+                "state": "staging",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    authoritative_publish.recover_publication(output)
+
+    assert not stage.exists()
+    assert not journal.exists()
+
+
+def test_recovery_rejects_extra_managed_file_after_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "export"
+    authoritative_publish.publish_tree(
+        output,
+        (("doc.md", "old\n"), ("stale.md", "old stale\n")),
+        managed_filenames=("doc.md", "stale.md"),
+    )
+    real_write = authoritative_publish._atomic_json
+    calls = 0
+
+    def crash_after_exchange(path: Path, payload: dict[str, object]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise RuntimeError("simulated post-exchange crash")
+        real_write(path, payload)
+
+    monkeypatch.setattr(authoritative_publish, "_atomic_json", crash_after_exchange)
+    with pytest.raises(RuntimeError, match="post-exchange crash"):
+        authoritative_publish.publish_tree(
+            output,
+            (("doc.md", "new\n"),),
+            managed_filenames=("doc.md", "stale.md"),
+        )
+    (output / "stale.md").write_text("racing managed file\n", encoding="utf-8")
+    monkeypatch.setattr(authoritative_publish, "_atomic_json", real_write)
+
+    with pytest.raises(authoritative_publish.PublicationError, match="unrecognized"):
+        authoritative_publish.recover_publication(output)
+
+    assert (tmp_path / ".export.loreloop-journal.json").exists()
+
+
+def test_recovery_rejects_extra_managed_file_after_identical_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "export"
+    authoritative_publish.publish_tree(
+        output,
+        (("doc.md", "same\n"),),
+        managed_filenames=("doc.md", "stale.md"),
+    )
+    real_write = authoritative_publish._atomic_json
+    calls = 0
+
+    def crash_after_exchange(path: Path, payload: dict[str, object]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise RuntimeError("simulated post-exchange crash")
+        real_write(path, payload)
+
+    monkeypatch.setattr(authoritative_publish, "_atomic_json", crash_after_exchange)
+    with pytest.raises(RuntimeError, match="post-exchange crash"):
+        authoritative_publish.publish_tree(
+            output,
+            (("doc.md", "same\n"),),
+            managed_filenames=("doc.md", "stale.md"),
+        )
+    (output / "stale.md").write_text("racing managed file\n", encoding="utf-8")
+    monkeypatch.setattr(authoritative_publish, "_atomic_json", real_write)
+
+    with pytest.raises(authoritative_publish.PublicationError, match="unrecognized"):
+        authoritative_publish.recover_publication(output)
+
+    assert (tmp_path / ".export.loreloop-journal.json").exists()

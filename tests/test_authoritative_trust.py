@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -76,6 +77,98 @@ def test_trusted_export_rejects_same_history_clone_recreated_at_original_path(
         _ = verify_trusted_export(
             chain.verify(), root, capsule, "2" * 64, {"peer": peer}
         )
+
+
+def test_trusted_export_rejects_different_head_in_same_checkout(tmp_path: Path) -> None:
+    root = _repository(tmp_path / "root")
+    snapshot = capture_source_snapshot(root)
+    capsule = CapsuleArtifact(".loreloop-export.json", "{}\n", "1" * 64)
+    chain = EvidenceChain.for_workdir(root, key_dir=tmp_path / "keys")
+    _ = attest_export(chain, root, snapshot, capsule, "2" * 64)
+    (root / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "changed")
+
+    with pytest.raises(ExportTrustError, match="source snapshot changed"):
+        _ = verify_trusted_export(chain.verify(), root, capsule, "2" * 64)
+
+
+def test_trusted_export_ignores_git_dir_redirect_during_clone_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repository(tmp_path / "root")
+    snapshot = capture_source_snapshot(root)
+    capsule = CapsuleArtifact(".loreloop-export.json", "{}\n", "1" * 64)
+    chain = EvidenceChain.for_workdir(root, key_dir=tmp_path / "keys")
+    _ = attest_export(chain, root, snapshot, capsule, "2" * 64)
+    records = chain.verify()
+    original = tmp_path / "original"
+    root.rename(original)
+    subprocess.run(["git", "clone", str(original), str(root)], check=True, capture_output=True)
+    (root / "app.py").write_text("MALICIOUS = True\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "replacement")
+    monkeypatch.setenv("GIT_DIR", str(original / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(root))
+
+    with pytest.raises(ExportTrustError, match="source snapshot changed"):
+        _ = verify_trusted_export(records, root, capsule, "2" * 64)
+
+
+def test_trusted_export_rejects_git_contents_replaced_inside_same_directory_inode(
+    tmp_path: Path,
+) -> None:
+    root = _repository(tmp_path / "root")
+    snapshot = capture_source_snapshot(root)
+    capsule = CapsuleArtifact(".loreloop-export.json", "{}\n", "1" * 64)
+    chain = EvidenceChain.for_workdir(root, key_dir=tmp_path / "keys")
+    _ = attest_export(chain, root, snapshot, capsule, "2" * 64)
+    records = chain.verify()
+    replacement = tmp_path / "replacement"
+    subprocess.run(["git", "clone", str(root), str(replacement)], check=True, capture_output=True)
+    (replacement / "app.py").write_text("MALICIOUS = True\n", encoding="utf-8")
+    _git(replacement, "add", "-A")
+    _git(
+        replacement,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-m",
+        "replacement",
+    )
+    git_directory = root / ".git"
+    original_identity = (git_directory.stat().st_dev, git_directory.stat().st_ino)
+    for child in git_directory.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    for child in (replacement / ".git").iterdir():
+        destination = git_directory / child.name
+        if child.is_dir() and not child.is_symlink():
+            shutil.copytree(child, destination, symlinks=True)
+        else:
+            shutil.copy2(child, destination, follow_symlinks=False)
+    (root / "app.py").write_text("MALICIOUS = True\n", encoding="utf-8")
+    assert (git_directory.stat().st_dev, git_directory.stat().st_ino) == original_identity
+
+    with pytest.raises(ExportTrustError, match="source snapshot changed"):
+        _ = verify_trusted_export(records, root, capsule, "2" * 64)
+
+
+def test_trusted_export_allows_untracked_export_artifact(tmp_path: Path) -> None:
+    root = _repository(tmp_path / "root")
+    snapshot = capture_source_snapshot(root)
+    capsule = CapsuleArtifact(".loreloop-export.json", "{}\n", "1" * 64)
+    chain = EvidenceChain.for_workdir(root, key_dir=tmp_path / "keys")
+    _ = attest_export(chain, root, snapshot, capsule, "2" * 64)
+    (root / "knowledge.zip").write_bytes(b"export artifact")
+
+    verified = verify_trusted_export(chain.verify(), root, capsule, "2" * 64)
+
+    assert verified.event == "authoritative_export_attested"
 
 
 def test_trusted_export_rejects_unattested_capsule(tmp_path: Path) -> None:

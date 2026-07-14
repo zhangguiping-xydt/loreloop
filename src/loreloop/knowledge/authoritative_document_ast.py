@@ -6,6 +6,7 @@ import hashlib
 
 from .authoritative_ast import (
     ApplicabilityStatus,
+    AstViolation,
     AstRow,
     AuthorityHeader,
     Coverage,
@@ -18,7 +19,7 @@ from .authoritative_ast import (
     ProjectedValue,
     RequiredDocumentFamily,
 )
-from .authoritative_document_routes import DOCUMENT_ROUTES, SECTION_ROUTES
+from .authoritative_document_routes import DOCUMENT_ROUTES, ROUTED_ROW_KINDS, SECTION_ROUTES
 from .authoritative_documents import source_document_filenames
 from .authoritative_semantic_model import SemanticCore, SemanticRecord
 
@@ -107,8 +108,17 @@ def _applicability(
     return items, interface_present, database_present
 
 
-def build_document_ast_set(project_name: str, core: SemanticCore) -> DocumentSet:
+def build_document_ast_set(core: SemanticCore) -> DocumentSet:
     """Create the exact typed document set before any Markdown rendering."""
+    project_name = core.project_name
+    unrouted = tuple(
+        record.record_id for record in core.records if record.row_kind not in ROUTED_ROW_KINDS
+    )
+    if unrouted:
+        raise AstViolation(
+            "SemanticCore contains records outside the closed document routing matrix: "
+            + ", ".join(unrouted)
+        )
     applicability, interface_present, database_present = _applicability(core)
     active_routes = tuple(
         route
@@ -121,6 +131,11 @@ def build_document_ast_set(project_name: str, core: SemanticCore) -> DocumentSet
         tuple(record for record in core.records if record.row_kind in route.row_kinds)
         for route in active_routes
     )
+    routed_ids = {
+        record.record_id for records in routed for record in records
+    }
+    if routed_ids != {record.record_id for record in core.records}:
+        raise AstViolation("SemanticCore document routing is not complete")
     routed_leaf_total = sum(len(record.values) for records in routed for record in records)
     coverage = Coverage(
         len(core.records),
