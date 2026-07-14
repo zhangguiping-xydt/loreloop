@@ -134,6 +134,22 @@ def chain_endorsed_strong_ids(entries: list[Entry], records: list[EvidenceRecord
     return {e.id for e in entries if entry_digest(e) in endorsed.get(e.id, set())}
 
 
+def chain_verified_ids(entries: list[Entry], records: list[EvidenceRecord]) -> set[str]:
+    """Entries whose current digest has a live machine-verification endorsement."""
+    verified: dict[str, str] = {}
+    for record in records:
+        payload = record.payload
+        entry_id = payload.get("entry_id")
+        if record.event == "entry_verified" and entry_id and payload.get("entry_digest"):
+            verified[entry_id] = payload["entry_digest"]
+        elif record.event == "entry_contradicted" and entry_id:
+            verified.pop(entry_id, None)
+        elif record.event == CURATION_EVENT and entry_id:
+            if payload.get("curation") == Curation.REJECTED.value:
+                verified.pop(entry_id, None)
+    return {entry.id for entry in entries if verified.get(entry.id) == entry_digest(entry)}
+
+
 def unendorsed_strong_ids(entries: list[Entry], records: list[EvidenceRecord]) -> set[str]:
     """Entries that claim strong trust in the DB but whose current content
     carries no matching chain endorsement — demote these before injection."""

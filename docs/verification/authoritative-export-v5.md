@@ -26,6 +26,10 @@ loreloop knowledge replay baseline.zip
 `--format docs` 是兼容别名。package/docs 未指定 `--output` 时默认生成 `baseline.zip`。
 `--format audit` 是知识条目逐条审计文件，不是权威项目包。
 
+基线包可由 `knowledge search <query> --package baseline.zip` 直接检索。搜索必须先在同一份不可变
+文件快照上完成 Capsule replay，再对 Capsule 绑定的 Markdown 行执行有界 BM25；不得要求先导入
+SQLite，也不得在验证后重新读取可能已变化的 ZIP。
+
 ## 2. 项目与仓库边界
 
 合法项目拓扑有两种：
@@ -109,6 +113,11 @@ SQLAlchemy、Django ORM/migration、Alembic、Prisma、TypeORM、OpenAPI/Swagger
 protobuf、Docker、Compose 与 Kubernetes。受支持语言的测试文件只生成 `TestRow` 并进入验收
 规格，不进入功能、需求、架构或详细设计；fixture、snapshot 和 generated 文件保留在源码快照
 覆盖中，但不作为产品语义。
+
+`--include-web` 是显式混合来源模式。它只接受当前内容摘要同时具有链上人工批准和浏览器验证、且
+未 contradicted/rejected/superseded 的 Web 条目。条目以有界合成 evidence blob 进入同一
+SemanticCore，并按 kind 路由到既有文档族；默认导出仍完全不读取 SQLite 或本地密钥。混合包的
+无密钥 replay 证明内容闭包，`--attest`/`--trusted` 继续用于证明本地信任域曾确认精确 Capsule。
 
 导出必须报告：仓库数、提交态 blob 数、检测文件数、排除数、检测器分布、事实数、文档数，
 以及未语义解析的主要后缀。没有证据的业务结论不得由模板或模型补写。

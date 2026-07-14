@@ -118,6 +118,31 @@ def build_semantic_records(
                 "cases": ", ".join(item.cases),
             },
         )
+    web_row_kinds = {
+        "requirement": DocumentRowKind.WEB_REQUIREMENT,
+        "interface": DocumentRowKind.WEB_INTERFACE,
+        "architecture": DocumentRowKind.WEB_ARCHITECTURE,
+        "behavior": DocumentRowKind.WEB_BEHAVIOR,
+        "constraint": DocumentRowKind.WEB_CONSTRAINT,
+        "acceptance": DocumentRowKind.WEB_ACCEPTANCE,
+    }
+    for item in report.web_knowledge:
+        _add(
+            context,
+            records,
+            evidence,
+            "WEB",
+            web_row_kinds[item.kind],
+            f"web_{item.kind}",
+            item.source,
+            {
+                "entry_id": item.entry_id,
+                "title": item.title,
+                "statement": item.statement,
+                "locator": item.locator,
+                "snapshot_ref": item.snapshot_ref,
+            },
+        )
     for item in report.configurations:
         _add(
             context,

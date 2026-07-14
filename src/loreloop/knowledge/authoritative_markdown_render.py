@@ -277,7 +277,10 @@ def _gap_lines(document: MarkdownDocument) -> list[str]:
     gaps: list[str] = []
     if document.family == "capability_catalog" and "RequirementRow" not in kinds:
         gaps.append("缺少已提交的功能/需求材料；接口域只能证明技术入口，不能自动命名业务功能。")
-    if document.family == "requirements" and "RequirementRow" not in kinds:
+    if document.family == "requirements" and not kinds & {
+        "RequirementRow",
+        "WebRequirementRow",
+    }:
         gaps.append("缺少已提交需求材料；本文件不能作为完整业务需求规格。")
     if document.family == "architecture" and "DeploymentRow" not in kinds:
         gaps.append("缺少部署拓扑与运行时调用证据；当前只能确认仓库、依赖和配置边界。")
@@ -285,12 +288,12 @@ def _gap_lines(document: MarkdownDocument) -> list[str]:
         if not kinds & {"StateRow", "ErrorRow", "ImplementationFactRow"}:
             gaps.append("缺少状态机、错误路径和核心流程证据；符号清单不等同于完整详细设计。")
     if document.family == "user_guide":
-        if not kinds & {"UiSurfaceRow", "CommandRow"}:
+        if not kinds & {"UiSurfaceRow", "CommandRow", "WebBehaviorRow"}:
             gaps.append("缺少 UI/CLI 操作入口与运行时页面证据；无法形成可执行用户操作手册。")
-        elif "RequirementRow" not in kinds:
+        elif not kinds & {"RequirementRow", "WebRequirementRow"}:
             gaps.append("已识别页面或命令入口，但缺少已提交操作说明；本文件不能替代完整操作步骤。")
     if document.family == "acceptance":
-        if "AcceptanceRow" not in kinds:
+        if not kinds & {"AcceptanceRow", "WebAcceptanceRow"}:
             gaps.append("缺少已提交验收条款；测试存在性不能替代业务验收标准。")
         if "TestRow" not in kinds:
             gaps.append("缺少可识别的测试证据；本文件不能用于正式项目验收。")
@@ -306,6 +309,8 @@ def _gap_lines(document: MarkdownDocument) -> list[str]:
             for row in interface_rows
         ):
             gaps.append("部分接口缺少参数或返回结构；不得据此臆造字段、错误码或权限。")
+        if "WebInterfaceRow" in kinds:
+            gaps.append("Web 接口观察是运行时事实，不等同于完整参数、响应和错误码契约。")
         if "PermissionRow" not in kinds:
             gaps.append("未发现可绑定到接口的明确权限规则；接口存在不代表任意角色均可调用。")
         if "ErrorRow" not in kinds:

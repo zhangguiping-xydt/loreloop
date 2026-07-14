@@ -517,8 +517,9 @@ options:
   --offset OFFSET       entries to skip before display
 
 $ loreloop knowledge search --help
-usage: loreloop knowledge search [-h] [--all | --project PROJECT] [--tag TAG]
-                                 [--limit LIMIT]
+usage: loreloop knowledge search [-h]
+                                 [--all | --project PROJECT | --package PATH]
+                                 [--tag TAG] [--limit LIMIT]
                                  QUERY
 
 positional arguments:
@@ -528,6 +529,8 @@ options:
   -h, --help         show this help message and exit
   --all              search all registered projects
   --project PROJECT  search one registered project; may be repeated
+  --package PATH     search a replay-verified baseline ZIP or directory
+                     without importing it
   --tag TAG          filter selected projects by tag
   --limit LIMIT
 
@@ -547,6 +550,7 @@ usage: loreloop knowledge export [-h] [--stale]
                                  [--output OUTPUT]
                                  [--project-name PROJECT_NAME]
                                  [--requirements PATH] [--force] [--attest]
+                                 [--include-web]
 
 options:
   -h, --help            show this help message and exit
@@ -565,6 +569,8 @@ options:
                         non-empty directory
   --attest              append an optional local trust-chain attestation for
                         the exported package
+  --include-web         include current Web entries that are both operator-
+                        approved and browser-verified
 
 $ loreloop knowledge replay --help
 usage: loreloop knowledge replay [-h] [--trusted] EXPORT_PATH

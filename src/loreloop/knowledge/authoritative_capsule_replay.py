@@ -129,6 +129,12 @@ class CapsuleReplayResult:
     verification_mode: Literal["no_key", "trusted"]
 
 
+@dataclass(frozen=True, slots=True)
+class ReplayedCapsuleExport:
+    result: CapsuleReplayResult
+    files: Mapping[str, bytes]
+
+
 def _mapping(value: JsonValue | None, label: str) -> Mapping[str, JsonValue]:
     if not isinstance(value, dict):
         raise CapsuleReplayError(f"{label} must be an object")
@@ -470,7 +476,7 @@ def _validate_documents(
             raise CapsuleReplayError(
                 f"document AST authority disagrees with SemanticCore: {filename}"
             )
-        if header.get("authority_label") != "git_snapshot_verified":
+        if header.get("authority_label") != expected_document.header.authority_label:
             raise CapsuleReplayError(f"document AST has an invalid authority label: {filename}")
         if canon_v4(ast) != canon_v4(asdict(expected_document)):
             raise CapsuleReplayError(
@@ -582,6 +588,33 @@ def replay_capsule_export(
     trust_verifier: CapsuleTrustVerifier | None = None,
 ) -> CapsuleReplayResult:
     """Replay either the compatible directory form or the deliverable ZIP form."""
+    return load_replayed_capsule_export(export_path, trust_verifier=trust_verifier).result
+
+
+def load_replayed_capsule_export(
+    export_path: Path,
+    *,
+    trust_verifier: CapsuleTrustVerifier | None = None,
+) -> ReplayedCapsuleExport:
+    """Read and verify one immutable package snapshot for replay-aware consumers."""
     if export_path.is_dir() and not export_path.is_symlink():
-        return replay_capsule_directory(export_path, trust_verifier=trust_verifier)
-    return replay_capsule_archive(export_path, trust_verifier=trust_verifier)
+        try:
+            files = read_export_files(export_path)
+        except CapsuleIoError as exc:
+            raise CapsuleReplayError(str(exc)) from exc
+        result = _replay_capsule_files(
+            files,
+            allow_extra_non_markdown=True,
+            trust_verifier=trust_verifier,
+        )
+    else:
+        try:
+            files = read_export_archive(export_path)
+        except ExportArchiveError as exc:
+            raise CapsuleReplayError(str(exc)) from exc
+        result = _replay_capsule_files(
+            files,
+            allow_extra_non_markdown=False,
+            trust_verifier=trust_verifier,
+        )
+    return ReplayedCapsuleExport(result, files)

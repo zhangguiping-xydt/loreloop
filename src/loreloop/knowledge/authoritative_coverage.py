@@ -56,6 +56,7 @@ def render_coverage_summary(
                 f"permissions={len(report.permissions)}",
                 f"ui_surfaces={len(report.ui_surfaces)}",
                 f"test_suites={len(report.tests)}",
+                f"governed_web={len(report.web_knowledge)}",
                 f"configurations={len(report.configurations)}",
                 f"dependencies={len(report.dependencies)}",
                 f"tables={len(report.tables)}",

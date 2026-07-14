@@ -42,6 +42,7 @@ PREFIX_ORDINALS: Final = {
     "STATE": 40,
     "ERR": 40,
     "TEST": 40,
+    "WEB": 40,
     "DEP": 40,
     "DOCSRC": 40,
     "MOD": 50,

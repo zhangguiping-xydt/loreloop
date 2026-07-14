@@ -71,6 +71,16 @@ existing output. Verify a produced package with:
 
     loreloop knowledge replay baseline.zip
 
+Search the replay-verified package without extracting it:
+
+    loreloop knowledge search "<query>" --package baseline.zip
+
+When the operator explicitly requests a Web-enriched replacement and has
+approved and verified the relevant Web entries:
+
+    loreloop knowledge export --format package --output baseline.zip --include-web --force
+    loreloop knowledge replay baseline.zip
+
 ## Local trust recovery
 
 LoreLoop manages local trust automatically during normal initialization. If a

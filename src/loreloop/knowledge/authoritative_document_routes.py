@@ -25,6 +25,8 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.UI_SURFACE,
                 DocumentRowKind.REQUIREMENT,
                 DocumentRowKind.PERMISSION,
+                DocumentRowKind.WEB_INTERFACE,
+                DocumentRowKind.WEB_BEHAVIOR,
             }
         ),
     ),
@@ -38,6 +40,8 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.CONFIGURATION,
                 DocumentRowKind.STATE,
                 DocumentRowKind.ERROR,
+                DocumentRowKind.WEB_REQUIREMENT,
+                DocumentRowKind.WEB_CONSTRAINT,
             }
         ),
     ),
@@ -51,6 +55,8 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.DEPLOYMENT,
                 DocumentRowKind.MODULE_REPORT,
                 DocumentRowKind.APPLICABILITY,
+                DocumentRowKind.WEB_ARCHITECTURE,
+                DocumentRowKind.WEB_CONSTRAINT,
             }
         ),
     ),
@@ -76,6 +82,7 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.COMMAND,
                 DocumentRowKind.REQUIREMENT,
                 DocumentRowKind.PERMISSION,
+                DocumentRowKind.WEB_BEHAVIOR,
             }
         ),
     ),
@@ -87,6 +94,7 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.ACCEPTANCE,
                 DocumentRowKind.TEST,
                 DocumentRowKind.REQUIREMENT,
+                DocumentRowKind.WEB_ACCEPTANCE,
             }
         ),
     ),
@@ -99,6 +107,7 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.COMMAND,
                 DocumentRowKind.PERMISSION,
                 DocumentRowKind.ERROR,
+                DocumentRowKind.WEB_INTERFACE,
             }
         ),
     ),
@@ -133,6 +142,12 @@ SECTION_ROUTES = {
     DocumentRowKind.STATE: ("states", "状态与生命周期"),
     DocumentRowKind.ERROR: ("errors", "错误与异常契约"),
     DocumentRowKind.TEST: ("tests", "测试证据"),
+    DocumentRowKind.WEB_REQUIREMENT: ("web-requirements", "Web 需求事实"),
+    DocumentRowKind.WEB_INTERFACE: ("web-interfaces", "Web 接口观察"),
+    DocumentRowKind.WEB_ARCHITECTURE: ("web-architecture", "Web 运行架构观察"),
+    DocumentRowKind.WEB_BEHAVIOR: ("web-behavior", "Web 页面与行为观察"),
+    DocumentRowKind.WEB_CONSTRAINT: ("web-constraints", "Web 运行约束"),
+    DocumentRowKind.WEB_ACCEPTANCE: ("web-acceptance", "Web 验收事实"),
     DocumentRowKind.REQUIREMENT: ("requirements", "需求材料"),
     DocumentRowKind.ACCEPTANCE: ("acceptance", "验收准则"),
     DocumentRowKind.CURRENT_DATA: ("data", "数据模型"),

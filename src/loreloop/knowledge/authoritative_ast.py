@@ -45,6 +45,12 @@ class DocumentRowKind(StrEnum):
     STATE = "StateRow"
     ERROR = "ErrorRow"
     TEST = "TestRow"
+    WEB_REQUIREMENT = "WebRequirementRow"
+    WEB_INTERFACE = "WebInterfaceRow"
+    WEB_ARCHITECTURE = "WebArchitectureRow"
+    WEB_BEHAVIOR = "WebBehaviorRow"
+    WEB_CONSTRAINT = "WebConstraintRow"
+    WEB_ACCEPTANCE = "WebAcceptanceRow"
     REQUIREMENT = "RequirementRow"
     DEPENDENCY = "DependencyRow"
     RELATION = "RelationRow"
@@ -184,13 +190,23 @@ class AuthorityHeader:
     coverage: Coverage
     bindings: BindingSet
     row_kind: Literal["AuthorityHeaderRow"] = field(default="AuthorityHeaderRow", init=False)
-    authority_label: Literal["git_snapshot_verified"] = field(
-        default="git_snapshot_verified", init=False
-    )
+    authority_label: Literal[
+        "git_snapshot_verified", "git_snapshot_plus_governed_web_projection"
+    ] = "git_snapshot_verified"
     detector_profile: Literal["detector-v4"] = field(default="detector-v4", init=False)
-    knowledge_db_status: Literal["not_loaded"] = field(default="not_loaded", init=False)
+    knowledge_db_status: Literal["not_loaded", "governed_web_loaded"] = "not_loaded"
 
     def __post_init__(self) -> None:
+        _require(
+            self.authority_label
+            in {"git_snapshot_verified", "git_snapshot_plus_governed_web_projection"},
+            "invalid authority label",
+        )
+        _require(
+            (self.authority_label == "git_snapshot_verified")
+            == (self.knowledge_db_status == "not_loaded"),
+            "authority label and knowledge DB status disagree",
+        )
         _require(SHA256_RE.fullmatch(self.trust_domain_id) is not None, "invalid trust domain id")
         _require(
             SHA256_RE.fullmatch(self.repository_config_digest) is not None,

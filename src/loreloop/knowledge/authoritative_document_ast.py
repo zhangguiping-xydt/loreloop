@@ -80,7 +80,12 @@ def _applicability(
     interface_ids = tuple(
         record.record_id
         for record in core.records
-        if record.row_kind in {DocumentRowKind.INTERFACE, DocumentRowKind.COMMAND}
+        if record.row_kind
+        in {
+            DocumentRowKind.INTERFACE,
+            DocumentRowKind.COMMAND,
+            DocumentRowKind.WEB_INTERFACE,
+        }
     )
     database_ids = tuple(
         record.record_id
@@ -148,6 +153,7 @@ def build_document_ast_set(core: SemanticCore) -> DocumentSet:
         (),
     )
     filenames = source_document_filenames(project_name)
+    has_web = any(record.row_kind.value.startswith("Web") for record in core.records)
     documents: list[DocumentAst] = []
     for route, records in zip(active_routes, routed, strict=True):
         family_index = next(
@@ -161,6 +167,12 @@ def build_document_ast_set(core: SemanticCore) -> DocumentSet:
             core.package_id,
             coverage,
             (),
+            authority_label=(
+                "git_snapshot_plus_governed_web_projection"
+                if has_web
+                else "git_snapshot_verified"
+            ),
+            knowledge_db_status=("governed_web_loaded" if has_web else "not_loaded"),
         )
         documents.append(
             DocumentAst(

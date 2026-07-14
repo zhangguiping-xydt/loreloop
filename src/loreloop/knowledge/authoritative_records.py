@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeAlias
+
+WebKnowledgeKind: TypeAlias = Literal[
+    "requirement", "interface", "architecture", "behavior", "constraint", "acceptance"
+]
 
 
 class DetectionError(ValueError):
@@ -71,6 +75,17 @@ class TestRecord:
     framework: str
     scope: Literal["unit", "integration", "unknown"]
     cases: tuple[str, ...]
+    source: SourceRef
+
+
+@dataclass(frozen=True, slots=True)
+class WebKnowledgeRecord:
+    entry_id: str
+    kind: WebKnowledgeKind
+    title: str
+    statement: str
+    locator: str
+    snapshot_ref: str | None
     source: SourceRef
 
 
@@ -149,6 +164,7 @@ class DetectionReport:
     permissions: tuple[PermissionRecord, ...] = ()
     ui_surfaces: tuple[UiSurfaceRecord, ...] = ()
     tests: tuple[TestRecord, ...] = ()
+    web_knowledge: tuple[WebKnowledgeRecord, ...] = ()
     configurations: tuple[ConfigurationRecord, ...] = ()
     dependencies: tuple[DependencyRecord, ...] = ()
     requirements: tuple[RequirementRecord, ...] = ()
@@ -173,6 +189,7 @@ def merge_reports(*reports: DetectionReport) -> DetectionReport:
         permissions=tuple(item for report in reports for item in report.permissions),
         ui_surfaces=tuple(item for report in reports for item in report.ui_surfaces),
         tests=tuple(item for report in reports for item in report.tests),
+        web_knowledge=tuple(item for report in reports for item in report.web_knowledge),
         configurations=tuple(item for report in reports for item in report.configurations),
         dependencies=tuple(item for report in reports for item in report.dependencies),
         requirements=tuple(item for report in reports for item in report.requirements),

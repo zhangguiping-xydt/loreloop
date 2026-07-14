@@ -80,6 +80,26 @@ existing output. Verify a produced package with:
 loreloop knowledge replay baseline.zip
 ```
 
+Search a package directly when the operator asks a question about an exported
+baseline:
+
+```text
+loreloop knowledge search "<query>" --package baseline.zip
+```
+
+Do not unpack or import the ZIP merely to search it. Package search replays the
+Capsule first and then ranks the bound Markdown rows.
+
+Web knowledge is not included by default. When the operator explicitly asks to
+update the baseline from Web exploration, include only entries that they have
+approved and LoreLoop has browser-verified, then replace the existing package
+only with explicit overwrite authorization:
+
+```text
+loreloop knowledge export --format package --output baseline.zip --include-web --force
+loreloop knowledge replay baseline.zip
+```
+
 ## Recover local trust without exposing internals
 
 If `doctor`, `begin`, or another command reports that project trust is

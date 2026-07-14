@@ -79,6 +79,17 @@ def normalize_detection_report(report: DetectionReport) -> DetectionReport:
                 item.cases,
             ),
         ),
+        web_knowledge=_unique(
+            report.web_knowledge,
+            lambda item: (
+                item.entry_id,
+                item.kind,
+                item.title,
+                item.statement,
+                item.locator,
+                item.snapshot_ref,
+            ),
+        ),
         configurations=_unique(
             report.configurations,
             lambda item: (

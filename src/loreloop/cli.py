@@ -14,7 +14,7 @@ from pathlib import Path
 from . import __version__
 from .agents import AgentError, AgentRunner, delegation_runner, inference_runner
 from .delegate.runner import DelegateRunner
-from .evidence.chain import ChainVerificationError, EvidenceChain
+from .evidence.chain import ChainVerificationError, EvidenceChain, EvidenceRecord
 from .federation.reader import ForeignEntry
 from .federation.registry import Project
 from .knowledge.code_reverse import (
@@ -37,6 +37,7 @@ from .knowledge.endorsement import (
     chain_rejected_ids,
     chain_supersession_links,
     chain_superseded_ids,
+    chain_verified_ids,
     curate,
     entry_digest,
     entry_from_payload,
@@ -44,7 +45,7 @@ from .knowledge.endorsement import (
     record_reingested,
     unendorsed_strong_ids,
 )
-from .knowledge.model import Curation, Entry
+from .knowledge.model import Channel, Curation, Entry
 from .knowledge.store import KnowledgeStore
 from .paths import (
     StatePathError,
@@ -1777,10 +1778,18 @@ def cmd_harvest(args: argparse.Namespace) -> int:
 
 def cmd_knowledge(args: argparse.Namespace) -> int:
     workdir = _workdir()
+    if args.action == "export" and args.format == "audit" and args.include_web:
+        raise CLIError(
+            "--include-web requires a project package",
+            "the audit export already lists knowledge entries directly",
+            "use `--format package` or remove `--include-web`",
+        )
     if args.action == "export" and args.format in {"package", "docs"}:
         return _export_document_set(args, workdir)
     if args.action == "replay":
         return _replay_document_set(args, workdir)
+    if args.action == "search" and args.package:
+        return _search_baseline_package(args)
     with _store(workdir) as store:
         if args.action == "list":
             return _list_entries(args, workdir, store)
@@ -1804,6 +1813,32 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
             return _verify_entries(args, workdir, store)
         elif args.action == "usage":
             return _knowledge_usage(workdir, store)
+
+
+def _search_baseline_package(args: argparse.Namespace) -> int:
+    from .knowledge.authoritative_search import BaselineSearchError, search_baseline
+
+    if args.tag:
+        raise CLIError(
+            "invalid baseline search filters",
+            "--tag applies to registered projects and cannot be combined with --package",
+            "remove --tag and retry the package search",
+        )
+    print("verifying baseline and building a transient search index...", file=sys.stderr)
+    try:
+        hits = search_baseline(Path(args.package), args.query, limit=args.limit)
+    except BaselineSearchError as exc:
+        raise CLIError(
+            "baseline search failed",
+            str(exc),
+            "restore or regenerate the baseline package, then retry the search",
+        ) from exc
+    for hit in hits:
+        print(f"{hit.score:.3f}  {hit.filename}#{hit.heading}")
+        print(f"       {hit.snippet}")
+    if not hits:
+        print("no matching baseline records")
+    return 0
 
 
 def _knowledge_usage(workdir: Path, store: KnowledgeStore) -> int:
@@ -2329,6 +2364,43 @@ def _export_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
     return 0
 
 
+def _select_governed_web_entries(
+    entries: list[Entry], records: list[EvidenceRecord]
+) -> tuple[Entry, ...]:
+    """Filter current Web assertions through replayed human and machine trust."""
+    retired = chain_superseded_ids(records) | chain_rejected_ids(records)
+    assert_trust_projection(entries, records, retired_ids=retired)
+    effective = chain_effective_curation(records)
+    verified = chain_verified_ids(entries, records)
+    contradicted = chain_contradicted_ids(records)
+    selected = tuple(
+        entry
+        for entry in entries
+        if entry.source.channel is Channel.WEB
+        and effective.get(entry.id, Curation.DRAFT) is Curation.APPROVED
+        and entry.id in verified
+        and entry.id not in retired
+        and entry.id not in contradicted
+    )
+    return selected
+
+
+def _governed_web_entries(workdir: Path) -> tuple[Entry, ...]:
+    """Load Web assertions backed by both human and machine trust events."""
+    records = EvidenceChain.for_workdir(workdir).verify()
+    with _store(workdir) as store:
+        entries = store.list()
+    selected = _select_governed_web_entries(entries, records)
+    if not selected:
+        raise CLIError(
+            "no governed Web knowledge is ready for the baseline",
+            "--include-web requires at least one current Web entry that is both approved and verified",
+            "run `loreloop knowledge review --status draft`, approve the entry, then run "
+            "`loreloop knowledge verify <entry-id>` before retrying",
+        )
+    return selected
+
+
 def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
     from .knowledge.authoritative_archive import (
         ExportArchiveError,
@@ -2353,10 +2425,12 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
     from .knowledge.authoritative_coverage import render_coverage_summary
     from .knowledge.authoritative_git import GitSnapshotError, capture_source_snapshot
     from .knowledge.authoritative_ast import AstViolation
-    from .knowledge.authoritative_records import DetectionError
+    from .knowledge.authoritative_records import DetectionError, merge_reports
+    from .knowledge.authoritative_report_normalize import normalize_detection_report
     from .knowledge.authoritative_ids import IdentityContractError
     from .knowledge.authoritative_semantic import build_semantic_core
     from .knowledge.authoritative_source import detect_snapshot_blobs, read_snapshot_blobs
+    from .knowledge.authoritative_web_input import build_governed_web_input
     from .knowledge.repos import RepoConfigError, load_repos
 
     if args.stale:
@@ -2385,8 +2459,18 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
             snapshot, workdir, peers, requirements=requirements
         )
         report = detect_snapshot_blobs(blobs, requirements=requirements)
+        semantic_blobs = blobs
+        if args.include_web:
+            web_entries = _governed_web_entries(workdir)
+            web_report, web_blobs = build_governed_web_input(web_entries)
+            report = normalize_detection_report(merge_reports(report, web_report))
+            semantic_blobs = (*blobs, *web_blobs)
+            print(
+                f"included {len(web_entries)} approved and verified Web knowledge entries",
+                file=sys.stderr,
+            )
         project_name = args.project_name or workdir.name
-        core = build_semantic_core(snapshot, blobs, report, project_name=project_name)
+        core = build_semantic_core(snapshot, semantic_blobs, report, project_name=project_name)
         document_set = build_document_ast_set(core)
         documents = render_document_set(document_set)
         print(
@@ -3057,6 +3141,11 @@ def build_parser() -> argparse.ArgumentParser:
     search_scope.add_argument(
         "--project", action="append", help="search one registered project; may be repeated"
     )
+    search_scope.add_argument(
+        "--package",
+        metavar="PATH",
+        help="search a replay-verified baseline ZIP or directory without importing it",
+    )
     p_knowledge_search.add_argument(
         "--tag", action="append", help="filter selected projects by tag"
     )
@@ -3106,6 +3195,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--attest",
         action="store_true",
         help="append an optional local trust-chain attestation for the exported package",
+    )
+    p_knowledge_export.add_argument(
+        "--include-web",
+        action="store_true",
+        help="include current Web entries that are both operator-approved and browser-verified",
     )
     p_knowledge_export.set_defaults(func=cmd_knowledge)
 

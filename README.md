@@ -143,8 +143,8 @@ loreloop knowledge review
 ```
 
 Generate a deliverable authoritative project package from clean committed Git
-snapshots for handoff, onboarding, or requirement development. This path does
-not call an agent or open the SQLite store or a key. A non-Git workspace root
+snapshots for handoff, onboarding, or requirement development. By default this
+path does not call an agent or open the SQLite store or a key. A non-Git workspace root
 is supported when its member repositories have been declared with
 `loreloop repo add`:
 
@@ -192,6 +192,36 @@ or key:
 ```bash
 loreloop knowledge replay baseline.zip
 ```
+
+Search the verified package directly without extraction or importing it into a
+project store:
+
+```bash
+loreloop knowledge search "fund ratio" --package baseline.zip
+```
+
+Web exploration remains in the live knowledge store by default. To project
+runtime observations back into the deliverable baseline, first approve and
+browser-verify the entries, then opt in explicitly:
+
+```bash
+loreloop ingest --from web https://app.example.com --headed
+loreloop knowledge review --status draft
+loreloop knowledge approve <entry-id>
+loreloop knowledge verify <entry-id> --headed
+loreloop knowledge export \
+  --format package \
+  --output baseline.zip \
+  --include-web \
+  --force
+loreloop knowledge replay baseline.zip
+```
+
+`--include-web` reads the local projection and tamper-evident chain. Draft,
+approval-only, verification-only, contradicted, rejected, superseded, or
+digest-mismatched Web entries are excluded. Eligible observations project into
+their requirement, architecture, capability, user-guide, interface, or
+acceptance sections and remain bound by the Capsule.
 
 For an optional local trust-chain assertion, export with `--attest` and replay
 with `--trusted`:
