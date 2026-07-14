@@ -66,9 +66,62 @@ def _supported_version(key: str, value: object) -> bool:
     return key == "swagger" and value == "2.0"
 
 
+def _json_string_end(source: str, start: int) -> int:
+    index = start + 1
+    escaped = False
+    while index < len(source):
+        character = source[index]
+        if not escaped and character == '"':
+            return index + 1
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        index += 1
+    return len(source)
+
+
+def _bounded_json_string(source: str, start: int, end: int) -> str | None:
+    if end - start > 256:
+        return None
+    try:
+        value = json.loads(source[start:end])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return value if isinstance(value, str) else None
+
+
+def _skip_json_value(source: str, start: int) -> int:
+    """Skip one JSON value lexically without materializing its nested object graph."""
+    if start >= len(source):
+        return start
+    if source[start] == '"':
+        return _json_string_end(source, start)
+    if source[start] not in "[{":
+        index = start
+        while index < len(source) and source[index] not in ",}":
+            index += 1
+        return index
+    closing = {"[": "]", "{": "}"}
+    stack = [closing[source[start]]]
+    index = start + 1
+    while index < len(source) and stack:
+        character = source[index]
+        if character == '"':
+            index = _json_string_end(source, index)
+            continue
+        if character in closing:
+            if len(stack) >= 128:
+                return len(source)
+            stack.append(closing[character])
+        elif character == stack[-1]:
+            stack.pop()
+        index += 1
+    return index
+
+
 def _json_root_versions(source: str) -> tuple[tuple[str, object], ...]:
-    """Read only top-level JSON fields, retaining markers found before later syntax errors."""
-    decoder = json.JSONDecoder()
+    """Read root markers while lexically skipping all unrelated values."""
     index = 0
     length = len(source)
 
@@ -86,21 +139,23 @@ def _json_root_versions(source: str) -> tuple[tuple[str, object], ...]:
         index = whitespace(index)
         if index >= length or source[index] == "}":
             return tuple(markers)
-        try:
-            key, index = decoder.raw_decode(source, index)
-        except json.JSONDecodeError:
+        if source[index] != '"':
             return tuple(markers)
-        if not isinstance(key, str):
-            return tuple(markers)
+        key_start = index
+        index = _json_string_end(source, index)
+        key = _bounded_json_string(source, key_start, index)
         index = whitespace(index)
         if index >= length or source[index] != ":":
             return tuple(markers)
         index = whitespace(index + 1)
-        try:
-            value, index = decoder.raw_decode(source, index)
-        except json.JSONDecodeError:
-            return tuple(markers)
+        value_start = index
+        index = _skip_json_value(source, index)
         if key in {"openapi", "swagger"}:
+            value = (
+                _bounded_json_string(source, value_start, index)
+                if value_start < length and source[value_start] == '"'
+                else None
+            )
             markers.append((key, value))
         index = whitespace(index)
         if index >= length or source[index] == "}":
@@ -112,17 +167,11 @@ def _json_root_versions(source: str) -> tuple[tuple[str, object], ...]:
 
 def has_supported_openapi_root(source: str) -> bool:
     """Return true only for a supported root-level OpenAPI/Swagger version marker."""
-    stripped = source.lstrip()
-    if stripped.startswith("{"):
+    start = 0
+    while start < len(source) and source[start].isspace():
+        start += 1
+    if start < len(source) and source[start] == "{":
         return any(_supported_version(key, value) for key, value in _json_root_versions(source))
-    try:
-        parsed = parse_yaml_contract(source)
-    except DetectionError:
-        parsed = None
-    if isinstance(parsed, dict) and any(
-        _supported_version(key, parsed.get(key)) for key in ("openapi", "swagger")
-    ):
-        return True
     for match in _YAML_ROOT_VERSION.finditer(source):
         if _supported_version(match.group("key"), match.group("version")):
             return True

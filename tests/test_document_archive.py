@@ -233,6 +233,33 @@ def test_archive_rejects_oversized_central_directory_before_parsing(
         _ = read_export_archive(oversized)
 
 
+def test_archive_parses_the_same_immutable_bytes_that_passed_central_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repository(tmp_path / "repo")
+    package = tmp_path / "package.zip"
+    monkeypatch.chdir(repo)
+    assert main(["knowledge", "export", "--format", "package", "--output", str(package)]) == 0
+    expected = read_export_archive(package)
+    replacement = tmp_path / "replacement.zip"
+    with zipfile.ZipFile(replacement, "w") as archive:
+        for index in range(100_000):
+            archive.writestr(f"{index}.md", b"")
+    real_validate = authoritative_archive._validate_central_directory
+
+    def replace_source_after_preflight(snapshot: bytes) -> None:
+        real_validate(snapshot)
+        package.write_bytes(replacement.read_bytes())
+
+    monkeypatch.setattr(
+        authoritative_archive,
+        "_validate_central_directory",
+        replace_source_after_preflight,
+    )
+
+    assert read_export_archive(package) == expected
+
+
 def test_archive_reader_enforces_compressed_member_total_and_ratio_limits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -59,39 +59,106 @@ def _git(repo: Path, *args: str, input_data: bytes | None = None) -> bytes:
     return completed.stdout
 
 
-def read_blob_batch(repo: Path, object_ids: tuple[str, ...]) -> dict[str, bytes]:
-    """Read immutable Git blobs without honoring caller repository redirects."""
+def _stream_blob_batch(
+    repo: Path,
+    object_ids: tuple[str, ...],
+    *,
+    retain_bytes: bool,
+    max_total_bytes: int | None = None,
+) -> dict[str, tuple[int, str, bytes | None]]:
     unique = tuple(dict.fromkeys(object_ids))
     if not unique:
         return {}
-    raw = _git(
-        repo,
-        "cat-file",
-        "--batch",
-        input_data=b"".join(f"{object_id}\n".encode() for object_id in unique),
+    process = subprocess.Popen(
+        ["git", "cat-file", "--batch"],
+        cwd=repo,
+        env=git_environment(),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
-    offset = 0
-    blobs: dict[str, bytes] = {}
-    for expected in unique:
-        newline = raw.find(b"\n", offset)
-        if newline < 0:
-            raise GitSnapshotError("Git batch output lacks an object header")
-        fields = raw[offset:newline].split()
-        if len(fields) != 3 or fields[0].decode() != expected or fields[1] != b"blob":
-            raise GitSnapshotError("Git batch output contains an unexpected object")
-        try:
-            size = int(fields[2])
-        except ValueError as exc:
-            raise GitSnapshotError("Git batch output has an invalid object length") from exc
-        start = newline + 1
-        end = start + size
-        if end >= len(raw) or raw[end : end + 1] != b"\n":
-            raise GitSnapshotError("Git batch output contains a truncated object")
-        blobs[expected] = raw[start:end]
-        offset = end + 1
-    if offset != len(raw):
-        raise GitSnapshotError("Git batch output contains trailing bytes")
-    return blobs
+    if process.stdin is None or process.stdout is None or process.stderr is None:
+        process.kill()
+        raise GitSnapshotError("cannot open Git batch object streams")
+    results: dict[str, tuple[int, str, bytes | None]] = {}
+    total = 0
+    try:
+        for expected in unique:
+            process.stdin.write(f"{expected}\n".encode())
+            process.stdin.flush()
+            fields = process.stdout.readline().split()
+            if len(fields) != 3 or fields[0].decode() != expected or fields[1] != b"blob":
+                raise GitSnapshotError("Git batch output contains an unexpected object")
+            try:
+                size = int(fields[2])
+            except ValueError as exc:
+                raise GitSnapshotError("Git batch output has an invalid object length") from exc
+            total += size
+            if max_total_bytes is not None and total > max_total_bytes:
+                raise GitSnapshotError("selected semantic blobs exceed the total byte limit")
+            digest = hashlib.sha256()
+            chunks: list[bytes] | None = [] if retain_bytes else None
+            remaining = size
+            while remaining:
+                chunk = process.stdout.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise GitSnapshotError("Git batch output contains a truncated object")
+                digest.update(chunk)
+                if chunks is not None:
+                    chunks.append(chunk)
+                remaining -= len(chunk)
+            if process.stdout.read(1) != b"\n":
+                raise GitSnapshotError("Git batch output lacks an object terminator")
+            data = b"".join(chunks) if chunks is not None else None
+            results[expected] = (size, digest.hexdigest(), data)
+        process.stdin.close()
+        return_code = process.wait()
+        detail = process.stderr.read().decode("utf-8", errors="replace").strip()
+        if return_code != 0:
+            raise GitSnapshotError(
+                f"cannot inspect repository blobs: {detail or 'git cat-file failed'}"
+            )
+        return results
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        process.stdout.close()
+        process.stderr.close()
+        if not process.stdin.closed:
+            process.stdin.close()
+
+
+def read_blob_batch(
+    repo: Path,
+    object_ids: tuple[str, ...],
+    *,
+    max_total_bytes: int | None = None,
+) -> dict[str, bytes]:
+    """Read selected immutable Git blobs with a bounded streaming batch process."""
+    results = _stream_blob_batch(
+        repo,
+        object_ids,
+        retain_bytes=True,
+        max_total_bytes=max_total_bytes,
+    )
+    return {
+        object_id: data
+        for object_id, (_, _, data) in results.items()
+        if data is not None
+    }
+
+
+def blob_metadata_batch(
+    repo: Path, object_ids: tuple[str, ...]
+) -> dict[str, tuple[int, str]]:
+    """Hash arbitrary-size committed blobs without retaining their bytes."""
+    results = _stream_blob_batch(repo, object_ids, retain_bytes=False)
+    return {
+        object_id: (size, digest)
+        for object_id, (size, digest, _) in results.items()
+    }
 
 
 def tree_shape(repo: Path) -> tuple[tuple[str, str, str], ...]:
@@ -111,17 +178,17 @@ def tree_shape(repo: Path) -> tuple[tuple[str, str, str], ...]:
     return tuple(shape)
 
 
-def _snapshot_entries(repo: Path) -> tuple[SnapshotEntry, ...]:
+def snapshot_entries(repo: Path) -> tuple[SnapshotEntry, ...]:
     shape = tree_shape(repo)
     blob_ids = tuple(object_id for _, mode, object_id in shape if mode != "160000")
-    blobs = read_blob_batch(repo, blob_ids)
+    metadata = blob_metadata_batch(repo, blob_ids)
     entries: list[SnapshotEntry] = []
     for path, mode, object_id in shape:
         oid = GitObjectId.parse(f"sha1:{object_id}")
         if mode == "160000":
             entries.append(SnapshotEntry(path, "160000", oid, None, None))
             continue
-        data = blobs[object_id]
+        byte_length, blob_sha256 = metadata[object_id]
         typed_mode: Literal["100644", "100755", "120000"]
         if mode == "100644":
             typed_mode = "100644"
@@ -130,7 +197,7 @@ def _snapshot_entries(repo: Path) -> tuple[SnapshotEntry, ...]:
         else:
             typed_mode = "120000"
         entries.append(
-            SnapshotEntry(path, typed_mode, oid, len(data), hashlib.sha256(data).hexdigest())
+            SnapshotEntry(path, typed_mode, oid, byte_length, blob_sha256)
         )
     return tuple(entries)
 
@@ -236,7 +303,7 @@ def _snapshot(repository: _RepositoryInput, *, require_clean: bool) -> Repositor
         b"loreloop-git-roots-v1\0" + b"\0".join(root.encode("ascii") for root in roots)
     ).hexdigest()
     index = _source_index(_git(repo, "ls-files", "--stage", "-z"))
-    entries = _snapshot_entries(repo)
+    entries = snapshot_entries(repo)
     snapshot = RepositorySnapshot(
         alias=repository.alias,
         role=repository.role,

@@ -43,6 +43,21 @@ def _git_environment() -> dict[str, str]:
     return environment
 
 
+def _anonymous_git_environment(home: Path) -> dict[str, str]:
+    environment = _git_environment()
+    for name in ("GH_TOKEN", "GITHUB_TOKEN", "SSH_ASKPASS"):
+        environment.pop(name, None)
+    environment.update(
+        {
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(home),
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+        }
+    )
+    return environment
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -172,22 +187,19 @@ def _filesystem_metadata(items: list[tuple[str, Path]]) -> list[dict[str, int | 
     return evidence
 
 
-def _dogfood_metadata(source: Path, commit: str, remote_ref: str) -> dict[str, object]:
+def _dogfood_metadata(source: Path, commit: str, public_ref: str) -> dict[str, object]:
     try:
         remote_url = _git(source, "remote", "get-url", "origin")
     except subprocess.CalledProcessError as exc:
         raise SystemExit("dogfood repository must have an origin remote") from exc
     if _PUBLIC_GITHUB_REMOTE.fullmatch(remote_url) is None:
         raise SystemExit("dogfood origin must be a public GitHub HTTPS repository URL")
-    if not remote_ref.startswith("refs/remotes/origin/") or remote_ref.endswith("/HEAD"):
-        raise SystemExit("dogfood remote ref must name a concrete refs/remotes/origin/* ref")
-    try:
-        remote_ref_tip = _git(source, "rev-parse", "--verify", remote_ref)
-        _git(source, "merge-base", "--is-ancestor", commit, remote_ref)
-    except subprocess.CalledProcessError as exc:
-        raise SystemExit(
-            f"dogfood commit must be reachable from remote-tracking ref {remote_ref}"
-        ) from exc
+    if (
+        not public_ref.startswith(("refs/heads/", "refs/tags/"))
+        or "*" in public_ref
+        or public_ref.endswith("/")
+    ):
+        raise SystemExit("dogfood public ref must name one concrete branch or tag")
     tracked_files = len(
         _git(source, "ls-tree", "-r", "--name-only", commit).splitlines()
     )
@@ -197,8 +209,7 @@ def _dogfood_metadata(source: Path, commit: str, remote_ref: str) -> dict[str, o
         )
     return {
         "remote_url": remote_url,
-        "remote_ref": remote_ref,
-        "remote_ref_tip": remote_ref_tip,
+        "public_ref": public_ref,
         "tracked_files": tracked_files,
     }
 
@@ -210,9 +221,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--commit", default="HEAD")
     parser.add_argument("--dogfood-repo", type=Path)
     parser.add_argument("--dogfood-commit", default="HEAD")
-    parser.add_argument(
-        "--dogfood-remote-ref", default="refs/remotes/origin/main"
-    )
+    parser.add_argument("--dogfood-public-ref", default="refs/heads/main")
     parser.add_argument("--filesystem", action="append", type=_filesystem, default=[])
     parser.add_argument("--force", action="store_true")
     return parser
@@ -246,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
     dogfood_source = args.dogfood_repo.expanduser().resolve()
     dogfood_commit = _git(dogfood_source, "rev-parse", args.dogfood_commit)
     dogfood_metadata = _dogfood_metadata(
-        dogfood_source, dogfood_commit, args.dogfood_remote_ref
+        dogfood_source, dogfood_commit, args.dogfood_public_ref
     )
     filesystem_evidence = _filesystem_metadata(args.filesystem)
     if replace_output:
@@ -438,6 +447,49 @@ def main(argv: list[str] | None = None) -> int:
         if args.dogfood_repo is not None:
             dogfood_checkout = scratch / "dogfood"
             _clone_at(dogfood_source, dogfood_checkout, dogfood_commit)
+            public_target = "refs/loreloop-proof/public-dogfood"
+            anonymous_home = scratch / "anonymous-git-home"
+            anonymous_home.mkdir(mode=0o700)
+            gates.append(
+                _run_gate(
+                    "dogfood-public-fetch",
+                    (
+                        "git",
+                        "-c",
+                        "credential.helper=",
+                        "fetch",
+                        "--quiet",
+                        "--no-tags",
+                        "--filter=blob:none",
+                        str(dogfood_metadata["remote_url"]),
+                        f"+{dogfood_metadata['public_ref']}:{public_target}",
+                    ),
+                    cwd=dogfood_checkout,
+                    logs=logs,
+                    env=_anonymous_git_environment(anonymous_home),
+                    timeout=300,
+                )
+            )
+            if gates[-1].exit_code == 0:
+                dogfood_metadata["public_ref_tip"] = _git(
+                    dogfood_checkout, "rev-parse", public_target
+                )
+                gates.append(
+                    _run_gate(
+                        "dogfood-public-ancestry",
+                        (
+                            "git",
+                            "merge-base",
+                            "--is-ancestor",
+                            dogfood_commit,
+                            public_target,
+                        ),
+                        cwd=dogfood_checkout,
+                        logs=logs,
+                        env=_git_environment(),
+                        timeout=60,
+                    )
+                )
             package = scratch / "dogfood-knowledge.zip"
             export_command = (
                 python,
@@ -518,6 +570,8 @@ def main(argv: list[str] | None = None) -> int:
             "publication-ext4",
             "large-project-export",
             "large-project-replay",
+            "dogfood-public-fetch",
+            "dogfood-public-ancestry",
         }
         proof_complete = (
             wheel is not None

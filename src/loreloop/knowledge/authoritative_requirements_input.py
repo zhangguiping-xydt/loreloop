@@ -23,7 +23,7 @@ class RequirementBlob(Protocol):
     def path(self) -> str: ...
 
     @property
-    def data(self) -> bytes: ...
+    def data(self) -> bytes | None: ...
 
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -202,6 +202,8 @@ def detect_requirement_materials(
         blob = by_key.get((alias, path))
         if blob is None:
             raise DetectionError(f"requirement material is not in the Git snapshot: {locator}")
+        if blob.data is None:
+            raise DetectionError(f"requirement material exceeds semantic loading limits: {locator}")
         try:
             text = blob.data.decode("utf-8")
         except UnicodeDecodeError as exc:

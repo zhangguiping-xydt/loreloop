@@ -18,11 +18,18 @@ MAX_MANAGED_TOTAL_BYTES = 256 * 1024 * 1024
 MAX_JSON_VALUES = 4_000_000
 MAX_JSON_OBJECT_MEMBERS = 3_000_000
 MAX_JSON_CONTAINER_ITEMS = 100_000
+MAX_JSON_ARRAY_ELEMENTS = 1_000_000
+MAX_JSON_CONTAINERS = 1_000_000
 MAX_JSON_DEPTH = 128
 MAX_JSON_STRING_BYTES = 8 * 1024 * 1024
 MAX_JSON_SCALAR_BYTES = 64
 _MIN_DOCUMENTS = 6
 _MAX_DOCUMENTS = 8
+_REQUIRED_DOCUMENT_SUFFIXES = frozenset(
+    {"功能清单", "需求规格", "系统架构", "详细设计", "用户手册", "验收规格"}
+)
+_OPTIONAL_DOCUMENT_SUFFIXES = frozenset({"接口契约", "数据库设计"})
+_DOCUMENT_SUFFIXES = _REQUIRED_DOCUMENT_SUFFIXES | _OPTIONAL_DOCUMENT_SUFFIXES
 
 _ROOT = 0
 _OBJECT = 1
@@ -68,6 +75,8 @@ def _validate_json_budget(data: bytes) -> None:
     frames: list[list[int]] = [[_ROOT, _VALUE, 0]]
     total_values = 0
     total_object_members = 0
+    total_array_elements = 0
+    total_containers = 0
     index = 0
 
     def finish_value() -> None:
@@ -77,7 +86,7 @@ def _validate_json_budget(data: bytes) -> None:
         frame[1] = _END if frame[0] == _ROOT else _COMMA_OR_END
 
     def begin_value() -> None:
-        nonlocal total_values
+        nonlocal total_array_elements, total_values
         frame = frames[-1]
         if frame[0] == _ROOT:
             if frame[1] != _VALUE:
@@ -89,8 +98,11 @@ def _validate_json_budget(data: bytes) -> None:
             if frame[1] not in {_VALUE, _VALUE_OR_END}:
                 raise CapsuleIoError("capsule JSON array value is misplaced")
             frame[2] += 1
+            total_array_elements += 1
             if frame[2] > MAX_JSON_CONTAINER_ITEMS:
                 raise CapsuleIoError("capsule JSON array exceeds the item limit")
+            if total_array_elements > MAX_JSON_ARRAY_ELEMENTS:
+                raise CapsuleIoError("capsule JSON exceeds the total array element limit")
         frame[1] = _PENDING
         total_values += 1
         if total_values > MAX_JSON_VALUES:
@@ -103,16 +115,22 @@ def _validate_json_budget(data: bytes) -> None:
         finish_value()
 
     def start_value() -> None:
-        nonlocal index
+        nonlocal index, total_containers
         begin_value()
         byte = data[index]
         if byte == 0x7B:
+            total_containers += 1
+            if total_containers > MAX_JSON_CONTAINERS:
+                raise CapsuleIoError("capsule JSON exceeds the container limit")
             if len(frames) > MAX_JSON_DEPTH:
                 raise CapsuleIoError("capsule JSON nesting is too deep")
             frames.append([_OBJECT, _KEY_OR_END, 0])
             index += 1
             return
         if byte == 0x5B:
+            total_containers += 1
+            if total_containers > MAX_JSON_CONTAINERS:
+                raise CapsuleIoError("capsule JSON exceeds the container limit")
             if len(frames) > MAX_JSON_DEPTH:
                 raise CapsuleIoError("capsule JSON nesting is too deep")
             frames.append([_ARRAY, _VALUE_OR_END, 0])
@@ -251,7 +269,54 @@ def managed_document_filenames(capsule_data: bytes) -> tuple[str, ...]:
         filenames.append(_safe_document_filename(document.get("filename")))
     if len(filenames) != len(set(filenames)):
         raise CapsuleIoError("capsule contains duplicate document filenames")
+    prefixes: set[str] = set()
+    families: set[str] = set()
+    for filename in filenames:
+        matched = next(
+            (
+                family
+                for family in _DOCUMENT_SUFFIXES
+                if filename.endswith(f"-{family}.md")
+            ),
+            None,
+        )
+        if matched is None:
+            raise CapsuleIoError("capsule document filename is outside the managed family set")
+        prefixes.add(filename[: -len(f"-{matched}.md")])
+        families.add(matched)
+    if (
+        len(prefixes) != 1
+        or "" in prefixes
+        or not _REQUIRED_DOCUMENT_SUFFIXES <= families
+        or not families <= _DOCUMENT_SUFFIXES
+        or len(families) != len(filenames)
+    ):
+        raise CapsuleIoError("capsule document filenames do not form one closed project set")
     return tuple(filenames)
+
+
+def existing_managed_filenames(export_dir: Path) -> tuple[str, ...]:
+    """Read the previous Capsule's bounded managed namespace, if one exists."""
+    if export_dir.is_symlink():
+        raise CapsuleIoError(f"export directory must not be a symlink: {export_dir}")
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        directory_fd = os.open(export_dir, flags)
+    except FileNotFoundError:
+        return ()
+    except OSError as exc:
+        raise CapsuleIoError(f"cannot open export directory safely: {export_dir}") from exc
+    try:
+        try:
+            metadata = os.stat(CAPSULE_FILENAME, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return ()
+        if not stat.S_ISREG(metadata.st_mode):
+            raise CapsuleIoError("existing export Capsule must be a regular file")
+        capsule = _read_regular_at(directory_fd, CAPSULE_FILENAME, MAX_CAPSULE_BYTES)
+        return (CAPSULE_FILENAME, *managed_document_filenames(capsule))
+    finally:
+        os.close(directory_fd)
 
 
 def _read_regular_at(directory_fd: int, name: str, limit: int) -> bytes:
@@ -352,6 +417,8 @@ def parse_capsule(data: bytes) -> Mapping[str, JsonValue]:
         raise CapsuleIoError("capsule is not valid JSON") from exc
     except IdentityContractError as exc:
         raise CapsuleIoError(f"capsule is outside the canonical value domain: {exc}") from exc
+    except MemoryError as exc:
+        raise CapsuleIoError("capsule JSON exceeds the available parser memory") from exc
     except RecursionError as exc:
         raise CapsuleIoError("capsule JSON nesting is too deep") from exc
     except ValueError as exc:

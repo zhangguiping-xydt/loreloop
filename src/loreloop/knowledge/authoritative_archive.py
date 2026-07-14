@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import stat
 import struct
@@ -15,7 +16,7 @@ from .authoritative_capsule import CAPSULE_FILENAME
 from .authoritative_documents import SourceDocument
 
 MAX_ARCHIVE_FILES = 16
-MAX_ARCHIVE_COMPRESSED_BYTES = 256 * 1024 * 1024
+MAX_ARCHIVE_COMPRESSED_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_MEMBER_COMPRESSED_BYTES = 128 * 1024 * 1024
 MAX_ARCHIVE_COMPRESSION_RATIO = 200
 MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES = 64 * 1024
@@ -109,16 +110,11 @@ def _read_member(
     return data
 
 
-def _validate_central_directory(descriptor: int, archive_size: int) -> None:
+def _validate_central_directory(snapshot: bytes) -> None:
     """Bound entry count/metadata before ZipFile allocates its central-directory list."""
+    archive_size = len(snapshot)
     tail_size = min(archive_size, _EOCD_SIZE + _MAX_ZIP_COMMENT_BYTES)
-    os.lseek(descriptor, archive_size - tail_size, os.SEEK_SET)
-    tail = bytearray()
-    while len(tail) < tail_size:
-        chunk = os.read(descriptor, tail_size - len(tail))
-        if not chunk:
-            break
-        tail.extend(chunk)
+    tail = snapshot[-tail_size:]
     offset = tail.rfind(_EOCD_SIGNATURE)
     if offset < 0 or len(tail) - offset < _EOCD_SIZE:
         raise ExportArchiveError("archive lacks a bounded end-of-central-directory record")
@@ -149,7 +145,6 @@ def _validate_central_directory(descriptor: int, archive_size: int) -> None:
         raise ExportArchiveError("archive file count is outside the supported range")
     if directory_size > MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES:
         raise ExportArchiveError("archive central directory exceeds its size limit")
-    os.lseek(descriptor, 0, os.SEEK_SET)
 
 
 def write_export_archive(
@@ -241,61 +236,66 @@ def read_export_archive(path: Path) -> dict[str, bytes]:
         os.close(descriptor)
         raise ExportArchiveError("archive exceeds the compressed size limit")
     try:
-        _validate_central_directory(descriptor, metadata.st_size)
         with os.fdopen(descriptor, "rb") as stream:
             descriptor = -1
-            with zipfile.ZipFile(stream, mode="r", allowZip64=True) as archive:
-                entries = archive.infolist()
-                if not 1 <= len(entries) <= MAX_ARCHIVE_FILES:
-                    raise ExportArchiveError("archive file count is outside the supported range")
-                by_name: dict[str, zipfile.ZipInfo] = {}
-                for info in entries:
-                    _validate_member(info)
-                    if info.filename in by_name:
-                        raise ExportArchiveError(
-                            f"archive contains duplicate filename: {info.filename}"
-                        )
-                    by_name[info.filename] = info
-                capsule_info = by_name.get(CAPSULE_FILENAME)
-                if capsule_info is None:
-                    raise ExportArchiveError(f"archive is missing {CAPSULE_FILENAME}")
-                capsule = _read_member(
-                    archive,
-                    capsule_info,
-                    limit=capsule_io.MAX_CAPSULE_BYTES,
-                )
-                filenames = capsule_io.managed_document_filenames(capsule)
-                expected = {CAPSULE_FILENAME, *filenames}
-                missing = expected - set(by_name)
-                extras = set(by_name) - expected
-                if missing or extras:
+            snapshot = stream.read(MAX_ARCHIVE_COMPRESSED_BYTES + 1)
+        if len(snapshot) > MAX_ARCHIVE_COMPRESSED_BYTES:
+            raise ExportArchiveError("archive exceeds the compressed size limit")
+        _validate_central_directory(snapshot)
+        with zipfile.ZipFile(io.BytesIO(snapshot), mode="r", allowZip64=True) as archive:
+            entries = archive.infolist()
+            if not 1 <= len(entries) <= MAX_ARCHIVE_FILES:
+                raise ExportArchiveError("archive file count is outside the supported range")
+            by_name: dict[str, zipfile.ZipInfo] = {}
+            for info in entries:
+                _validate_member(info)
+                if info.filename in by_name:
                     raise ExportArchiveError(
-                        f"archive file set mismatch; missing={sorted(missing)}, extra={sorted(extras)}"
+                        f"archive contains duplicate filename: {info.filename}"
                     )
-                declared_total = capsule_info.file_size + sum(
-                    by_name[filename].file_size for filename in filenames
+                by_name[info.filename] = info
+            capsule_info = by_name.get(CAPSULE_FILENAME)
+            if capsule_info is None:
+                raise ExportArchiveError(f"archive is missing {CAPSULE_FILENAME}")
+            capsule = _read_member(
+                archive,
+                capsule_info,
+                limit=capsule_io.MAX_CAPSULE_BYTES,
+            )
+            filenames = capsule_io.managed_document_filenames(capsule)
+            expected = {CAPSULE_FILENAME, *filenames}
+            missing = expected - set(by_name)
+            extras = set(by_name) - expected
+            if missing or extras:
+                raise ExportArchiveError(
+                    f"archive file set mismatch; missing={sorted(missing)}, extra={sorted(extras)}"
                 )
-                if declared_total > capsule_io.MAX_MANAGED_TOTAL_BYTES:
-                    raise ExportArchiveError("archive expands beyond the managed total size limit")
-                files = {CAPSULE_FILENAME: capsule}
-                total = len(capsule)
-                for filename in filenames:
-                    data = _read_member(
-                        archive,
-                        by_name[filename],
-                        limit=capsule_io.MAX_DOCUMENT_BYTES,
+            declared_total = capsule_info.file_size + sum(
+                by_name[filename].file_size for filename in filenames
+            )
+            if declared_total > capsule_io.MAX_MANAGED_TOTAL_BYTES:
+                raise ExportArchiveError("archive expands beyond the managed total size limit")
+            files = {CAPSULE_FILENAME: capsule}
+            total = len(capsule)
+            for filename in filenames:
+                data = _read_member(
+                    archive,
+                    by_name[filename],
+                    limit=capsule_io.MAX_DOCUMENT_BYTES,
+                )
+                total += len(data)
+                if total > capsule_io.MAX_MANAGED_TOTAL_BYTES:
+                    raise ExportArchiveError(
+                        "archive expands beyond the managed total size limit"
                     )
-                    total += len(data)
-                    if total > capsule_io.MAX_MANAGED_TOTAL_BYTES:
-                        raise ExportArchiveError(
-                            "archive expands beyond the managed total size limit"
-                        )
-                    files[filename] = data
-                return files
+                files[filename] = data
+            return files
     except ExportArchiveError:
         raise
     except capsule_io.CapsuleIoError as exc:
         raise ExportArchiveError(f"archive Capsule is invalid: {exc}") from exc
+    except MemoryError as exc:
+        raise ExportArchiveError("archive exceeds the available reader memory") from exc
     except (OSError, zipfile.BadZipFile, RuntimeError, EOFError, ValueError) as exc:
         raise ExportArchiveError(f"cannot read export archive: {exc}") from exc
     finally:

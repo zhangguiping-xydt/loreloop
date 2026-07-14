@@ -2387,7 +2387,9 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
             file=sys.stderr,
         )
         requirements = tuple(args.requirements)
-        blobs = read_snapshot_blobs(snapshot, workdir, peers)
+        blobs = read_snapshot_blobs(
+            snapshot, workdir, peers, requirements=requirements
+        )
         report = detect_snapshot_blobs(blobs, requirements=requirements)
         project_name = args.project_name or workdir.name
         core = build_semantic_core(snapshot, blobs, report, project_name=project_name)

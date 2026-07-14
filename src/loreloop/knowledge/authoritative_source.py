@@ -26,6 +26,9 @@ from .authoritative_records import DetectionError, DetectionReport, merge_report
 from .authoritative_report_normalize import normalize_detection_report
 from .authoritative_types import SourceSnapshot
 
+MAX_SEMANTIC_BLOB_BYTES = 16 * 1024 * 1024
+MAX_SEMANTIC_TOTAL_BYTES = 256 * 1024 * 1024
+
 _AUXILIARY_SEGMENTS = frozenset(
     {"test", "tests", "__tests__", "fixtures", "snapshots", "__snapshots__"}
 )
@@ -40,8 +43,9 @@ _AUXILIARY_FILE = re.compile(
 class SnapshotBlob:
     repository_alias: str
     path: str
-    data: bytes
+    data: bytes | None
     blob_sha256: str
+    byte_length: int | None = None
 
 
 def _repository_paths(
@@ -67,30 +71,85 @@ def read_snapshot_blobs(
     snapshot: SourceSnapshot,
     root: Path,
     peers: Mapping[str, Path] | None = None,
+    requirements: tuple[str, ...] = (),
 ) -> tuple[SnapshotBlob, ...]:
-    """Read exact committed bytes and prove they still match the captured snapshot."""
+    """Load only bounded semantic candidates while retaining full snapshot coverage."""
     verify_source_snapshot_metadata(snapshot, root, peers)
     paths = _repository_paths(snapshot, root, peers)
+    requirement_keys: set[tuple[str, str]] = set()
+    for locator in requirements:
+        if locator.startswith("repo:"):
+            alias, separator, path = locator[5:].partition("/")
+            if separator and alias and path:
+                requirement_keys.add((alias, path))
+        elif locator and not locator.startswith("/"):
+            requirement_keys.add((".", locator))
     blobs: list[SnapshotBlob] = []
+    remaining = MAX_SEMANTIC_TOTAL_BYTES
     for repository in snapshot.repositories:
         repo = paths[repository.alias]
-        entries = tuple(entry for entry in repository.entries if entry.mode not in {"120000", "160000"})
-        payloads = read_blob_batch(
-            repo, tuple(entry.object_id.git_sha1_hex() for entry in entries)
+        entries = tuple(
+            entry for entry in repository.entries if entry.mode not in {"120000", "160000"}
         )
+        selected = tuple(
+            entry
+            for entry in entries
+            if (repository.alias, entry.path) in requirement_keys
+            or (
+                not excluded_semantic_source(entry.path)
+                and _semantic_path_candidate(entry.path)
+            )
+            if entry.byte_length is not None
+            and entry.byte_length <= MAX_SEMANTIC_BLOB_BYTES
+        )
+        oversized_requirements = tuple(
+            entry.path
+            for entry in entries
+            if (repository.alias, entry.path) in requirement_keys
+            and entry.byte_length is not None
+            and entry.byte_length > MAX_SEMANTIC_BLOB_BYTES
+        )
+        if oversized_requirements:
+            raise GitSnapshotError(
+                "requirement material exceeds the semantic blob size limit: "
+                + ", ".join(oversized_requirements)
+            )
+        payloads = read_blob_batch(
+            repo,
+            tuple(entry.object_id.git_sha1_hex() for entry in selected),
+            max_total_bytes=remaining,
+        )
+        remaining -= sum(len(data) for data in payloads.values())
         for entry in entries:
-            data = payloads[entry.object_id.git_sha1_hex()]
-            digest = hashlib.sha256(data).hexdigest()
-            if len(data) != entry.byte_length or digest != entry.blob_sha256:
+            data = payloads.get(entry.object_id.git_sha1_hex())
+            digest = entry.blob_sha256
+            if digest is None or entry.byte_length is None:
+                raise GitSnapshotError("snapshot blob metadata is incomplete")
+            if data is not None and (
+                len(data) != entry.byte_length or hashlib.sha256(data).hexdigest() != digest
+            ):
                 raise GitSnapshotError(
                     f"blob {repository.alias}:{entry.path} differs from the captured snapshot"
                 )
-            blobs.append(SnapshotBlob(repository.alias, entry.path, data, digest))
+            blobs.append(
+                SnapshotBlob(
+                    repository.alias,
+                    entry.path,
+                    data,
+                    digest,
+                    entry.byte_length,
+                )
+            )
     verify_source_snapshot_metadata(snapshot, root, peers)
     return tuple(blobs)
 
 
 def _text(blob: SnapshotBlob) -> str:
+    if blob.data is None:
+        raise DetectionError(
+            f"supported source exceeds semantic loading limits: "
+            f"{blob.repository_alias}:{blob.path}"
+        )
     try:
         return blob.data.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -126,9 +185,39 @@ def excluded_semantic_source(path: str) -> bool:
     )
 
 
+def _semantic_path_candidate(path: str) -> bool:
+    lower = path.lower()
+    return (
+        lower.endswith(
+            (
+                ".py",
+                ".ts",
+                ".tsx",
+                ".js",
+                ".jsx",
+                ".mjs",
+                ".cjs",
+                ".sql",
+                ".prisma",
+                ".graphql",
+                ".graphqls",
+                ".gql",
+                ".proto",
+                ".json",
+                ".yaml",
+                ".yml",
+            )
+        )
+        or _is_config(path)
+        or is_extended_source(path)
+    )
+
+
 def detector_profile(blob: SnapshotBlob) -> str | None:
     """Name the deterministic detector that will inspect this committed blob."""
     lower = blob.path.lower()
+    if blob.data is None:
+        return None
     if excluded_semantic_source(blob.path):
         return None
     if lower.endswith(".py"):
@@ -164,7 +253,7 @@ def detect_snapshot_blobs(
     """Run deterministic detectors over one already verified blob set."""
     reports: list[DetectionReport] = []
     for blob in blobs:
-        if excluded_semantic_source(blob.path):
+        if blob.data is None or excluded_semantic_source(blob.path):
             continue
         try:
             report = _detect_snapshot_blob(blob)
@@ -216,4 +305,7 @@ def detect_source_snapshot(
     requirements: tuple[str, ...] = (),
 ) -> DetectionReport:
     """Read and detect one exact committed source snapshot."""
-    return detect_snapshot_blobs(read_snapshot_blobs(snapshot, root, peers), requirements)
+    return detect_snapshot_blobs(
+        read_snapshot_blobs(snapshot, root, peers, requirements=requirements),
+        requirements,
+    )

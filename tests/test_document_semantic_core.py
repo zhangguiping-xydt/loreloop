@@ -36,7 +36,7 @@ def test_semantic_core_binds_requirements_and_source_to_stable_records(tmp_path:
 
     # When: the single SemanticCore boundary is built twice.
     snapshot = capture_source_snapshot(repo)
-    blobs = read_snapshot_blobs(snapshot, repo)
+    blobs = read_snapshot_blobs(snapshot, repo, requirements=("requirements.md",))
     report = detect_source_snapshot(snapshot, repo, requirements=("requirements.md",))
     first = build_semantic_core(snapshot, blobs, report, project_name="demo")
     second = build_semantic_core(snapshot, blobs, report, project_name="demo")
@@ -64,7 +64,9 @@ def test_semantic_core_binds_requirements_and_source_to_stable_records(tmp_path:
     _ = app.write_text('\n@app.get("/health")\ndef health(): return True\n', encoding="utf-8")
     _commit(repo, "move source line")
     moved_snapshot = capture_source_snapshot(repo)
-    moved_blobs = read_snapshot_blobs(moved_snapshot, repo)
+    moved_blobs = read_snapshot_blobs(
+        moved_snapshot, repo, requirements=("requirements.md",)
+    )
     moved_report = detect_source_snapshot(moved_snapshot, repo, requirements=("requirements.md",))
     moved = build_semantic_core(
         moved_snapshot, moved_blobs, moved_report, project_name="demo"

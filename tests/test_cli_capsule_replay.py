@@ -70,6 +70,54 @@ def test_cli_replay_ignores_preserved_non_markdown_operator_file(
     assert (output / "keep.txt").read_text(encoding="utf-8") == "operator file\n"
 
 
+def test_force_directory_export_removes_previous_project_document_namespace(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    repo = _repository(tmp_path / "repo")
+    output = tmp_path / "export"
+    monkeypatch.chdir(repo)
+    assert (
+        main(
+            [
+                "knowledge",
+                "export",
+                "--format",
+                "docs",
+                "--output",
+                str(output),
+                "--project-name",
+                "old",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    (output / "operator.md").write_text("operator\n", encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "knowledge",
+                "export",
+                "--format",
+                "docs",
+                "--output",
+                str(output),
+                "--project-name",
+                "new",
+                "--force",
+            ]
+        )
+        == 0
+    )
+
+    names = {path.name for path in output.iterdir()}
+    assert not any(name.startswith("old-") for name in names)
+    assert any(name.startswith("new-") for name in names)
+    assert (output / "operator.md").read_text(encoding="utf-8") == "operator\n"
+    assert main(["knowledge", "replay", str(output)]) == 0
+
+
 def test_cli_directory_replay_ignores_unmanaged_files_directories_and_large_sparse_file(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -174,6 +222,41 @@ raise SystemExit(1)
 
     assert result.returncode == 0, result.stderr
     assert "array exceeds the item limit" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="address-space proof uses Linux resource limits")
+def test_capsule_parser_rejects_many_small_containers_under_bounded_address_space() -> None:
+    code = """
+import resource
+from loreloop.knowledge.authoritative_capsule_io import CapsuleIoError, parse_capsule
+limit = 220_000_000
+resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+rows = 39
+columns = 100_000
+row = b'[' + b'{},' * (columns - 1) + b'{}]'
+data = b'{"x":[' + b','.join([row] * rows) + b']}\\n'
+try:
+    parse_capsule(data)
+except CapsuleIoError as exc:
+    print(exc)
+    raise SystemExit(0)
+raise SystemExit(1)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).parents[1],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        "total array element limit" in result.stdout
+        or "container limit" in result.stdout
+    )
 
 
 def test_cli_trusted_replay_requires_exact_attested_package(

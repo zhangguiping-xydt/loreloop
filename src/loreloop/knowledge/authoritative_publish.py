@@ -393,6 +393,7 @@ def publish_tree(
     *,
     managed_filenames: Iterable[str] = (),
     expected_output_exists: bool | None = None,
+    discover_existing_capsule: bool = False,
 ) -> None:
     """Install a complete tree; on Linux, updates switch with one directory exchange."""
     output = output.absolute()
@@ -419,6 +420,10 @@ def publish_tree(
         stage.mkdir(mode=0o700)
         if expected_output_exists:
             _copy_existing(output, stage)
+            if discover_existing_capsule:
+                from .authoritative_capsule_io import existing_managed_filenames
+
+                managed = frozenset((*managed, *existing_managed_filenames(stage)))
         for filename in managed:
             if Path(filename).name != filename:
                 raise PublicationError(f"invalid managed filename: {filename}")
@@ -450,6 +455,7 @@ def publish_tree(
                 "old_digest": old_digest,
                 "new_digest": new_digest,
                 "new_tree": new_tree,
+                "managed_filenames": sorted(managed),
                 "state": "install_intent",
             }
         )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -199,6 +201,32 @@ def test_root_openapi_marker_is_detected_when_it_is_not_the_first_json_field(
     report = detect_source_snapshot(snapshot, root)
 
     assert tuple(item.path for item in report.interfaces) == ("/health",)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="address-space proof uses Linux resource limits")
+def test_openapi_root_probe_skips_wide_business_json_without_materializing_it() -> None:
+    code = """
+import resource
+from loreloop.knowledge.authoritative_detector_openapi import has_supported_openapi_root
+limit = 220_000_000
+resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+rows = 39
+columns = 100_000
+row = '[' + '{},' * (columns - 1) + '{}]'
+source = '{"data":[' + ','.join([row] * rows) + ']}\\n'
+raise SystemExit(1 if has_supported_openapi_root(source) else 0)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).parents[1],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_snapshot_detection_error_identifies_repository_and_file(tmp_path: Path) -> None:

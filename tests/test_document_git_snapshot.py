@@ -5,12 +5,14 @@ from pathlib import Path
 
 import pytest
 
+from loreloop.knowledge import authoritative_source
 from loreloop.knowledge.authoritative_git import (
     GitSnapshotError,
     capture_source_snapshot,
     verify_source_snapshot,
     verify_source_snapshot_metadata,
 )
+from loreloop.knowledge.authoritative_source import read_snapshot_blobs
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -214,3 +216,36 @@ def test_aggregate_snapshot_rejects_root_topology_change_during_use(tmp_path: Pa
 
     with pytest.raises(GitSnapshotError, match="topology changed"):
         verify_source_snapshot_metadata(snapshot, workspace, {"backend": backend})
+
+
+def test_snapshot_streams_large_nonsemantic_asset_without_retaining_bytes(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path / "repo", {"app.py": "VALUE = 1\n"})
+    (repo / "asset.bin").write_bytes(
+        b"x" * (authoritative_source.MAX_SEMANTIC_BLOB_BYTES + 1)
+    )
+    _ = _git(repo, "add", "-A")
+    _ = _git(repo, "commit", "-m", "large asset")
+
+    snapshot = capture_source_snapshot(repo)
+    blobs = read_snapshot_blobs(snapshot, repo)
+    by_path = {blob.path: blob for blob in blobs}
+
+    assert by_path["app.py"].data == b"VALUE = 1\n"
+    assert by_path["asset.bin"].data is None
+    assert by_path["asset.bin"].byte_length == authoritative_source.MAX_SEMANTIC_BLOB_BYTES + 1
+
+
+def test_semantic_blob_loading_has_a_project_total_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repository(
+        tmp_path / "repo",
+        {"one.py": "VALUE = 1\n", "two.py": "VALUE = 2\n"},
+    )
+    snapshot = capture_source_snapshot(repo)
+    monkeypatch.setattr(authoritative_source, "MAX_SEMANTIC_TOTAL_BYTES", 8)
+
+    with pytest.raises(GitSnapshotError, match="total byte limit"):
+        _ = read_snapshot_blobs(snapshot, repo)

@@ -177,6 +177,7 @@ def write_source_documents(
             ((document.filename, document.content) for document in documents),
             managed_filenames=managed_filenames,
             expected_output_exists=expected_output_exists,
+            discover_existing_capsule=True,
         )
     except PublicationError as exc:
         raise SourceDocumentError(str(exc)) from exc
