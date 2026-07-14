@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import sys
 import warnings
 import zipfile
 from pathlib import Path
@@ -135,6 +136,33 @@ def test_archive_reader_rejects_symlinked_package(tmp_path: Path) -> None:
 
     with pytest.raises(ExportArchiveError, match="must not be a symlink"):
         _ = read_export_archive(link)
+
+
+def test_archive_reader_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFOs are unavailable")
+    fifo = tmp_path / "package.zip"
+    os.mkfifo(fifo)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; "
+                "from loreloop.knowledge.authoritative_archive import read_export_archive; "
+                "read_export_archive(Path(__import__('sys').argv[1]))"
+            ),
+            str(fifo),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "not a regular file" in completed.stderr
 
 
 def test_archive_first_install_does_not_overwrite_a_racing_operator_file(

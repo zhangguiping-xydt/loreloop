@@ -31,6 +31,7 @@ from .knowledge.endorsement import (
     SUPERSEDE_EVENT,
     UNSUPERSEDE_EVENT,
     assert_trust_projection,
+    chain_approved_ids,
     chain_contradicted_ids,
     chain_endorsed_strong_ids,
     chain_effective_curation,
@@ -2371,6 +2372,7 @@ def _select_governed_web_entries(
     retired = chain_superseded_ids(records) | chain_rejected_ids(records)
     assert_trust_projection(entries, records, retired_ids=retired)
     effective = chain_effective_curation(records)
+    approved = chain_approved_ids(entries, records)
     verified = chain_verified_ids(entries, records)
     contradicted = chain_contradicted_ids(records)
     selected = tuple(
@@ -2378,6 +2380,7 @@ def _select_governed_web_entries(
         for entry in entries
         if entry.source.channel is Channel.WEB
         and effective.get(entry.id, Curation.DRAFT) is Curation.APPROVED
+        and entry.id in approved
         and entry.id in verified
         and entry.id not in retired
         and entry.id not in contradicted

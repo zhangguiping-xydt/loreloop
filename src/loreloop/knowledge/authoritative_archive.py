@@ -225,7 +225,12 @@ def read_export_archive(path: Path) -> dict[str, bytes]:
         raise ExportArchiveError(f"export archive must not be a symlink: {path}")
     descriptor = -1
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
         metadata = os.fstat(descriptor)
     except OSError as exc:
         raise ExportArchiveError(f"cannot inspect export archive: {path}") from exc

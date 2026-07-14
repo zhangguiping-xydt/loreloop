@@ -43,9 +43,23 @@ def _web_entry() -> Entry:
         source=Source(
             Channel.WEB,
             "https://app.example.test/settings",
-            snapshot_ref="sha256:web-snapshot",
+            snapshot_ref="a" * 64,
         ),
     )
+
+
+def _verified_payload(entry: Entry) -> dict[str, object]:
+    return {
+        "run_id": "verify-20260714000000",
+        "entry_id": entry.id,
+        "entry_digest": entry_digest(entry),
+        "claim": entry.content,
+        "url": entry.source.locator,
+        "page_snapshot": entry.source.snapshot_ref,
+        "artifact": "b" * 64,
+        "judge": "llm",
+        "verified_via": "browser",
+    }
 
 
 def _web_entries_all_kinds() -> tuple[Entry, ...]:
@@ -78,7 +92,7 @@ def test_governed_web_selection_requires_approval_and_verification() -> None:
     verified = _record(
         1,
         "entry_verified",
-        {"entry_id": entry.id, "entry_digest": digest},
+        _verified_payload(entry),
     )
 
     assert _select_governed_web_entries([entry], [approved]) == ()
@@ -90,6 +104,14 @@ def test_governed_web_selection_requires_approval_and_verification() -> None:
         {"minted": {entry.id: digest}},
     )
     assert _select_governed_web_entries([entry], [approved, harvested]) == ()
+    incomplete_verified = _record(
+        2,
+        "entry_verified",
+        {"entry_id": entry.id, "entry_digest": digest},
+    )
+    assert _select_governed_web_entries(
+        [entry], [approved, incomplete_verified]
+    ) == ()
     contradicted = _record(2, "entry_contradicted", {"entry_id": entry.id})
     assert _select_governed_web_entries(
         [entry], [approved, verified, contradicted]
@@ -105,7 +127,7 @@ def test_governed_web_selection_does_not_reuse_verification_after_rejection() ->
             "curation_changed",
             {"entry_id": entry.id, "curation": "approved", "entry_digest": digest},
         ),
-        _record(1, "entry_verified", {"entry_id": entry.id, "entry_digest": digest}),
+        _record(1, "entry_verified", _verified_payload(entry)),
         _record(
             2,
             "curation_changed",
@@ -135,12 +157,58 @@ def test_governed_web_selection_rejects_sqlite_content_rewrite() -> None:
             "curation_changed",
             {"entry_id": entry.id, "curation": "approved", "entry_digest": digest},
         ),
-        _record(1, "entry_verified", {"entry_id": entry.id, "entry_digest": digest}),
+        _record(1, "entry_verified", _verified_payload(entry)),
     ]
     rewritten = replace(entry, content="SQLite 中被改写但未重新批准或验证的内容。")
 
     with pytest.raises(TrustProjectionError, match="unexplained content/source digest"):
         _select_governed_web_entries([rewritten], records)
+
+
+def test_governed_web_selection_requires_reapproval_after_reingest() -> None:
+    original = _web_entry()
+    original_digest = entry_digest(original)
+    reingested = replace(
+        original,
+        content="页面现在显示新的保存结果；这份内容尚未重新获得人工批准。",
+    )
+    current_digest = entry_digest(reingested)
+    records = [
+        _record(
+            0,
+            "curation_changed",
+            {
+                "entry_id": original.id,
+                "curation": "approved",
+                "entry_digest": original_digest,
+            },
+        ),
+        _record(
+            1,
+            "entry_reingested",
+            {"entry_id": original.id, "entry_digest": current_digest},
+        ),
+        _record(
+            2,
+            "entry_verified",
+            _verified_payload(reingested),
+        ),
+    ]
+
+    assert _select_governed_web_entries([reingested], records) == ()
+
+    records.append(
+        _record(
+            3,
+            "curation_changed",
+            {
+                "entry_id": original.id,
+                "curation": "approved",
+                "entry_digest": current_digest,
+            },
+        )
+    )
+    assert _select_governed_web_entries([reingested], records) == (reingested,)
 
 
 def test_governed_web_input_binds_content_to_synthetic_evidence() -> None:

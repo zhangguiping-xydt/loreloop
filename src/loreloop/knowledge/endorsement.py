@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from ..evidence.chain import EvidenceChain, EvidenceRecord
 from .model import CURATION_TRANSITIONS, Channel, Curation, Entry, Kind, Source
@@ -35,6 +37,7 @@ CURATION_EVENT = "curation_changed"
 SUPERSEDE_EVENT = "entry_superseded"
 UNSUPERSEDE_EVENT = "entry_supersession_reverted"
 REINGEST_EVENT = "entry_reingested"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class TrustProjectionError(RuntimeError):
@@ -134,14 +137,62 @@ def chain_endorsed_strong_ids(entries: list[Entry], records: list[EvidenceRecord
     return {e.id for e in entries if entry_digest(e) in endorsed.get(e.id, set())}
 
 
+def chain_approved_ids(entries: list[Entry], records: list[EvidenceRecord]) -> set[str]:
+    """Entries whose current digest is the subject of the live human approval."""
+    approved: dict[str, str] = {}
+    for record in records:
+        if record.event != CURATION_EVENT:
+            continue
+        payload = record.payload
+        entry_id = payload.get("entry_id")
+        if not entry_id:
+            continue
+        digest = payload.get("entry_digest")
+        if payload.get("curation") == Curation.APPROVED.value and digest:
+            approved[entry_id] = digest
+        else:
+            approved.pop(entry_id, None)
+    return {entry.id for entry in entries if approved.get(entry.id) == entry_digest(entry)}
+
+
 def chain_verified_ids(entries: list[Entry], records: list[EvidenceRecord]) -> set[str]:
-    """Entries whose current digest has a live machine-verification endorsement."""
+    """Entries whose current digest has a live browser-verification endorsement."""
+    by_id = {entry.id: entry for entry in entries}
     verified: dict[str, str] = {}
     for record in records:
         payload = record.payload
         entry_id = payload.get("entry_id")
-        if record.event == "entry_verified" and entry_id and payload.get("entry_digest"):
-            verified[entry_id] = payload["entry_digest"]
+        if record.event == "entry_verified" and entry_id:
+            entry = by_id.get(entry_id)
+            digest = payload.get("entry_digest")
+            page_snapshot = payload.get("page_snapshot")
+            artifact = payload.get("artifact")
+            url = payload.get("url")
+            run_id = payload.get("run_id")
+            judge = payload.get("judge")
+            valid_url = False
+            if isinstance(url, str):
+                parsed = urlsplit(url)
+                valid_url = parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+            if (
+                entry is not None
+                and entry.source.channel is Channel.WEB
+                and payload.get("verified_via") == "browser"
+                and isinstance(run_id, str)
+                and bool(run_id.strip())
+                and payload.get("claim") == entry.content
+                and isinstance(page_snapshot, str)
+                and _SHA256_RE.fullmatch(page_snapshot) is not None
+                and page_snapshot == entry.source.snapshot_ref
+                and isinstance(artifact, str)
+                and _SHA256_RE.fullmatch(artifact) is not None
+                and judge == "llm"
+                and valid_url
+                and isinstance(digest, str)
+            ):
+                verified[entry_id] = digest
+            else:
+                verified.pop(entry_id, None)
         elif record.event == "entry_contradicted" and entry_id:
             verified.pop(entry_id, None)
         elif record.event == CURATION_EVENT and entry_id:
