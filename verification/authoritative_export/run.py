@@ -418,6 +418,18 @@ def main(argv: list[str] | None = None) -> int:
             gates.append(
                 _run_gate(name, command, cwd=checkout, logs=logs, env=env, timeout=timeout)
             )
+        browser_env = dict(env)
+        browser_env["LORELOOP_REQUIRE_PLAYWRIGHT_E2E"] = "1"
+        gates.append(
+            _run_gate(
+                "playwright-web-e2e",
+                (python, "-m", "pytest", "-q", "tests/test_smoke_playwright.py"),
+                cwd=checkout,
+                logs=logs,
+                env=browser_env,
+                timeout=360,
+            )
+        )
         wheels = tuple((scratch / "dist").glob("*.whl"))
         if len(wheels) == 1:
             wheel_source = wheels[0]

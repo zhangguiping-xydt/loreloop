@@ -1,18 +1,29 @@
-"""End-to-end smoke test against a real chromium via playwright.
+"""End-to-end smoke tests against a real Chromium via Playwright.
 
 Skipped when playwright is not installed; CI runs it in a dedicated job.
-Serves a static page locally, observes it with the real browser, and walks
-the deterministic verify path — no LLM anywhere, so the test is hermetic.
+Serves a static page locally and exercises both browser primitives and the
+complete Web-to-baseline CLI loop. Model-shaped extraction and judging use a
+deterministic local subprocess adapter, so no network model is involved.
 """
 
+import json
+import os
+import re
+import subprocess
+import sys
 import threading
 from functools import partial
 from http.server import BaseHTTPRequestHandler, HTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
 from urllib.parse import urlsplit
+import zipfile
 
 import pytest
 
-pytest.importorskip("playwright")
+if os.environ.get("LORELOOP_REQUIRE_PLAYWRIGHT_E2E") == "1":
+    __import__("playwright")
+else:
+    pytest.importorskip("playwright")
 
 from loreloop.evidence.artifacts import ArtifactStore  # noqa: E402
 from loreloop.evidence.chain import EvidenceChain  # noqa: E402
@@ -31,6 +42,76 @@ PAGE = """<!doctype html>
   <a href="/other.html">other</a>
 </body></html>
 """
+
+ROOT = Path(__file__).parents[1]
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+
+def _install_hermetic_codex(root: Path, site_url: str) -> dict[str, str]:
+    """Install a prompt-aware local agent executable; browser/state remain real."""
+    binary_dir = root / "agent-bin"
+    binary_dir.mkdir()
+    executable = binary_dir / "codex"
+    executable.write_text(
+        """#!/usr/bin/env python3
+import json
+import sys
+
+SITE_URL = {site_url}
+prompt = sys.stdin.read()
+if "prompt-version: web-extract-v2" in prompt:
+    result = [{{
+        "claim": "Maximum file size is 50MB.",
+        "title": "Upload limit",
+        "url": SITE_URL,
+    }}]
+elif "prompt-version: claim-classify-v2" in prompt:
+    result = [{{"id": 0, "kind": "constraint"}}]
+elif "You are verifying an acceptance expectation" in prompt:
+    result = {{"passed": True, "reason": "The page states Maximum file size is 50MB."}}
+else:
+    sys.stderr.write("unexpected LoreLoop inference prompt")
+    raise SystemExit(2)
+print(json.dumps(result, ensure_ascii=False))
+""".format(site_url=json.dumps(site_url)),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    environment = os.environ.copy()
+    environment["PATH"] = f"{binary_dir}{os.pathsep}{environment.get('PATH', '')}"
+    source_path = str(ROOT / "src")
+    existing_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        f"{source_path}{os.pathsep}{existing_pythonpath}"
+        if existing_pythonpath
+        else source_path
+    )
+    return environment
+
+
+def _cli(
+    cwd: Path,
+    environment: dict[str, str],
+    *arguments: str,
+    timeout: int = 120,
+) -> subprocess.CompletedProcess[str]:
+    completed = subprocess.run(
+        [sys.executable, "-m", "loreloop.cli", *arguments],
+        cwd=cwd,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    assert completed.returncode == 0, (
+        f"command failed: loreloop {' '.join(arguments)}\n"
+        f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+    )
+    return completed
 
 
 class NoLLM:
@@ -200,3 +281,92 @@ def test_real_browser_blocks_javascript_post_without_allow_writes(write_site, br
     assert allowed.succeeded
     assert allowed.allow_writes is True
     assert posted.wait(2)
+
+
+def test_real_web_cli_loop_updates_and_searches_baseline(site, tmp_path):
+    """Real Chromium -> store/chain -> package/replay -> no-import ZIP search."""
+    repo = tmp_path / "project"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "LoreLoop E2E")
+    _git(repo, "config", "user.email", "loreloop-e2e@example.invalid")
+    (repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "fixture")
+    environment = _install_hermetic_codex(tmp_path, site)
+
+    initialized = _cli(repo, environment, "init", "--no-skill")
+    assert "local trust: ready" in initialized.stdout
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-q", "-m", "ignore LoreLoop state")
+
+    ingested = _cli(
+        repo,
+        environment,
+        "--agent",
+        "codex",
+        "ingest",
+        "--from",
+        "web",
+        site,
+        "--max-pages",
+        "1",
+    )
+    assert "ingested 1 knowledge entries" in ingested.stdout
+    assert "explored 1 pages" in ingested.stderr
+
+    listed = _cli(repo, environment, "knowledge", "list", "--channel", "web")
+    match = re.search(r"(?m)^([0-9a-f]{8})\s+", listed.stdout)
+    assert match is not None
+    entry_prefix = match.group(1)
+
+    approved = _cli(repo, environment, "knowledge", "approve", entry_prefix)
+    assert "approved:" in approved.stdout
+    verified = _cli(
+        repo,
+        environment,
+        "--agent",
+        "codex",
+        "knowledge",
+        "verify",
+        entry_prefix,
+    )
+    assert "VERIFIED: Upload limit" in verified.stdout
+
+    package = tmp_path / "baseline.zip"
+    exported = _cli(
+        repo,
+        environment,
+        "knowledge",
+        "export",
+        "--format",
+        "package",
+        "--output",
+        str(package),
+        "--include-web",
+    )
+    assert "included 1 approved and verified Web knowledge entries" in exported.stderr
+    replayed = _cli(repo, environment, "knowledge", "replay", str(package))
+    assert "Capsule replay: no_key" in replayed.stdout
+    with zipfile.ZipFile(package) as archive:
+        rendered = "\n".join(
+            archive.read(name).decode("utf-8")
+            for name in archive.namelist()
+            if name.endswith(".md")
+        )
+    assert "Maximum file size is 50MB." in rendered
+
+    isolated = tmp_path / "search-only"
+    isolated.mkdir()
+    searched = _cli(
+        isolated,
+        environment,
+        "knowledge",
+        "search",
+        "Maximum file size",
+        "--package",
+        str(package),
+    )
+    assert "Maximum file size is 50MB." in searched.stdout
+    assert "verifying baseline and building a transient search index" in searched.stderr
+    assert not (isolated / ".loreloop").exists()
