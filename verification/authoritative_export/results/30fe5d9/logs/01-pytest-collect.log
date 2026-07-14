@@ -582,6 +582,7 @@ tests/test_smoke_playwright.py::test_observe_rejects_http_error_pages
 tests/test_smoke_playwright.py::test_deterministic_verify_against_real_page
 tests/test_smoke_playwright.py::test_script_verify_against_real_page
 tests/test_smoke_playwright.py::test_real_browser_blocks_javascript_post_without_allow_writes
+tests/test_smoke_playwright.py::test_real_web_cli_loop_updates_and_searches_baseline
 tests/test_verify_entry.py::test_verify_entry_pass_writes_back_verified
 tests/test_verify_entry.py::test_verify_entry_fail_writes_back_contradicted
 tests/test_verify_entry.py::test_verify_entry_drift_pass_reanchors_snapshot
@@ -627,6 +628,6 @@ tests/test_webexplore.py::test_verify_script_records_replayable_artifacts
 tests/test_webexplore.py::test_verify_script_rejects_cross_origin_final_observation
 tests/test_webexplore.py::test_verify_script_failure_records_no_final_snapshot
 
-625 tests collected in 2.52s
+626 tests collected in 2.74s
 
 [stderr]

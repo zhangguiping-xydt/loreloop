@@ -1,6 +1,6 @@
 {
   "contract": "docs/verification/authoritative-export-v5.md",
-  "contract_sha256": "f20ccdaada03e25205d6d1ad1569e5e86dcd9fcb80aa6cc5a6ca1a8fe7913ea2",
+  "contract_sha256": "7cc99114d538b0571597b08c96b6284471bba8269831a5e7e37a4ea0a389cfb7",
   "dogfood": {
     "commit": "0455028a3cd25d87f76bc389f89261eee658657a",
     "entries": [
@@ -16,7 +16,7 @@
     ],
     "path": "artifacts/dogfood-knowledge.zip",
     "public_ref": "refs/heads/main",
-    "public_ref_tip": "c1191cdf2fbbea4cc9797d7f110a4e0acf50d3c7",
+    "public_ref_tip": "96eaf2be808498daf70fd69d095b44f420550305",
     "remote_url": "https://github.com/openclaw/openclaw.git",
     "source": "/media/vdc/worktree/openclaw-discord-probe",
     "tracked_files": 20167,
@@ -80,10 +80,10 @@
         "--collect-only",
         "-q"
       ],
-      "duration_seconds": 3.072,
+      "duration_seconds": 3.476,
       "exit_code": 0,
       "log": "logs/01-pytest-collect.log",
-      "log_sha256": "f808aa75c7d7e68844556101015b87c780c5171fd4e20e4062579b7121bc8c96",
+      "log_sha256": "838c70299f82ac82345af5924ee72e3a17c02eed42abda44983f3cb0efe37812",
       "name": "pytest-collect"
     },
     {
@@ -93,10 +93,10 @@
         "pytest",
         "-q"
       ],
-      "duration_seconds": 152.755,
+      "duration_seconds": 173.979,
       "exit_code": 0,
       "log": "logs/02-full-test-suite.log",
-      "log_sha256": "bae359f63fe57ba02e110904678244fa03a00201580c27e8429a4fe72bd8f385",
+      "log_sha256": "79074c2c947b426cd44af88c569b9cf292305391c6f71237a6ef9f603ca1fd97",
       "name": "full-test-suite"
     },
     {
@@ -107,7 +107,7 @@
         "tests",
         "plugins"
       ],
-      "duration_seconds": 0.065,
+      "duration_seconds": 0.102,
       "exit_code": 0,
       "log": "logs/03-ruff.log",
       "log_sha256": "69462bc0ee6dcbd9d0df1bce9a612c8fd36794653b17d42b8e7cd50c55e6eed0",
@@ -123,7 +123,7 @@
         "src/loreloop/example",
         "-lll"
       ],
-      "duration_seconds": 4.656,
+      "duration_seconds": 4.687,
       "exit_code": 0,
       "log": "logs/04-bandit-medium-high.log",
       "log_sha256": "9cb9c83cff124bef8e41702bc8e7d053eecf66448ed6783cd846bbac51e23982",
@@ -140,10 +140,10 @@
         "tests/test_document_detector_matrix.py",
         "tests/test_document_git_snapshot.py"
       ],
-      "duration_seconds": 33.128,
+      "duration_seconds": 40.889,
       "exit_code": 0,
       "log": "logs/05-six-seven-eight-and-aggregate.log",
-      "log_sha256": "90c926f8c092a087943f9069c0bd273257262fe4cb93ff77337f46192754a6d1",
+      "log_sha256": "ae3fa59fcfdb72c189e0521f3f4fb38de37ec4b54938eb4ba93965d18f89ffb1",
       "name": "six-seven-eight-and-aggregate"
     },
     {
@@ -157,10 +157,10 @@
         "tests/test_cli_capsule_replay.py",
         "tests/test_authoritative_trust.py"
       ],
-      "duration_seconds": 20.631,
+      "duration_seconds": 25.802,
       "exit_code": 0,
       "log": "logs/06-capsule-mutants-and-trust.log",
-      "log_sha256": "47ffd6b10f1bf31a2aa2acc7c73e166837908bd918cfba68161dbca29685b5d9",
+      "log_sha256": "78117e735df2fbff21d8df041d3f98c38f0463edfdc55d332272639e4ec3c874",
       "name": "capsule-mutants-and-trust"
     },
     {
@@ -169,12 +169,12 @@
         "build",
         "--wheel",
         "--out-dir",
-        "/tmp/loreloop-authoritative-proof-bo_fcqnp/dist"
+        "/tmp/loreloop-authoritative-proof-fy33sw42/dist"
       ],
-      "duration_seconds": 3.404,
+      "duration_seconds": 3.853,
       "exit_code": 0,
       "log": "logs/07-wheel.log",
-      "log_sha256": "c81bb3a6da2928be9ec96d8ec3440514f0e72ffa45d8a85c112bfd5be2945357",
+      "log_sha256": "162ca0615f318e174b18b4125a5b8632a155051c0fb2a0bc4c127f722bbcfc8d",
       "name": "wheel"
     },
     {
@@ -186,7 +186,7 @@
         "export",
         "--help"
       ],
-      "duration_seconds": 0.348,
+      "duration_seconds": 0.279,
       "exit_code": 0,
       "log": "logs/08-cli-package-help.log",
       "log_sha256": "c0c743074aff4986d93ec6ebf08f80725e7fe0a2ddb26a9019b86dbf414301e3",
@@ -194,16 +194,30 @@
     },
     {
       "command": [
+        "/media/vdc/code/ai/loreloop/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_smoke_playwright.py"
+      ],
+      "duration_seconds": 26.607,
+      "exit_code": 0,
+      "log": "logs/09-playwright-web-e2e.log",
+      "log_sha256": "725284ec0759130111fd8d2345a60dc570bae2d567a48fd24f063adcc98116dd",
+      "name": "playwright-web-e2e"
+    },
+    {
+      "command": [
         "uv",
         "venv",
         "--python",
         "/media/vdc/code/ai/loreloop/.venv/bin/python",
-        "/tmp/loreloop-authoritative-proof-bo_fcqnp/wheel-venv"
+        "/tmp/loreloop-authoritative-proof-fy33sw42/wheel-venv"
       ],
-      "duration_seconds": 0.193,
+      "duration_seconds": 0.321,
       "exit_code": 0,
-      "log": "logs/09-wheel-venv.log",
-      "log_sha256": "b853e227acbf25f0d68aaec5f59510d372eb702bfb744193a9986bd09a199eff",
+      "log": "logs/10-wheel-venv.log",
+      "log_sha256": "ea8709ddf9298927932d69caf03f41dd9eaddfbaeb29857682f0c99408d2e6c6",
       "name": "wheel-venv"
     },
     {
@@ -212,42 +226,42 @@
         "pip",
         "install",
         "--python",
-        "/tmp/loreloop-authoritative-proof-bo_fcqnp/wheel-venv/bin/python",
-        "/media/vdc/code/ai/loreloop/verification/authoritative_export/results/23958fe/artifacts/loreloop-0.1.0-py3-none-any.whl"
+        "/tmp/loreloop-authoritative-proof-fy33sw42/wheel-venv/bin/python",
+        "/media/vdc/code/ai/loreloop/verification/authoritative_export/results/30fe5d9/artifacts/loreloop-0.1.0-py3-none-any.whl"
       ],
-      "duration_seconds": 0.226,
+      "duration_seconds": 0.312,
       "exit_code": 0,
-      "log": "logs/10-wheel-install.log",
-      "log_sha256": "bf524e2a93e50f30a0d8b244beaa3300dc6277056ff9cea8cd8a6c1601d47ab6",
+      "log": "logs/11-wheel-install.log",
+      "log_sha256": "f7e3387329e9f10a160a9dbfa61643a8cb053e555f0f7fd1e245c0014649f93f",
       "name": "wheel-install"
     },
     {
       "command": [
-        "/tmp/loreloop-authoritative-proof-bo_fcqnp/wheel-venv/bin/loreloop",
+        "/tmp/loreloop-authoritative-proof-fy33sw42/wheel-venv/bin/loreloop",
         "knowledge",
         "export",
         "--format",
         "package",
         "--output",
-        "/tmp/loreloop-authoritative-proof-bo_fcqnp/wheel-smoke.zip"
+        "/tmp/loreloop-authoritative-proof-fy33sw42/wheel-smoke.zip"
       ],
-      "duration_seconds": 0.829,
+      "duration_seconds": 1.314,
       "exit_code": 0,
-      "log": "logs/11-wheel-export-smoke.log",
-      "log_sha256": "33160cf385341589eb420a4df7ba6d295d004ec455057705e6bd37a8b19a912b",
+      "log": "logs/12-wheel-export-smoke.log",
+      "log_sha256": "27111e5a31f2f9e4f58268870d9ec77a6c76342a1ac592aaea749987e5d29705",
       "name": "wheel-export-smoke"
     },
     {
       "command": [
-        "/tmp/loreloop-authoritative-proof-bo_fcqnp/wheel-venv/bin/loreloop",
+        "/tmp/loreloop-authoritative-proof-fy33sw42/wheel-venv/bin/loreloop",
         "knowledge",
         "replay",
-        "/tmp/loreloop-authoritative-proof-bo_fcqnp/wheel-smoke.zip"
+        "/tmp/loreloop-authoritative-proof-fy33sw42/wheel-smoke.zip"
       ],
-      "duration_seconds": 0.537,
+      "duration_seconds": 0.789,
       "exit_code": 0,
-      "log": "logs/12-wheel-replay-smoke.log",
-      "log_sha256": "27aa9cf2dbb35ed0e2be6db37ec1c75090e079e8e0bfa017111eeec04d31aae5",
+      "log": "logs/13-wheel-replay-smoke.log",
+      "log_sha256": "6745050a08e1dc5ae241e154e29236ff0da51ea22c576cd5cd365bf284d21033",
       "name": "wheel-replay-smoke"
     },
     {
@@ -257,12 +271,12 @@
         "pytest",
         "-q",
         "tests/test_authoritative_publish.py",
-        "--basetemp=/tmp/loreloop-xfs-hwxzqv7d/pytest"
+        "--basetemp=/tmp/loreloop-xfs-3d8qs435/pytest"
       ],
-      "duration_seconds": 1.103,
+      "duration_seconds": 2.928,
       "exit_code": 0,
-      "log": "logs/13-publication-xfs.log",
-      "log_sha256": "bd70b20b8a258abd3a64e3b113c2be1b9d3289e0b3b627dbcc1c624de70ed203",
+      "log": "logs/14-publication-xfs.log",
+      "log_sha256": "1a9257d267019dd4c9df18974fe785f0e0762bae5e9b54f0eac35a1c3a9379e2",
       "name": "publication-xfs"
     },
     {
@@ -272,12 +286,12 @@
         "pytest",
         "-q",
         "tests/test_authoritative_publish.py",
-        "--basetemp=/media/vdc/loreloop-ext4-a731dh1x/pytest"
+        "--basetemp=/media/vdc/loreloop-ext4-i3z80ygp/pytest"
       ],
-      "duration_seconds": 1.616,
+      "duration_seconds": 2.072,
       "exit_code": 0,
-      "log": "logs/14-publication-ext4.log",
-      "log_sha256": "3629a1ae4356fa8da0f606817790b17cd31c278d534212f8b3521412e9b90a9a",
+      "log": "logs/15-publication-ext4.log",
+      "log_sha256": "7ba4c5686e4b72129d46c2ea3e962e09dd176da2c04c42bd52f3239204df4f29",
       "name": "publication-ext4"
     },
     {
@@ -291,9 +305,9 @@
         "https://github.com/openclaw/openclaw.git",
         "+refs/heads/main:refs/loreloop-proof/public-dogfood"
       ],
-      "duration_seconds": 2.341,
+      "duration_seconds": 2.445,
       "exit_code": 0,
-      "log": "logs/15-dogfood-public-fetch.log",
+      "log": "logs/16-dogfood-public-fetch.log",
       "log_sha256": "7a1e16ab43822dcef89a48198cacf8c83368734ea3d941025997f919f8ffc608",
       "name": "dogfood-public-fetch"
     },
@@ -305,9 +319,9 @@
         "0455028a3cd25d87f76bc389f89261eee658657a",
         "refs/loreloop-proof/public-dogfood"
       ],
-      "duration_seconds": 0.031,
+      "duration_seconds": 0.03,
       "exit_code": 0,
-      "log": "logs/16-dogfood-public-ancestry.log",
+      "log": "logs/17-dogfood-public-ancestry.log",
       "log_sha256": "1f6e591c53953cccd09883a37dc885ab56c423c46eeee60f3c168138eb5c9741",
       "name": "dogfood-public-ancestry"
     },
@@ -321,14 +335,14 @@
         "--format",
         "package",
         "--output",
-        "/tmp/loreloop-authoritative-proof-bo_fcqnp/dogfood-knowledge.zip",
+        "/tmp/loreloop-authoritative-proof-fy33sw42/dogfood-knowledge.zip",
         "--project-name",
         "dogfood"
       ],
-      "duration_seconds": 200.079,
+      "duration_seconds": 216.166,
       "exit_code": 0,
-      "log": "logs/17-large-project-export.log",
-      "log_sha256": "1a57db61a77ef37575badd838e380eff20c677b51b3618b9f0ec8ebe735d9010",
+      "log": "logs/18-large-project-export.log",
+      "log_sha256": "a9786e6636f82ee576015ca8016e50c5c694ef1ae69a1c090915e0225a8464ec",
       "name": "large-project-export"
     },
     {
@@ -338,19 +352,19 @@
         "loreloop.cli",
         "knowledge",
         "replay",
-        "/tmp/loreloop-authoritative-proof-bo_fcqnp/dogfood-knowledge.zip"
+        "/tmp/loreloop-authoritative-proof-fy33sw42/dogfood-knowledge.zip"
       ],
-      "duration_seconds": 206.987,
+      "duration_seconds": 247.865,
       "exit_code": 0,
-      "log": "logs/18-large-project-replay.log",
-      "log_sha256": "313ea8f9bfede9f6102a3ce1a11d11b8dc764df72bc6c01198630119c1d79cbb",
+      "log": "logs/19-large-project-replay.log",
+      "log_sha256": "0c135dbfc99d37f6b2486a42c73f5add3f8c8903ef2f1e9409ccc1340fd3dfbf",
       "name": "large-project-replay"
     }
   ],
-  "git_tree_id": "560f740bfae9cff799ea0fa07cda93a4a701214d",
-  "git_tree_listing_sha256": "c007dfce50230f6a86df5d3e7ec326057788e3aa85194ffbb2e9856367e994d3",
-  "implementation_commit": "23958fe249ae79038e426a25dc3fb6e986f6821b",
-  "proof_runner_sha256": "4a7f512301d7f1b602927ce474bceaf0c1ced8e71cc1948926389726a442adf3",
+  "git_tree_id": "ec09b2df0b9379f736cc0d9c6263fd04ce93b31c",
+  "git_tree_listing_sha256": "64139492e3a4913ccbf8ca3c64b6d12de198e6108119ca87252696f122b32e43",
+  "implementation_commit": "30fe5d962c9c3e422619f28786940ee578a2ed20",
+  "proof_runner_sha256": "ddff2736c68d399cc819f3c0b539b6858a06d9658e97f6133cf4b84c50536909",
   "schema_version": 1,
   "source_sha256": {
     "src/loreloop/__init__.py": "91447944015cec709e8aa7655f7e9d64e1e4508e7023a57fe3746911c0fc6fed",

@@ -1,0 +1,7 @@
+$ /media/vdc/code/ai/loreloop/.venv/bin/python -m pytest -q tests/test_smoke_playwright.py
+
+[stdout]
+......                                                                   [100%]
+6 passed in 26.09s
+
+[stderr]
