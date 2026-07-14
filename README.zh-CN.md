@@ -93,6 +93,15 @@ loreloop comind install --source zhangguiping-xydt/loreloop
 不需要浏览器能力时移除 `[web]`。正式 Release 已存在但校验失败时，不能改用可变分支
 绕过校验。
 
+如果正在开发本地源码，请显式安装当前 checkout，避免旧的全局命令遮蔽正在测试的代码：
+
+```bash
+uv tool install --force --editable '/当前/loreloop/源码绝对路径[web]'
+```
+
+如果命令中可用的 agent 或选项与源码不一致，运行 `type -a loreloop` 和
+`loreloop ingest --help` 检查实际调用的是哪个运行时。
+
 ### 安装后的入口
 
 | 宿主 | 使用方式 |
@@ -125,13 +134,63 @@ loreloop ingest --from code .
 loreloop knowledge review
 ```
 
-然后留在当前编码代理会话里，直接说：
+需要交接、熟悉项目或基于旧系统继续开发需求时，可以直接从干净的 Git 快照生成权威项目文档。
+这个过程不调用 Agent，也不读取 SQLite 或密钥：
 
-```text
-使用 LoreLoop 给上传接口增加限流。
+```bash
+loreloop knowledge export \
+  --format docs \
+  --output knowledge-export \
+  --project-name your-project \
+  --requirements docs/requirements.md
 ```
 
-宿主会通过 `loreloop begin` 准备任务、读取相关知识，然后继续在当前会话中开发。
+生成的项目文档目录如下：
+
+```text
+knowledge-export/
+├── your-project-功能清单.md
+├── your-project-需求规格.md
+├── your-project-系统架构.md
+├── your-project-详细设计.md
+├── your-project-用户手册.md
+├── your-project-验收规格.md
+├── your-project-接口契约.md      # 有明确接口证据时生成
+├── your-project-数据库设计.md    # 有明确表结构证据时生成
+└── .loreloop-export.json         # SemanticCore、完整 AST 和内容摘要
+```
+
+固定生成六份核心文档；接口和数据库文档只在源码有明确证据时生成。当前检测覆盖 Python、
+TypeScript/JavaScript、Java/Kotlin、Go、Rust、C#、SQL、SQLAlchemy、Django ORM、Prisma、
+TypeORM、常见 migration、OpenAPI/Swagger、GraphQL、protobuf、Docker、Compose 和 Kubernetes。
+终端会列出各仓库文件数、检测器覆盖、事实数量和未语义解析的文件类型。
+
+`.loreloop-export.json` 可以在没有源码、数据库或密钥的机器上证明整套文档没有缺失或篡改：
+
+```bash
+loreloop knowledge replay knowledge-export
+```
+
+如果还要证明“这份包由当前项目的本地信任域确认过”，导出时显式加 `--attest`，重放时加
+`--trusted`：
+
+```bash
+loreloop knowledge export --format docs --output knowledge-export --attest
+loreloop knowledge replay knowledge-export --trusted
+```
+
+默认的 `--format audit` 仍保留原来的单文件逐条信任审计导出。
+
+有需求文档时，把它提交到任一已声明仓库，然后在当前编码代理会话里建立任务边界：
+
+```bash
+loreloop begin "按需求文档给上传接口增加限流" \
+  --requirements docs/upload-rate-limit.md
+```
+
+多仓库需求可写成 `repo:frontend/docs/requirements.md`。LoreLoop 读取的是需求文件在 `HEAD`
+中的精确 Git blob，并把提交、SHA-256、正文和相关知识一起放回当前 Codex、Claude Code、
+OpenCode 或 co-mind 会话；不切换聊天入口，也不启动嵌套 Agent。
 
 实现完成后，可以记录确定性检查并生成验收报告：
 
@@ -168,6 +227,8 @@ LoreLoop 与这些工具配合使用，不要求替换它们。
 ## 当前支持
 
 - 单仓库或多仓库代码反构
+- 六份核心 + 两份动态可选的权威项目文档、无密钥 Capsule 重放和可选本地证明
+- ORM、接口契约、容器平台和多语言确定性源码检测
 - 同源 Web 探索，以及可选的人工登录接管
 - Codex、Claude Code、OpenCode 和 co-mind 当前会话集成
 - 命令检查和浏览器验收

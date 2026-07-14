@@ -1,0 +1,88 @@
+"""Remove semantically duplicate detector facts while preserving first evidence."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Hashable, Iterable
+from typing import TypeVar
+
+from .authoritative_records import DetectionReport
+
+T = TypeVar("T")
+
+
+def _unique(items: Iterable[T], key: Callable[[T], Hashable]) -> tuple[T, ...]:
+    seen: set[Hashable] = set()
+    result: list[T] = []
+    for item in items:
+        identity = key(item)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append(item)
+    return tuple(result)
+
+
+def normalize_detection_report(report: DetectionReport) -> DetectionReport:
+    """Collapse repeated generated/cross-file facts, never truncate unique contracts."""
+    return DetectionReport(
+        interfaces=_unique(
+            report.interfaces,
+            lambda item: (
+                item.kind,
+                item.name,
+                item.method,
+                item.path,
+                item.parameters,
+                item.return_type,
+            ),
+        ),
+        symbols=_unique(
+            report.symbols,
+            lambda item: (
+                item.kind,
+                item.qualified_name,
+                item.signature,
+                item.source.repository_alias,
+                item.source.path,
+            ),
+        ),
+        permissions=_unique(
+            report.permissions,
+            lambda item: (item.subject, item.operator, item.expected, item.expression),
+        ),
+        configurations=_unique(
+            report.configurations,
+            lambda item: (item.key, item.default, item.required, item.redacted),
+        ),
+        dependencies=_unique(
+            report.dependencies,
+            lambda item: (item.name, item.requirement, item.scope),
+        ),
+        requirements=_unique(
+            report.requirements,
+            lambda item: (
+                item.external_id,
+                item.title,
+                item.statement,
+                item.priority,
+                item.role,
+            ),
+        ),
+        acceptances=_unique(
+            report.acceptances,
+            lambda item: (item.requirement_external_id, item.statement),
+        ),
+        tables=_unique(
+            report.tables,
+            lambda item: (
+                item.name,
+                item.columns,
+                item.primary_key,
+                item.foreign_keys,
+            ),
+        ),
+        indexes=_unique(
+            report.indexes,
+            lambda item: (item.name, item.table, item.columns, item.unique),
+        ),
+    )

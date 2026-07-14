@@ -709,7 +709,7 @@ loreloop opencode (install|status|uninstall)
 loreloop comind (install|status|uninstall)
 loreloop ingest --from code <path> [--agent claude|codex|opencode|co-mind]
 loreloop ingest --from web <url> [--headed] [--max-pages N]
-loreloop begin <task> [--expand <terms>]
+loreloop begin <task> [--expand <terms>] [--requirements <path>]...
 loreloop complete <run_id> --confirm
 loreloop run <task> [--agent claude|codex|co-mind]
 loreloop check <run_id> <check> (--pass|--fail) [--detail <text>]
@@ -719,7 +719,9 @@ loreloop verify <run_id> <base-url> <expectation> --script <actions.json> [--all
 loreloop report [run_id]
 loreloop harvest <run_id> [--agent claude|codex|opencode|co-mind]
 loreloop knowledge list [--stale]
-loreloop knowledge export [--stale] [--output <path>]
+loreloop knowledge export [--stale] [--format audit] [--output <file>]
+loreloop knowledge export --format docs --output <directory> [--project-name <name>] [--requirements <path>]... [--force] [--attest]
+loreloop knowledge replay <directory> [--trusted]
 loreloop knowledge approve <entry_id>
 loreloop knowledge reject <entry_id>
 loreloop knowledge supersede <new_id> <old_id>

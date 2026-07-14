@@ -1434,6 +1434,12 @@ def cmd_begin(args: argparse.Namespace) -> int:
         else []
     )
     current_policies = chain_ingestion_policies(records)
+    from .knowledge.requirement_context import (
+        load_requirement_materials,
+        render_requirement_context,
+    )
+
+    requirement_materials = load_requirement_materials(workdir, tuple(args.requirements))
     prepared = DelegateRunner(None, workdir).prepare(
         args.task,
         entries,
@@ -1443,6 +1449,8 @@ def cmd_begin(args: argparse.Namespace) -> int:
         related=related,
         ingestion_policies=current_policies,
         mode="session",
+        requirement_context=render_requirement_context(requirement_materials),
+        requirement_materials=[item.evidence_payload() for item in requirement_materials],
     )
     payload = _completion_payload(
         prepared.run_id,
@@ -1454,6 +1462,9 @@ def cmd_begin(args: argparse.Namespace) -> int:
         current_policies,
     )
     payload["mode"] = "session"
+    payload["requirement_materials"] = [
+        item.evidence_payload() for item in requirement_materials
+    ]
     chain.append("delegation_prepared", payload)
     _print_context_pack_notes(prepared.pack, endorsed)
     print("# LoreLoop current-session run")
@@ -1536,6 +1547,7 @@ def _validate_session_preparation(payload: dict, run_id: str) -> None:
     roots = payload.get("repository_roots")
     related = payload.get("related_entries")
     policies = payload.get("ingestion_policies")
+    requirements = payload.get("requirement_materials", [])
     valid = (
         payload.get("run_id") == run_id
         and payload.get("mode") == "session"
@@ -1555,6 +1567,13 @@ def _validate_session_preparation(payload: dict, run_id: str) -> None:
         and all(isinstance(value, str) for value in related)
         and isinstance(policies, dict)
         and set(policies) == set(base_commits)
+        and isinstance(requirements, list)
+        and all(
+            isinstance(item, dict)
+            and set(item) == {"locator", "commit", "sha256"}
+            and all(isinstance(value, str) and bool(value) for value in item.values())
+            for item in requirements
+        )
     )
     if not valid:
         raise CLIError(
@@ -1758,6 +1777,10 @@ def cmd_harvest(args: argparse.Namespace) -> int:
 
 def cmd_knowledge(args: argparse.Namespace) -> int:
     workdir = _workdir()
+    if args.action == "export" and args.format == "docs":
+        return _export_document_set(args, workdir)
+    if args.action == "replay":
+        return _replay_document_set(args, workdir)
     with _store(workdir) as store:
         if args.action == "list":
             return _list_entries(args, workdir, store)
@@ -2306,6 +2329,133 @@ def _export_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
     return 0
 
 
+def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
+    from .knowledge.authoritative_documents import (
+        SourceDocument,
+        SourceDocumentError,
+        ensure_source_output_ready,
+        source_document_filenames,
+        write_source_documents,
+    )
+    from .knowledge.authoritative_ast_render import render_document_set
+    from .knowledge.authoritative_capsule import (
+        CAPSULE_FILENAME,
+        build_capsule,
+        verify_capsule,
+    )
+    from .knowledge.authoritative_document_ast import build_document_ast_set
+    from .knowledge.authoritative_coverage import render_coverage_summary
+    from .knowledge.authoritative_git import GitSnapshotError, capture_source_snapshot
+    from .knowledge.authoritative_records import DetectionError
+    from .knowledge.authoritative_ids import IdentityContractError
+    from .knowledge.authoritative_semantic import build_semantic_core
+    from .knowledge.authoritative_source import detect_snapshot_blobs, read_snapshot_blobs
+    from .knowledge.repos import RepoConfigError, load_repos
+
+    if not args.output:
+        raise CLIError(
+            "document export needs an output directory",
+            "--format docs creates six to eight Markdown files and cannot print them to stdout",
+            "repeat with `--output <directory>`",
+        )
+    if args.stale:
+        raise CLIError(
+            "source document export does not accept --stale",
+            "the source snapshot is rebuilt from the current clean Git commits",
+            "remove --stale and retry, or use --format audit for knowledge-entry drift",
+        )
+    output = Path(args.output)
+    try:
+        ensure_source_output_ready(output, force=args.force)
+        peers = load_repos(workdir)
+        print("capturing clean Git source snapshot...", file=sys.stderr)
+        snapshot = capture_source_snapshot(workdir, peers)
+        print(
+            f"detecting source contracts across {len(snapshot.repositories)} repositories...",
+            file=sys.stderr,
+        )
+        requirements = tuple(args.requirements)
+        blobs = read_snapshot_blobs(snapshot, workdir, peers)
+        report = detect_snapshot_blobs(blobs, requirements=requirements)
+        project_name = args.project_name or workdir.name
+        core = build_semantic_core(snapshot, blobs, report)
+        document_set = build_document_ast_set(project_name, core)
+        documents = render_document_set(document_set)
+        print(
+            render_coverage_summary(snapshot, blobs, report, len(document_set.documents)),
+            file=sys.stderr,
+        )
+        capsule = build_capsule(core, document_set, documents)
+        verify_capsule(capsule, core, document_set, documents)
+        write_source_documents(
+            output,
+            (*documents, SourceDocument(capsule.filename, capsule.content)),
+            managed_filenames=(*source_document_filenames(project_name), CAPSULE_FILENAME),
+        )
+        if args.attest:
+            from .knowledge.authoritative_trust import attest_export
+
+            record = attest_export(
+                EvidenceChain.for_workdir(workdir),
+                workdir,
+                snapshot,
+                capsule,
+                core.package_id,
+                peers,
+            )
+            print(f"attested package in local trust chain at record {record.index}")
+    except (
+        SourceDocumentError,
+        GitSnapshotError,
+        DetectionError,
+        IdentityContractError,
+        RepoConfigError,
+    ) as exc:
+        raise CLIError(
+            "source document export failed",
+            str(exc),
+            "commit or restore every project repository, fix the reported source, then retry",
+        ) from exc
+    print(f"exported {len(documents)} reverse-engineered documents to {output}")
+    return 0
+
+
+def _replay_document_set(args: argparse.Namespace, workdir: Path) -> int:
+    from .knowledge.authoritative_capsule import CAPSULE_FILENAME, CapsuleArtifact
+    from .knowledge.authoritative_capsule_replay import (
+        CapsuleReplayError,
+        replay_capsule_directory,
+    )
+    from .knowledge.authoritative_trust import ExportTrustError, verify_trusted_export
+    from .knowledge.repos import load_repos
+
+    export_dir = Path(args.export_directory)
+    try:
+        result = replay_capsule_directory(export_dir)
+        mode = result.verification_mode
+        if args.trusted:
+            verify_trusted_export(
+                EvidenceChain.for_workdir(workdir).verify(),
+                workdir,
+                CapsuleArtifact(CAPSULE_FILENAME, "", result.capsule_sha256),
+                result.package_id,
+                load_repos(workdir),
+            )
+            mode = "trusted"
+    except (CapsuleReplayError, ExportTrustError) as exc:
+        raise CLIError(
+            "Capsule replay failed",
+            str(exc),
+            "restore the exact exported files or generate and attest a fresh export",
+        ) from exc
+    print(f"Capsule replay: {mode}")
+    print(f"  package_id: {result.package_id}")
+    print(f"  semantic_core_sha256: {result.semantic_core_sha256}")
+    print(f"  capsule_sha256: {result.capsule_sha256}")
+    print(f"  documents: {len(result.documents)}")
+    return 0
+
+
 def _md_escape(text: str) -> str:
     return text.replace("\r", " ").replace("\n", " ")
 
@@ -2796,6 +2946,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_begin.add_argument(
         "--related-limit", type=int, default=5, help="maximum related-project references"
     )
+    p_begin.add_argument(
+        "--requirements",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="committed requirement Markdown; use repo:NAME/path for a peer repository",
+    )
     p_begin.set_defaults(func=cmd_begin)
 
     p_complete = sub.add_parser(
@@ -2898,11 +3055,48 @@ def build_parser() -> argparse.ArgumentParser:
     p_knowledge_import.set_defaults(func=cmd_knowledge)
 
     p_knowledge_export = knowledge_sub.add_parser(
-        "export", help="export knowledge and effective trust as Markdown"
+        "export", help="export knowledge audit Markdown or source-derived project documents"
     )
-    p_knowledge_export.add_argument("--stale", action="store_true")
-    p_knowledge_export.add_argument("--output", help="write Markdown to this path")
+    p_knowledge_export.add_argument(
+        "--stale", action="store_true", help="audit only: export entries with drifted code anchors"
+    )
+    p_knowledge_export.add_argument(
+        "--format",
+        choices=("audit", "docs"),
+        default="audit",
+        help="audit entries or deterministic source docs (default: audit)",
+    )
+    p_knowledge_export.add_argument(
+        "--output", help="audit Markdown file or source-docs output directory"
+    )
+    p_knowledge_export.add_argument("--project-name", help="project name used in source documents")
+    p_knowledge_export.add_argument(
+        "--requirements",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="committed Markdown requirements; use repo:NAME/path for a peer repository",
+    )
+    p_knowledge_export.add_argument(
+        "--force", action="store_true", help="allow source docs in a non-empty directory"
+    )
+    p_knowledge_export.add_argument(
+        "--attest",
+        action="store_true",
+        help="append an optional local trust-chain attestation for the exported package",
+    )
     p_knowledge_export.set_defaults(func=cmd_knowledge)
+
+    p_knowledge_replay = knowledge_sub.add_parser(
+        "replay", help="verify an exported source-document package without source access"
+    )
+    p_knowledge_replay.add_argument("export_directory", metavar="EXPORT_DIRECTORY")
+    p_knowledge_replay.add_argument(
+        "--trusted",
+        action="store_true",
+        help="also require a matching local chain attestation and repository binding",
+    )
+    p_knowledge_replay.set_defaults(func=cmd_knowledge)
 
     for action, help_text in (
         ("approve", "approve one draft entry and endorse its content"),
@@ -2961,6 +3155,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     from .federation.registry import RegistryError
     from .knowledge.repos import RepoConfigError
+    from .knowledge.requirement_context import RequirementContextError
     from .knowledge.code_reverse import ExtractionError
     from .knowledge.endorsement import TrustProjectionError
     from .knowledge.store import InvalidKnowledgeProjection, SchemaVersionError
@@ -3016,6 +3211,7 @@ def main(argv: list[str] | None = None) -> int:
         OperatorBoundaryError,
         RegistryError,
         RepoConfigError,
+        RequirementContextError,
         InvalidKnowledgeProjection,
         SchemaVersionError,
         StatePathError,

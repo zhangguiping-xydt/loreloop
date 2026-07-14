@@ -100,6 +100,16 @@ loreloop comind install --source zhangguiping-xydt/loreloop
 Remove `[web]` if browser features are not needed. Do not use this mutable
 source path to work around a checksum failure on an existing Release.
 
+When developing from a local checkout, install that checkout explicitly so an
+older global tool does not shadow the code you are testing:
+
+```bash
+uv tool install --force --editable '/absolute/path/to/loreloop[web]'
+```
+
+Run `type -a loreloop` and `loreloop ingest --help` if the available agents or
+options do not match the checkout.
+
 ### Host entry points
 
 | Host | After installation |
@@ -132,14 +142,71 @@ loreloop ingest --from code .
 loreloop knowledge review
 ```
 
-Then stay in your coding-agent session and ask:
+Generate authoritative project documents from a clean Git snapshot for
+handoff, onboarding, or requirement development. This path does not call an
+agent or open the SQLite store or a key:
 
-```text
-Use LoreLoop to add rate limiting to the upload endpoint.
+```bash
+loreloop knowledge export \
+  --format docs \
+  --output knowledge-export \
+  --project-name your-project \
+  --requirements docs/requirements.md
 ```
 
-The host prepares the task with `loreloop begin`, reads the returned context
-pack, and continues the implementation in the same conversation.
+The generated project-document layout is:
+
+```text
+knowledge-export/
+├── your-project-功能清单.md
+├── your-project-需求规格.md
+├── your-project-系统架构.md
+├── your-project-详细设计.md
+├── your-project-用户手册.md
+├── your-project-验收规格.md
+├── your-project-接口契约.md      # only with explicit interface evidence
+├── your-project-数据库设计.md    # only with explicit schema evidence
+└── .loreloop-export.json         # SemanticCore, complete ASTs, and digests
+```
+
+Six core documents are always produced. Interface and database documents are
+added only when the source supports them. Deterministic detectors currently
+cover Python, TypeScript/JavaScript, Java/Kotlin, Go, Rust, C#, SQL,
+SQLAlchemy, Django ORM, Prisma, TypeORM, common migrations, OpenAPI/Swagger,
+GraphQL, protobuf, Docker, Compose, and Kubernetes. The CLI prints repository,
+detector, fact, document, and unsupported-suffix coverage.
+
+The Capsule can prove the package closure on a machine with no source, database,
+or key:
+
+```bash
+loreloop knowledge replay knowledge-export
+```
+
+For an optional local trust-chain assertion, export with `--attest` and replay
+with `--trusted`:
+
+```bash
+loreloop knowledge export --format docs --output knowledge-export --attest
+loreloop knowledge replay knowledge-export --trusted
+```
+
+The default `--format audit` remains the single-file, entry-by-entry trust
+export.
+
+When a requirement document is ready, commit it to any declared repository and
+prepare the task in the coding-agent session you already use:
+
+```bash
+loreloop begin "implement upload rate limiting from the requirement" \
+  --requirements docs/upload-rate-limit.md
+```
+
+Use `repo:frontend/docs/requirements.md` for a peer repository. LoreLoop reads
+the exact requirement blob from `HEAD` and returns its commit, SHA-256, content,
+and relevant governed knowledge to the current Codex, Claude Code, OpenCode, or
+co-mind conversation. It does not replace the chat entry point or launch a
+nested agent.
 
 When the work is ready, LoreLoop can record deterministic checks and render an
 acceptance report:
@@ -178,6 +245,9 @@ LoreLoop is meant to sit beside these tools, not replace them.
 ## Supported workflows
 
 - Code ingestion across one or more Git repositories
+- Six core plus two evidence-driven project documents, no-key Capsule replay,
+  and optional local attestation
+- Deterministic ORM, contract, container-platform, and multi-language detection
 - Same-origin web exploration with optional human login handover
 - Current-session use through Codex, Claude Code, OpenCode, and co-mind
 - Deterministic command checks and browser-backed acceptance

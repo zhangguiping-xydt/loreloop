@@ -89,6 +89,45 @@ may send source snippets or page observations to an external provider. Review
 the provider/account policy before ingestion, prefer deterministic assertions,
 and use `run --no-expand` when query expansion is not needed.
 
+## The CLI options do not match the source checkout
+
+`loreloop` may resolve to an older `uv tool` installation even while the shell
+is inside a newer source checkout. Confirm the selected executable and its
+ingestion options:
+
+```bash
+type -a loreloop
+loreloop ingest --help
+```
+
+For local development, reinstall the checkout explicitly:
+
+```bash
+uv tool install --force --editable '/absolute/path/to/loreloop[web]'
+```
+
+This also matters for Codex inference: older builds disabled user configuration
+without replaying the allowlisted model/provider connection settings, so a
+custom provider could wait until the 600-second agent timeout even for a tiny
+prompt. Current builds preserve connection metadata while still excluding
+tools, rules, hooks, MCP servers, and static headers.
+
+## A document export or Capsule replay fails
+
+`knowledge export --format docs` reads only committed Git blobs and refuses a
+dirty root, peer, or submodule. Commit or restore source changes first. An
+interrupted publication is recovered from the hidden sibling journal on the
+next export; readers never accept a half-old, half-new managed document set.
+
+`knowledge replay` expects one canonical `.loreloop-export.json` and the
+six-to-eight Markdown files named by it. It rejects missing or extra Markdown,
+symlinks, non-regular files, changed ASTs, and Markdown that is not the
+deterministic rendering of its AST. Unrelated non-Markdown operator files
+preserved by `export --force` are outside the package and are ignored. Generate
+a fresh export instead of editing the Capsule by hand. `--trusted` additionally
+requires an earlier `--attest` from the same local trust chain and unchanged
+repository checkout bindings.
+
 ## Local project trust is unavailable or does not match
 
 Run `loreloop trust status` first. Normal initialization manages local trust

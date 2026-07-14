@@ -77,6 +77,8 @@ class DelegateRunner:
         related: list[ForeignEntry] | None = None,
         ingestion_policies: dict[str, IngestionPolicy] | None = None,
         mode: str = "delegated",
+        requirement_context: str = "",
+        requirement_materials: list[dict[str, str]] | None = None,
     ) -> RunPreparation:
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
         trace_path = self._runs_dir / f"{run_id}.jsonl"
@@ -96,7 +98,10 @@ class DelegateRunner:
             related=related,
         )
         prefix = render(pack)
-        prompt = f"{prefix}\n# Task\n\n{task}\n" if prefix else task
+        task_prompt = f"# Task\n\n{task}\n"
+        prompt = "\n".join(
+            part.rstrip() for part in (prefix, requirement_context, task_prompt) if part
+        ) + "\n"
 
         self._trace(
             trace_path,
@@ -115,6 +120,7 @@ class DelegateRunner:
             },
             related_entries=pack.related_ids,
             mode=mode,
+            requirement_materials=requirement_materials or [],
         )
         return RunPreparation(
             run_id=run_id,

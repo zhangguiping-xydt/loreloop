@@ -52,6 +52,7 @@ PUBLIC_HELP_PATHS = [
     ("knowledge", "search"),
     ("knowledge", "import"),
     ("knowledge", "export"),
+    ("knowledge", "replay"),
     ("knowledge", "approve"),
     ("knowledge", "reject"),
     ("knowledge", "reopen"),
