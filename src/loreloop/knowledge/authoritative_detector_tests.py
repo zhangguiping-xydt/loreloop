@@ -29,6 +29,7 @@ _JVM_METHOD: Final = re.compile(
     r"(?:fun\s+)?(?:[A-Za-z_$][\w$<>,.?\[\]]*\s+)?"
     r"(?P<name>[A-Za-z_$][\w$]*)\s*\("
 )
+MAX_TEST_CASES_FIELD_BYTES: Final = 4 * 1024 * 1024
 
 
 def is_test_evidence_path(path: str) -> bool:
@@ -108,6 +109,36 @@ def _jvm_tests(source: str) -> tuple[tuple[int, str], ...]:
     return tuple(records)
 
 
+def _case_chunks(
+    matches: tuple[tuple[int, str], ...],
+) -> tuple[tuple[int, tuple[str, ...]], ...]:
+    unique: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for offset, name in matches:
+        if name in seen:
+            continue
+        seen.add(name)
+        unique.append((offset, name))
+    chunks: list[tuple[int, tuple[str, ...]]] = []
+    current: list[str] = []
+    current_bytes = 0
+    first_offset = 0
+    for offset, name in unique:
+        encoded_bytes = len(name.encode("utf-8"))
+        added_bytes = encoded_bytes + (2 if current else 0)
+        if current and current_bytes + added_bytes > MAX_TEST_CASES_FIELD_BYTES:
+            chunks.append((first_offset, tuple(current)))
+            current = []
+            current_bytes = 0
+        if not current:
+            first_offset = offset
+        current.append(name)
+        current_bytes += encoded_bytes + (2 if len(current) > 1 else 0)
+    if current:
+        chunks.append((first_offset, tuple(current)))
+    return tuple(chunks)
+
+
 def detect_test_source(source: str, repository_alias: str, path: str) -> DetectionReport:
     """Extract test names and framework identity without running the tests."""
     lower = path.lower()
@@ -128,16 +159,18 @@ def detect_test_source(source: str, repository_alias: str, path: str) -> Detecti
     scope = _scope(source)
     if not matches:
         return DetectionReport()
-    cases = tuple(dict.fromkeys(name for _, name in matches))
-    first_offset = matches[0][0]
+    chunks = _case_chunks(matches)
+    stem = PurePosixPath(path).stem
+    chunk_total = len(chunks)
     return DetectionReport(
-        tests=(
+        tests=tuple(
             TestRecord(
-                PurePosixPath(path).stem,
+                stem if chunk_total == 1 else f"{stem} [{index}/{chunk_total}]",
                 framework,
                 scope,
                 cases,
                 SourceRef(repository_alias, path, _line(source, first_offset)),
-            ),
+            )
+            for index, (first_offset, cases) in enumerate(chunks, 1)
         )
     )

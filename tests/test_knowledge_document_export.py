@@ -214,6 +214,32 @@ def test_cli_package_export_supports_a_non_git_aggregate_project_root(
     assert main(["knowledge", "replay", str(target)]) == 0
 
 
+def test_package_export_replays_when_test_cases_require_multiple_suite_parts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _repository(
+        tmp_path / "suite-split",
+        {
+            "app.py": "VALUE = 1\n",
+            "tests/many.test.js": "\n".join(
+                f'test("case-{index:02d}-xxxxxxxx", () => true);' for index in range(20)
+            ),
+        },
+    )
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(
+        "loreloop.knowledge.authoritative_detector_tests.MAX_TEST_CASES_FIELD_BYTES",
+        64,
+    )
+    package = tmp_path / "baseline.zip"
+
+    assert main(
+        ["knowledge", "export", "--format", "package", "--output", str(package)]
+    ) == 0
+    assert main(["knowledge", "replay", str(package)]) == 0
+
+
 def test_cli_docs_export_refuses_nonempty_output_without_force(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

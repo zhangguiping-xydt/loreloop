@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from loreloop.knowledge.authoritative_detector_tests import (
+    MAX_TEST_CASES_FIELD_BYTES,
     detect_test_source,
     is_supported_test_evidence_path,
 )
@@ -74,3 +75,21 @@ def test_test_source_decoding_accepts_legacy_comments_without_weakening_product_
     blob = SnapshotBlob("backend", "src/test/java/LegacyTest.java", data, "0" * 64)
 
     assert "public void works" in _test_text(blob)
+
+
+def test_large_test_file_splits_cases_below_capsule_string_budget() -> None:
+    case_count = 16_400
+    case_name = "x" * 500
+    source = "\n".join(
+        f'test("{case_name}{index:05d}", () => true);' for index in range(case_count)
+    )
+
+    report = detect_test_source(source, ".", "tests/large.test.js")
+
+    assert len(report.tests) >= 2
+    assert sum(len(item.cases) for item in report.tests) == case_count
+    assert all(
+        len(", ".join(item.cases).encode("utf-8")) <= MAX_TEST_CASES_FIELD_BYTES
+        for item in report.tests
+    )
+    assert report.tests[0].name.startswith("large.test [1/")
