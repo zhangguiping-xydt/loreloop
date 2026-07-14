@@ -1,70 +1,63 @@
 from __future__ import annotations
 
-import json
+import subprocess
 from pathlib import Path
 
-import pytest
-
-from scripts import run_authoritative_export_qa as qa
-
-
-ROOT = Path(__file__).resolve().parents[1]
-SECRET_FIXTURE = ROOT / ".omo/evidence/authoritative-export-spec-v4/fixtures/secret-cases.json"
+from loreloop.cli import main
+from loreloop.knowledge.authoritative_archive import read_export_archive
+from loreloop.knowledge.authoritative_git import capture_source_snapshot
 
 
-def test_portable_secret_fixture_contains_no_raw_equality_oracle() -> None:
-    # Given: the current frozen portable secret fixture.
-    # When: raw secrets, raw identities, and unkeyed commitments are scanned against capsules.
-    report = qa.verify_portable_secret_fixture(SECRET_FIXTURE)
-
-    # Then: every frozen case is clean.
-    assert report.case_count == 6
-    assert report.leak_count == 0
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
 
-def test_portable_secret_scan_rejects_a_benign_named_raw_hash(tmp_path: Path) -> None:
-    # Given: one frozen case with a raw secret SHA hidden under a benign field name.
-    fixture = qa.require_mapping(qa.load_json_value(SECRET_FIXTURE), "secret fixture")
-    cases = qa.require_array(fixture.get("cases"), "secret cases")
-    first_case = qa.require_mapping(cases[0], "secret case")
-    portable = qa.require_mapping(first_case.get("portable_capsule"), "portable capsule")
-    mutated_portable = dict(portable)
-    mutated_portable["proof"] = qa.require_text(first_case.get("raw_secret_sha256"), "raw hash")
-    mutated_case = dict(first_case)
-    mutated_case["portable_capsule"] = mutated_portable
-    mutated_cases = list(cases)
-    mutated_cases[0] = mutated_case
-    mutated_fixture = dict(fixture)
-    mutated_fixture["cases"] = mutated_cases
-    mutated = tmp_path / "secret-cases.json"
-    _ = mutated.write_text(json.dumps(mutated_fixture), encoding="utf-8")
+def test_portable_package_contains_no_raw_secret_or_git_object_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.name", "LoreLoop Test")
+    _git(repo, "config", "user.email", "loreloop@example.invalid")
+    raw_secret = "secret-value-that-must-not-leak"
+    (repo / ".env.example").write_text(
+        f"APP_ENV=production\nAPI_TOKEN={raw_secret}\n", encoding="utf-8"
+    )
+    (repo / "app.py").write_text(
+        '@app.get("/health")\ndef health(): return True\n', encoding="utf-8"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "initial")
+    snapshot = capture_source_snapshot(repo)
+    raw_git_ids = {
+        repository.commit_id.hex
+        for repository in snapshot.repositories
+    } | {
+        repository.tree_id.hex
+        for repository in snapshot.repositories
+    } | {
+        entry.object_id.hex
+        for repository in snapshot.repositories
+        for entry in repository.entries
+    }
+    output = tmp_path / "knowledge.zip"
+    monkeypatch.chdir(repo)
 
-    # When / Then: value-based scanning rejects the mutation.
-    with pytest.raises(qa.SecretViolation, match="toml-short"):
-        _ = qa.verify_portable_secret_fixture(mutated)
+    assert (
+        main(
+            [
+                "knowledge",
+                "export",
+                "--format",
+                "package",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
 
-
-def test_portable_secret_scan_handles_a_non_utf8_secret_explicitly(tmp_path: Path) -> None:
-    # Given: one binary secret that has no valid UTF-8 text representation.
-    fixture = qa.require_mapping(qa.load_json_value(SECRET_FIXTURE), "secret fixture")
-    cases = qa.require_array(fixture.get("cases"), "secret cases")
-    first_case = qa.require_mapping(cases[0], "secret case")
-    portable = qa.require_mapping(first_case.get("portable_capsule"), "portable capsule")
-    mutated_portable = dict(portable)
-    mutated_portable["body_base64"] = "c2FmZQ=="
-    mutated_case = dict(first_case)
-    mutated_case["secret_base64"] = "/w=="
-    mutated_case["portable_capsule"] = mutated_portable
-    mutated_cases = list(cases)
-    mutated_cases[0] = mutated_case
-    mutated_fixture = dict(fixture)
-    mutated_fixture["cases"] = mutated_cases
-    mutated = tmp_path / "binary-secret-cases.json"
-    _ = mutated.write_text(json.dumps(mutated_fixture), encoding="utf-8")
-
-    # When: the scanner takes the explicit non-text outcome.
-    report = qa.verify_portable_secret_fixture(mutated)
-
-    # Then: binary equality is still checked in decoded body bytes without silent handling.
-    assert report.case_count == 6
-    assert report.leak_count == 0
+    portable = b"\n".join(read_export_archive(output).values())
+    assert raw_secret.encode() not in portable
+    assert all(identifier.encode() not in portable for identifier in raw_git_ids)

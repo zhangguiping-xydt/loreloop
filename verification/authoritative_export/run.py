@@ -223,12 +223,10 @@ def main(argv: list[str] | None = None) -> int:
             (
                 "wheel",
                 (
-                    python,
-                    "-m",
+                    "uv",
                     "build",
                     "--wheel",
-                    "--no-isolation",
-                    "--outdir",
+                    "--out-dir",
                     str(scratch / "dist"),
                 ),
                 300,
