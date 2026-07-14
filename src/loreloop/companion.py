@@ -49,6 +49,28 @@ Do not use `loreloop run` for normal interactive work: it launches a separate
 coding-agent process. Use it only when the operator explicitly requests an
 automated or headless delegation.
 
+## Export the authoritative project package
+
+When the operator asks to export project knowledge, a knowledge baseline, or
+reverse-engineered project documents, export the deliverable package rather
+than the legacy entry audit:
+
+    loreloop knowledge export --format package --output loreloop-knowledge.zip
+
+The ZIP contains six fixed Markdown documents, evidence-backed optional
+interface/database documents, and the portable Capsule. `--format docs` is a
+compatibility alias for the same package pipeline. Use `--format audit` only
+when the operator explicitly asks for the entry-by-entry knowledge audit.
+
+Run the command from the initialized project workspace. The workspace may be
+a Git repository or a non-Git aggregate root with declared member repositories.
+When invoking a host shell/Bash tool, always pass the complete non-empty command
+string shown above; never issue a shell tool call with its command omitted. Do
+not add `--force` unless the operator explicitly authorizes replacing an
+existing output. Verify a produced package with:
+
+    loreloop knowledge replay loreloop-knowledge.zip
+
 ## Local trust recovery
 
 LoreLoop manages local trust automatically during normal initialization. If a

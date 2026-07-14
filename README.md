@@ -142,22 +142,24 @@ loreloop ingest --from code .
 loreloop knowledge review
 ```
 
-Generate authoritative project documents from a clean Git snapshot for
-handoff, onboarding, or requirement development. This path does not call an
-agent or open the SQLite store or a key:
+Generate a deliverable authoritative project package from clean committed Git
+snapshots for handoff, onboarding, or requirement development. This path does
+not call an agent or open the SQLite store or a key. A non-Git workspace root
+is supported when its member repositories have been declared with
+`loreloop repo add`:
 
 ```bash
 loreloop knowledge export \
-  --format docs \
-  --output knowledge-export \
+  --format package \
+  --output knowledge-export.zip \
   --project-name your-project \
   --requirements docs/requirements.md
 ```
 
-The generated project-document layout is:
+The ZIP contains:
 
 ```text
-knowledge-export/
+knowledge-export.zip
 ├── your-project-功能清单.md
 ├── your-project-需求规格.md
 ├── your-project-系统架构.md
@@ -180,19 +182,20 @@ The Capsule can prove the package closure on a machine with no source, database,
 or key:
 
 ```bash
-loreloop knowledge replay knowledge-export
+loreloop knowledge replay knowledge-export.zip
 ```
 
 For an optional local trust-chain assertion, export with `--attest` and replay
 with `--trusted`:
 
 ```bash
-loreloop knowledge export --format docs --output knowledge-export --attest
-loreloop knowledge replay knowledge-export --trusted
+loreloop knowledge export --format package --output knowledge-export.zip --attest
+loreloop knowledge replay knowledge-export.zip --trusted
 ```
 
-The default `--format audit` remains the single-file, entry-by-entry trust
-export.
+`--format docs` remains a compatibility alias and can still target a directory.
+The default `--format audit` remains the separate single-file, entry-by-entry
+trust export; it is not the project document package.
 
 When a requirement document is ready, commit it to any declared repository and
 prepare the task in the coding-agent session you already use:

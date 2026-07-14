@@ -114,19 +114,22 @@ tools, rules, hooks, MCP servers, and static headers.
 
 ## A document export or Capsule replay fails
 
-`knowledge export --format docs` reads only committed Git blobs and refuses a
-dirty root, peer, or submodule. Commit or restore source changes first. An
-interrupted publication is recovered from the hidden sibling journal on the
-next export; readers never accept a half-old, half-new managed document set.
+`knowledge export --format package` reads only committed Git blobs and refuses
+a dirty root, peer, or submodule. The workspace root itself may be a non-Git
+aggregate when at least one Git member is declared. Commit or restore source
+changes first. ZIP publication uses atomic file replacement; directory
+publication is recovered from its hidden sibling journal after interruption.
+Readers never accept a half-old, half-new managed document set.
 
-`knowledge replay` expects one canonical `.loreloop-export.json` and the
-six-to-eight Markdown files named by it. It rejects missing or extra Markdown,
-symlinks, non-regular files, changed ASTs, and Markdown that is not the
-deterministic rendering of its AST. Unrelated non-Markdown operator files
-preserved by `export --force` are outside the package and are ignored. Generate
-a fresh export instead of editing the Capsule by hand. `--trusted` additionally
-requires an earlier `--attest` from the same local trust chain and unchanged
-repository checkout bindings.
+`knowledge replay` accepts the deliverable ZIP or the compatible directory
+form. It expects one canonical `.loreloop-export.json` and the six-to-eight
+Markdown files named by it. It rejects missing files, extra ZIP entries, extra
+Markdown in a directory, links, non-regular files, changed ASTs, and Markdown
+that is not the deterministic rendering of its AST. Unrelated non-Markdown
+operator files preserved in a directory by `export --force` remain outside the
+package and are ignored. Generate a fresh export instead of editing the Capsule
+by hand. `--trusted` additionally requires an earlier `--attest` from the same
+local trust chain and unchanged repository checkout bindings.
 
 ## Local project trust is unavailable or does not match
 

@@ -25,7 +25,15 @@ from .authoritative_types import SourceSnapshot
 
 _OPENAPI_NAME = re.compile(r"^(?:openapi|swagger)(?:[._-].*)?\.(?:json|ya?ml)$", re.I)
 _OPENAPI_MARKER = re.compile(
-    r'''(?m)^(?:openapi|swagger)\s*:|^[^{\n]*["'](?:openapi|swagger)["']\s*:''', re.I
+    r'''(?mx)
+    ^(?:
+        openapi\s*:\s*["']?3(?:\.\d+){1,2}["']?\s*(?:\#.*)?
+      | swagger\s*:\s*["']?2\.0["']?\s*(?:\#.*)?
+      | [ \t]*\{?[ \t]*["']openapi["']\s*:\s*["']3(?:\.\d+){1,2}["']
+      | [ \t]*\{?[ \t]*["']swagger["']\s*:\s*["']2\.0["']
+    )
+    ''',
+    re.I,
 )
 _AUXILIARY_SEGMENTS = frozenset(
     {"test", "tests", "__tests__", "fixtures", "snapshots", "__snapshots__"}
@@ -175,40 +183,47 @@ def detect_snapshot_blobs(
     for blob in blobs:
         if excluded_semantic_source(blob.path):
             continue
-        lower = blob.path.lower()
-        if lower.endswith(".py"):
-            reports.append(detect_python_source(_text(blob), blob.repository_alias, blob.path))
-        elif lower.endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")):
-            reports.append(detect_typescript_source(_text(blob), blob.repository_alias, blob.path))
-        elif lower.endswith(".sql"):
-            reports.append(detect_sql_source(_text(blob), blob.repository_alias, blob.path))
-        elif _is_config(blob.path):
-            reports.append(detect_config_source(_text(blob), blob.repository_alias, blob.path))
-        elif lower.endswith(".prisma"):
-            reports.append(detect_prisma_schema(_text(blob), blob.repository_alias, blob.path))
-        elif lower.endswith((".graphql", ".graphqls", ".gql")):
-            reports.append(detect_graphql_source(_text(blob), blob.repository_alias, blob.path))
-        elif lower.endswith(".proto"):
-            reports.append(detect_proto_source(_text(blob), blob.repository_alias, blob.path))
-        elif lower.endswith((".json", ".yaml", ".yml")):
-            text = _text(blob)
-            if _is_openapi_contract(blob.path, text):
-                reports.append(
-                    detect_openapi_source(text, blob.repository_alias, blob.path)
-                )
-            elif is_extended_source(blob.path):
-                reports.append(
-                    detect_extended_source(text, blob.repository_alias, blob.path)
-                )
-        elif is_extended_source(blob.path):
-            reports.append(
-                detect_extended_source(_text(blob), blob.repository_alias, blob.path)
-            )
+        try:
+            report = _detect_snapshot_blob(blob)
+        except DetectionError as exc:
+            raise DetectionError(
+                f"{blob.repository_alias}:{blob.path}: {exc}"
+            ) from exc
+        if report is not None:
+            reports.append(report)
     if requirements:
         from .authoritative_requirements_input import detect_requirement_materials
 
         reports.append(detect_requirement_materials(blobs, requirements))
     return normalize_detection_report(merge_reports(*reports))
+
+
+def _detect_snapshot_blob(blob: SnapshotBlob) -> DetectionReport | None:
+    lower = blob.path.lower()
+    if lower.endswith(".py"):
+        return detect_python_source(_text(blob), blob.repository_alias, blob.path)
+    if lower.endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")):
+        return detect_typescript_source(_text(blob), blob.repository_alias, blob.path)
+    if lower.endswith(".sql"):
+        return detect_sql_source(_text(blob), blob.repository_alias, blob.path)
+    if _is_config(blob.path):
+        return detect_config_source(_text(blob), blob.repository_alias, blob.path)
+    if lower.endswith(".prisma"):
+        return detect_prisma_schema(_text(blob), blob.repository_alias, blob.path)
+    if lower.endswith((".graphql", ".graphqls", ".gql")):
+        return detect_graphql_source(_text(blob), blob.repository_alias, blob.path)
+    if lower.endswith(".proto"):
+        return detect_proto_source(_text(blob), blob.repository_alias, blob.path)
+    if lower.endswith((".json", ".yaml", ".yml")):
+        text = _text(blob)
+        if _is_openapi_contract(blob.path, text):
+            return detect_openapi_source(text, blob.repository_alias, blob.path)
+        if is_extended_source(blob.path):
+            return detect_extended_source(text, blob.repository_alias, blob.path)
+        return None
+    if is_extended_source(blob.path):
+        return detect_extended_source(_text(blob), blob.repository_alias, blob.path)
+    return None
 
 
 def detect_source_snapshot(

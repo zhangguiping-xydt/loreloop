@@ -1777,7 +1777,7 @@ def cmd_harvest(args: argparse.Namespace) -> int:
 
 def cmd_knowledge(args: argparse.Namespace) -> int:
     workdir = _workdir()
-    if args.action == "export" and args.format == "docs":
+    if args.action == "export" and args.format in {"package", "docs"}:
         return _export_document_set(args, workdir)
     if args.action == "replay":
         return _replay_document_set(args, workdir)
@@ -2330,6 +2330,12 @@ def _export_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
 
 
 def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
+    from .knowledge.authoritative_archive import (
+        ExportArchiveError,
+        ensure_archive_output_ready,
+        is_archive_output,
+        write_export_archive,
+    )
     from .knowledge.authoritative_documents import (
         SourceDocument,
         SourceDocumentError,
@@ -2354,9 +2360,9 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
 
     if not args.output:
         raise CLIError(
-            "document export needs an output directory",
-            "--format docs creates six to eight Markdown files and cannot print them to stdout",
-            "repeat with `--output <directory>`",
+            "project package export needs an output path",
+            "--format package creates a ZIP or directory package and cannot print it to stdout",
+            "repeat with `--output <name>.zip`",
         )
     if args.stale:
         raise CLIError(
@@ -2365,8 +2371,12 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
             "remove --stale and retry, or use --format audit for knowledge-entry drift",
         )
     output = Path(args.output)
+    archive_output = is_archive_output(output)
     try:
-        ensure_source_output_ready(output, force=args.force)
+        if archive_output:
+            ensure_archive_output_ready(output, force=args.force)
+        else:
+            ensure_source_output_ready(output, force=args.force)
         peers = load_repos(workdir)
         print("capturing clean Git source snapshot...", file=sys.stderr)
         snapshot = capture_source_snapshot(workdir, peers)
@@ -2387,11 +2397,15 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
         )
         capsule = build_capsule(core, document_set, documents)
         verify_capsule(capsule, core, document_set, documents)
-        write_source_documents(
-            output,
-            (*documents, SourceDocument(capsule.filename, capsule.content)),
-            managed_filenames=(*source_document_filenames(project_name), CAPSULE_FILENAME),
-        )
+        export_files = (*documents, SourceDocument(capsule.filename, capsule.content))
+        if archive_output:
+            write_export_archive(output, export_files, replace=args.force)
+        else:
+            write_source_documents(
+                output,
+                export_files,
+                managed_filenames=(*source_document_filenames(project_name), CAPSULE_FILENAME),
+            )
         if args.attest:
             from .knowledge.authoritative_trust import attest_export
 
@@ -2406,6 +2420,7 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
             print(f"attested package in local trust chain at record {record.index}")
     except (
         SourceDocumentError,
+        ExportArchiveError,
         GitSnapshotError,
         DetectionError,
         IdentityContractError,
@@ -2416,7 +2431,8 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
             str(exc),
             "commit or restore every project repository, fix the reported source, then retry",
         ) from exc
-    print(f"exported {len(documents)} reverse-engineered documents to {output}")
+    destination = "ZIP package" if archive_output else "directory"
+    print(f"exported {len(documents)} reverse-engineered documents to {destination} {output}")
     return 0
 
 
@@ -2424,14 +2440,14 @@ def _replay_document_set(args: argparse.Namespace, workdir: Path) -> int:
     from .knowledge.authoritative_capsule import CAPSULE_FILENAME, CapsuleArtifact
     from .knowledge.authoritative_capsule_replay import (
         CapsuleReplayError,
-        replay_capsule_directory,
+        replay_capsule_export,
     )
     from .knowledge.authoritative_trust import ExportTrustError, verify_trusted_export
     from .knowledge.repos import load_repos
 
     export_dir = Path(args.export_directory)
     try:
-        result = replay_capsule_directory(export_dir)
+        result = replay_capsule_export(export_dir)
         mode = result.verification_mode
         if args.trusted:
             verify_trusted_export(
@@ -3062,12 +3078,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_knowledge_export.add_argument(
         "--format",
-        choices=("audit", "docs"),
+        choices=("audit", "package", "docs"),
         default="audit",
-        help="audit entries or deterministic source docs (default: audit)",
+        help="audit entries or deterministic project package; docs is a compatibility alias",
     )
     p_knowledge_export.add_argument(
-        "--output", help="audit Markdown file or source-docs output directory"
+        "--output", help="audit Markdown file, source-docs directory, or deliverable .zip package"
     )
     p_knowledge_export.add_argument("--project-name", help="project name used in source documents")
     p_knowledge_export.add_argument(
@@ -3078,7 +3094,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="committed Markdown requirements; use repo:NAME/path for a peer repository",
     )
     p_knowledge_export.add_argument(
-        "--force", action="store_true", help="allow source docs in a non-empty directory"
+        "--force",
+        action="store_true",
+        help="replace an existing ZIP or update source docs in a non-empty directory",
     )
     p_knowledge_export.add_argument(
         "--attest",
@@ -3088,9 +3106,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_knowledge_export.set_defaults(func=cmd_knowledge)
 
     p_knowledge_replay = knowledge_sub.add_parser(
-        "replay", help="verify an exported source-document package without source access"
+        "replay", help="verify an exported source-document directory or ZIP without source access"
     )
-    p_knowledge_replay.add_argument("export_directory", metavar="EXPORT_DIRECTORY")
+    p_knowledge_replay.add_argument("export_directory", metavar="EXPORT_PATH")
     p_knowledge_replay.add_argument(
         "--trusted",
         action="store_true",

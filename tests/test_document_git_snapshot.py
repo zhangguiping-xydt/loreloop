@@ -9,6 +9,7 @@ from loreloop.knowledge.authoritative_git import (
     GitSnapshotError,
     capture_source_snapshot,
     verify_source_snapshot,
+    verify_source_snapshot_metadata,
 )
 
 
@@ -120,3 +121,44 @@ def test_capture_source_snapshot_rejects_duplicate_repository_roots(tmp_path: Pa
     # When / Then: aliases cannot duplicate or substitute repository identity.
     with pytest.raises(GitSnapshotError, match="same repository"):
         _ = capture_source_snapshot(root, {"duplicate": root})
+
+
+def test_capture_source_snapshot_supports_non_git_aggregate_with_declared_repositories(
+    tmp_path: Path,
+) -> None:
+    # Given: one project workspace that groups repositories but is not itself a repository.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    frontend = _repository(workspace / "frontend", {"app.ts": "export const ready = true\n"})
+    backend = _repository(workspace / "backend", {"api.py": "def health(): return 'ok'\n"})
+
+    # When: only the declared project members are captured.
+    snapshot = capture_source_snapshot(workspace, {"frontend": frontend, "backend": backend})
+
+    # Then: aliases remain stable and no synthetic Git root is invented.
+    assert tuple((repo.alias, repo.role) for repo in snapshot.repositories) == (
+        ("backend", "peer"),
+        ("frontend", "peer"),
+    )
+    verify_source_snapshot(snapshot, workspace, {"frontend": frontend, "backend": backend})
+
+
+def test_capture_source_snapshot_rejects_non_git_root_without_declared_members(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with pytest.raises(GitSnapshotError, match="no declared Git repositories"):
+        _ = capture_source_snapshot(workspace)
+
+
+def test_aggregate_snapshot_rejects_root_topology_change_during_use(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    backend = _repository(workspace / "backend", {"api.py": "VALUE = 1\n"})
+    snapshot = capture_source_snapshot(workspace, {"backend": backend})
+    _ = _git(workspace, "init")
+
+    with pytest.raises(GitSnapshotError, match="topology changed"):
+        verify_source_snapshot_metadata(snapshot, workspace, {"backend": backend})

@@ -453,8 +453,8 @@ positional arguments:
     import              copy a foreign entry into the local draft store
     export              export knowledge audit Markdown or source-derived
                         project documents
-    replay              verify an exported source-document package without
-                        source access
+    replay              verify an exported source-document directory or ZIP
+                        without source access
     approve             approve one draft entry and endorse its content
     reject              reject one entry and retire it from injection
     reopen              return a rejected entry to draft for renewed review
@@ -542,7 +542,8 @@ options:
   -h, --help  show this help message and exit
 
 $ loreloop knowledge export --help
-usage: loreloop knowledge export [-h] [--stale] [--format {audit,docs}]
+usage: loreloop knowledge export [-h] [--stale]
+                                 [--format {audit,package,docs}]
                                  [--output OUTPUT]
                                  [--project-name PROJECT_NAME]
                                  [--requirements PATH] [--force] [--attest]
@@ -550,28 +551,30 @@ usage: loreloop knowledge export [-h] [--stale] [--format {audit,docs}]
 options:
   -h, --help            show this help message and exit
   --stale               audit only: export entries with drifted code anchors
-  --format {audit,docs}
-                        audit entries or deterministic source docs (default:
-                        audit)
-  --output OUTPUT       audit Markdown file or source-docs output directory
+  --format {audit,package,docs}
+                        audit entries or deterministic project package; docs
+                        is a compatibility alias
+  --output OUTPUT       audit Markdown file, source-docs directory, or
+                        deliverable .zip package
   --project-name PROJECT_NAME
                         project name used in source documents
   --requirements PATH   committed Markdown requirements; use repo:NAME/path
                         for a peer repository
-  --force               allow source docs in a non-empty directory
+  --force               replace an existing ZIP or update source docs in a
+                        non-empty directory
   --attest              append an optional local trust-chain attestation for
                         the exported package
 
 $ loreloop knowledge replay --help
-usage: loreloop knowledge replay [-h] [--trusted] EXPORT_DIRECTORY
+usage: loreloop knowledge replay [-h] [--trusted] EXPORT_PATH
 
 positional arguments:
-  EXPORT_DIRECTORY
+  EXPORT_PATH
 
 options:
-  -h, --help        show this help message and exit
-  --trusted         also require a matching local chain attestation and
-                    repository binding
+  -h, --help   show this help message and exit
+  --trusted    also require a matching local chain attestation and repository
+               binding
 
 $ loreloop knowledge approve --help
 usage: loreloop knowledge approve [-h] ENTRY_ID

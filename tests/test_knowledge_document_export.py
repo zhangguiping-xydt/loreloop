@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from loreloop.cli import main
+from loreloop.knowledge.repos import save_repos
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -127,6 +128,47 @@ def test_cli_docs_export_emits_only_six_documents_without_optional_evidence(
     assert len(tuple(target.glob("*.md"))) == 6
     assert not tuple(target.glob("*接口契约.md"))
     assert not tuple(target.glob("*数据库设计.md"))
+
+
+def test_cli_package_export_supports_a_non_git_aggregate_project_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Given: a non-Git project workspace with two declared Git member repositories.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    backend = _repository(
+        workspace / "backend",
+        {"app.py": '@app.get("/health")\ndef health(): return True\n'},
+    )
+    frontend = _repository(
+        workspace / "frontend",
+        {"app.ts": "export function ready(): boolean { return true }\n"},
+    )
+    save_repos(workspace, {"backend": backend, "frontend": frontend})
+    monkeypatch.chdir(workspace)
+    target = tmp_path / "workspace-knowledge.zip"
+
+    # When: the normal deliverable package command runs at the aggregate root.
+    result = main(
+        [
+            "knowledge",
+            "export",
+            "--format",
+            "package",
+            "--output",
+            str(target),
+            "--project-name",
+            "workspace",
+        ]
+    )
+
+    # Then: no synthetic root Git repository is required and the package replays.
+    assert result == 0
+    error = capsys.readouterr().err
+    assert "across 2 repositories" in error
+    assert main(["knowledge", "replay", str(target)]) == 0
 
 
 def test_cli_docs_export_refuses_nonempty_output_without_force(

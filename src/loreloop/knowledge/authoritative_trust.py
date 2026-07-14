@@ -106,8 +106,9 @@ def verify_trusted_export(
     stored = record.payload.get("repositories")
     if not isinstance(stored, dict):
         raise ExportTrustError("trusted repository bindings are invalid")
-    configured = {".": workdir.resolve()}
-    configured.update({name: path.resolve() for name, path in (peers or {}).items()})
+    configured = {name: path.resolve() for name, path in (peers or {}).items()}
+    if "." in stored:
+        configured["."] = workdir.resolve()
     for alias, raw_binding in stored.items():
         if not isinstance(alias, str) or not isinstance(raw_binding, dict):
             raise ExportTrustError("trusted repository bindings are invalid")

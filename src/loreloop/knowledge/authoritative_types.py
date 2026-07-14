@@ -129,7 +129,22 @@ class SourceSnapshot:
         _require(
             bool(aliases) and len(aliases) == len(set(aliases)), "repository aliases are invalid"
         )
-        _require(len(roots) == 1 and roots[0].alias == ".", "root snapshot is invalid")
+        _require(
+            len(roots) == 0 or (len(roots) == 1 and roots[0].alias == "."),
+            "root snapshot is invalid",
+        )
+        _require(
+            all(
+                (repository.alias == ".") == (repository.role == "root")
+                for repository in self.repositories
+            ),
+            "root snapshot alias is invalid",
+        )
+        _require(
+            bool(roots)
+            or any(repository.role == "peer" for repository in self.repositories),
+            "aggregate snapshot requires a declared peer repository",
+        )
 
 
 @dataclass(frozen=True, slots=True)

@@ -89,3 +89,29 @@ def test_cli_trusted_replay_requires_exact_attested_package(
     assert main(["knowledge", "replay", str(output), "--trusted"]) == 0
 
     assert "Capsule replay: trusted" in capsys.readouterr().out
+
+
+def test_cli_trusted_replay_accepts_attested_zip_transport(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    repo = _repository(tmp_path / "repo")
+    output = tmp_path / "knowledge.zip"
+    monkeypatch.chdir(repo)
+    assert (
+        main(
+            [
+                "knowledge",
+                "export",
+                "--format",
+                "package",
+                "--output",
+                str(output),
+                "--attest",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert main(["knowledge", "replay", str(output), "--trusted"]) == 0
+    assert "Capsule replay: trusted" in capsys.readouterr().out

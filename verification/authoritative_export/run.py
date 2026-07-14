@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+"""Run the frozen authoritative-export proof contract without OMO/plugin machinery."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import zipfile
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+CONTRACT = Path("docs/verification/authoritative-export-v5.md")
+SOURCE_BINDINGS = (
+    Path("src/loreloop/cli.py"),
+    Path("src/loreloop/companion.py"),
+    Path("src/loreloop/knowledge/authoritative_archive.py"),
+    Path("src/loreloop/knowledge/authoritative_ast_render.py"),
+    Path("src/loreloop/knowledge/authoritative_capsule.py"),
+    Path("src/loreloop/knowledge/authoritative_capsule_replay.py"),
+    Path("src/loreloop/knowledge/authoritative_document_ast.py"),
+    Path("src/loreloop/knowledge/authoritative_git.py"),
+    Path("src/loreloop/knowledge/authoritative_publish.py"),
+    Path("src/loreloop/knowledge/authoritative_semantic.py"),
+    Path("src/loreloop/knowledge/authoritative_source.py"),
+    Path("src/loreloop/knowledge/authoritative_trust.py"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class GateResult:
+    name: str
+    command: tuple[str, ...]
+    exit_code: int
+    duration_seconds: float
+    log: str
+    log_sha256: str
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _git(repo: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _run_gate(
+    name: str,
+    command: tuple[str, ...],
+    *,
+    cwd: Path,
+    logs: Path,
+    env: dict[str, str],
+    timeout: int,
+) -> GateResult:
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        output = (
+            f"$ {' '.join(command)}\n\n[stdout]\n{completed.stdout}"
+            f"\n[stderr]\n{completed.stderr}"
+        )
+        exit_code = completed.returncode
+    except subprocess.TimeoutExpired as exc:
+        output = (
+            f"$ {' '.join(command)}\n\n[TIMEOUT after {timeout}s]\n"
+            f"[stdout]\n{exc.stdout or ''}\n[stderr]\n{exc.stderr or ''}"
+        )
+        exit_code = 124
+    except OSError as exc:
+        output = f"$ {' '.join(command)}\n\n[EXECUTION ERROR]\n{exc}\n"
+        exit_code = 127
+    duration = time.monotonic() - started
+    log = logs / f"{len(tuple(logs.glob('*.log'))) + 1:02d}-{name}.log"
+    log.write_text(output, encoding="utf-8")
+    return GateResult(
+        name,
+        command,
+        exit_code,
+        round(duration, 3),
+        str(log.relative_to(logs.parent)),
+        _sha256(log),
+    )
+
+
+def _clone_at(source: Path, destination: Path, commit: str) -> None:
+    subprocess.run(
+        ["git", "clone", "--quiet", "--no-hardlinks", str(source), str(destination)],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "--quiet", "--detach", commit],
+        cwd=destination,
+        check=True,
+    )
+
+
+def _filesystem(value: str) -> tuple[str, Path]:
+    label, separator, raw_path = value.partition("=")
+    if not separator or not label or not raw_path:
+        raise argparse.ArgumentTypeError("filesystem must be LABEL=/existing/path")
+    path = Path(raw_path).expanduser().resolve()
+    if not path.is_dir():
+        raise argparse.ArgumentTypeError(f"filesystem path is not a directory: {path}")
+    return label, path
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--source", type=Path, default=Path.cwd())
+    parser.add_argument("--commit", default="HEAD")
+    parser.add_argument("--dogfood-repo", type=Path)
+    parser.add_argument("--dogfood-commit", default="HEAD")
+    parser.add_argument("--filesystem", action="append", type=_filesystem, default=[])
+    parser.add_argument("--force", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    source = args.source.expanduser().resolve()
+    commit = _git(source, "rev-parse", args.commit)
+    output = args.output.expanduser().absolute()
+    if output == source or output in source.parents:
+        raise SystemExit("output must not be the source repository or one of its parents")
+    if output.is_symlink() or (output.exists() and not output.is_dir()):
+        raise SystemExit(f"unsafe output directory: {output}")
+    if output.exists() and any(output.iterdir()):
+        if not args.force:
+            raise SystemExit(f"output directory is not empty: {output}")
+        marker = output / "manifest.json"
+        try:
+            existing = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SystemExit(
+                f"refusing to replace a directory without a proof manifest: {output}"
+            ) from exc
+        if not isinstance(existing, dict) or existing.get("schema_version") != 1:
+            raise SystemExit(f"refusing to replace an unrecognized proof directory: {output}")
+        shutil.rmtree(output)
+    output.mkdir(parents=True, exist_ok=True)
+    logs = output / "logs"
+    logs.mkdir()
+    scratch = Path(tempfile.mkdtemp(prefix="loreloop-authoritative-proof-"))
+    gates: list[GateResult] = []
+    dogfood: dict[str, object] | None = None
+    try:
+        checkout = scratch / "loreloop"
+        _clone_at(source, checkout, commit)
+        contract = checkout / CONTRACT
+        if not contract.is_file():
+            raise SystemExit(f"contract is absent from frozen commit: {CONTRACT}")
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(checkout / "src"),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        python = sys.executable
+        gate_specs: list[tuple[str, tuple[str, ...], int]] = [
+            ("full-test-suite", (python, "-m", "pytest", "-q"), 900),
+            ("ruff", ("ruff", "check", "src", "tests", "plugins"), 300),
+            (
+                "bandit-medium-high",
+                ("bandit", "-q", "-r", "src/loreloop", "-x", "src/loreloop/example", "-lll"),
+                300,
+            ),
+            (
+                "six-seven-eight-and-aggregate",
+                (
+                    python,
+                    "-m",
+                    "pytest",
+                    "-q",
+                    "tests/test_knowledge_document_export.py",
+                    "tests/test_document_archive.py",
+                    "tests/test_document_detector_matrix.py",
+                    "tests/test_document_git_snapshot.py",
+                ),
+                600,
+            ),
+            (
+                "capsule-mutants-and-trust",
+                (
+                    python,
+                    "-m",
+                    "pytest",
+                    "-q",
+                    "tests/test_document_capsule.py",
+                    "tests/test_document_capsule_replay.py",
+                    "tests/test_cli_capsule_replay.py",
+                    "tests/test_authoritative_trust.py",
+                ),
+                600,
+            ),
+            (
+                "wheel",
+                (
+                    python,
+                    "-m",
+                    "build",
+                    "--wheel",
+                    "--no-isolation",
+                    "--outdir",
+                    str(scratch / "dist"),
+                ),
+                300,
+            ),
+            (
+                "cli-package-help",
+                (python, "-m", "loreloop.cli", "knowledge", "export", "--help"),
+                60,
+            ),
+        ]
+        for name, command, timeout in gate_specs:
+            gates.append(
+                _run_gate(name, command, cwd=checkout, logs=logs, env=env, timeout=timeout)
+            )
+        for label, root in args.filesystem:
+            base = Path(tempfile.mkdtemp(prefix=f"loreloop-{label}-", dir=root))
+            try:
+                command = (
+                    python,
+                    "-m",
+                    "pytest",
+                    "-q",
+                    "tests/test_authoritative_publish.py",
+                    f"--basetemp={base / 'pytest'}",
+                )
+                gates.append(
+                    _run_gate(
+                        f"publication-{label}",
+                        command,
+                        cwd=checkout,
+                        logs=logs,
+                        env=env,
+                        timeout=300,
+                    )
+                )
+            finally:
+                shutil.rmtree(base, ignore_errors=True)
+        if args.dogfood_repo is not None:
+            dogfood_source = args.dogfood_repo.expanduser().resolve()
+            dogfood_commit = _git(dogfood_source, "rev-parse", args.dogfood_commit)
+            dogfood_checkout = scratch / "dogfood"
+            _clone_at(dogfood_source, dogfood_checkout, dogfood_commit)
+            package = scratch / "dogfood-knowledge.zip"
+            export_command = (
+                python,
+                "-m",
+                "loreloop.cli",
+                "knowledge",
+                "export",
+                "--format",
+                "package",
+                "--output",
+                str(package),
+                "--project-name",
+                dogfood_checkout.name,
+            )
+            gates.append(
+                _run_gate(
+                    "large-project-export",
+                    export_command,
+                    cwd=dogfood_checkout,
+                    logs=logs,
+                    env=env,
+                    timeout=1200,
+                )
+            )
+            replay_command = (
+                python,
+                "-m",
+                "loreloop.cli",
+                "knowledge",
+                "replay",
+                str(package),
+            )
+            gates.append(
+                _run_gate(
+                    "large-project-replay",
+                    replay_command,
+                    cwd=scratch,
+                    logs=logs,
+                    env=env,
+                    timeout=1200,
+                )
+            )
+            if package.is_file():
+                with zipfile.ZipFile(package) as archive:
+                    names = tuple(sorted(archive.namelist()))
+                    uncompressed = sum(item.file_size for item in archive.infolist())
+                dogfood = {
+                    "source": str(dogfood_source),
+                    "commit": dogfood_commit,
+                    "tracked_files": len(_git(dogfood_checkout, "ls-files").splitlines()),
+                    "zip_bytes": package.stat().st_size,
+                    "uncompressed_bytes": uncompressed,
+                    "zip_sha256": _sha256(package),
+                    "entries": names,
+                }
+        tree_files = tuple(
+            line
+            for line in _git(checkout, "ls-tree", "-r", "--name-only", commit).splitlines()
+            if line
+        )
+        manifest = {
+            "schema_version": 1,
+            "status": "passed" if all(gate.exit_code == 0 for gate in gates) else "failed",
+            "implementation_commit": commit,
+            "contract": str(CONTRACT),
+            "contract_sha256": _sha256(contract),
+            "proof_runner_sha256": _sha256(
+                checkout / "verification/authoritative_export/run.py"
+            ),
+            "source_sha256": {
+                str(path): _sha256(checkout / path) for path in SOURCE_BINDINGS
+            },
+            "tracked_file_count": len(tree_files),
+            "environment": {
+                "python": sys.version,
+                "platform": platform.platform(),
+            },
+            "gates": [asdict(gate) for gate in gates],
+            "dogfood": dogfood,
+        }
+        manifest_path = output / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(f"proof manifest: {manifest_path}")
+        print(f"implementation commit: {commit}")
+        print(f"status: {manifest['status']}")
+        return 0 if manifest["status"] == "passed" else 1
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

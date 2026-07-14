@@ -134,21 +134,22 @@ loreloop ingest --from code .
 loreloop knowledge review
 ```
 
-需要交接、熟悉项目或基于旧系统继续开发需求时，可以直接从干净的 Git 快照生成权威项目文档。
+需要交接、熟悉项目或基于旧系统继续开发需求时，可以直接从各成员仓库的干净提交态生成可交付的
+权威项目包。项目根目录本身可以不是 Git 仓库，只要成员仓库已经通过 `loreloop repo add` 声明。
 这个过程不调用 Agent，也不读取 SQLite 或密钥：
 
 ```bash
 loreloop knowledge export \
-  --format docs \
-  --output knowledge-export \
+  --format package \
+  --output knowledge-export.zip \
   --project-name your-project \
   --requirements docs/requirements.md
 ```
 
-生成的项目文档目录如下：
+ZIP 包内结构如下：
 
 ```text
-knowledge-export/
+knowledge-export.zip
 ├── your-project-功能清单.md
 ├── your-project-需求规格.md
 ├── your-project-系统架构.md
@@ -168,18 +169,19 @@ TypeORM、常见 migration、OpenAPI/Swagger、GraphQL、protobuf、Docker、Com
 `.loreloop-export.json` 可以在没有源码、数据库或密钥的机器上证明整套文档没有缺失或篡改：
 
 ```bash
-loreloop knowledge replay knowledge-export
+loreloop knowledge replay knowledge-export.zip
 ```
 
 如果还要证明“这份包由当前项目的本地信任域确认过”，导出时显式加 `--attest`，重放时加
 `--trusted`：
 
 ```bash
-loreloop knowledge export --format docs --output knowledge-export --attest
-loreloop knowledge replay knowledge-export --trusted
+loreloop knowledge export --format package --output knowledge-export.zip --attest
+loreloop knowledge replay knowledge-export.zip --trusted
 ```
 
-默认的 `--format audit` 仍保留原来的单文件逐条信任审计导出。
+`--format docs` 作为兼容别名继续保留，也仍可输出目录。默认的 `--format audit` 是另一种单文件逐条
+信任审计导出，并不是权威项目文档包。
 
 有需求文档时，把它提交到任一已声明仓库，然后在当前编码代理会话里建立任务边界：
 

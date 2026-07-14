@@ -720,8 +720,9 @@ loreloop report [run_id]
 loreloop harvest <run_id> [--agent claude|codex|opencode|co-mind]
 loreloop knowledge list [--stale]
 loreloop knowledge export [--stale] [--format audit] [--output <file>]
-loreloop knowledge export --format docs --output <directory> [--project-name <name>] [--requirements <path>]... [--force] [--attest]
-loreloop knowledge replay <directory> [--trusted]
+loreloop knowledge export --format package --output <package.zip> [--project-name <name>] [--requirements <path>]... [--force] [--attest]
+loreloop knowledge export --format docs --output <directory-or-zip> ...  # 兼容别名
+loreloop knowledge replay <directory-or-zip> [--trusted]
 loreloop knowledge approve <entry_id>
 loreloop knowledge reject <entry_id>
 loreloop knowledge supersede <new_id> <old_id>

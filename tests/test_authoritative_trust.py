@@ -66,3 +66,20 @@ def test_trusted_export_rejects_unattested_capsule(tmp_path: Path) -> None:
 
     with pytest.raises(ExportTrustError, match="no local trust attestation"):
         _ = verify_trusted_export(chain.verify(), root, capsule, "2" * 64)
+
+
+def test_trusted_export_supports_non_git_aggregate_project_root(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    backend = _repository(workspace / "backend")
+    peers = {"backend": backend}
+    snapshot = capture_source_snapshot(workspace, peers)
+    capsule = CapsuleArtifact(".loreloop-export.json", "{}\n", "1" * 64)
+    chain = EvidenceChain.for_workdir(workspace, key_dir=tmp_path / "keys")
+    _ = attest_export(chain, workspace, snapshot, capsule, "2" * 64, peers)
+
+    verified = verify_trusted_export(
+        chain.verify(), workspace, capsule, "2" * 64, peers
+    )
+
+    assert set(verified.payload["repositories"]) == {"backend"}

@@ -1,0 +1,127 @@
+# LoreLoop 权威项目包 v5：里程碑与可执行证明契约
+
+状态：当前产品契约。本文替代历史上“固定十份文档、导出必须依赖本地密钥”的旧验证假设。
+
+## 1. 交付目标
+
+LoreLoop 从一个项目的提交态源码与显式需求材料构建同一条证明链：
+
+```text
+Git source snapshots
+→ deterministic detectors
+→ SemanticCore
+→ typed document ASTs
+→ Markdown
+→ Capsule v2
+→ directory or ZIP transport
+```
+
+默认交付命令是：
+
+```bash
+loreloop knowledge export --format package --output knowledge-export.zip
+loreloop knowledge replay knowledge-export.zip
+```
+
+`--format docs` 是兼容别名。`--format audit` 是知识条目逐条审计文件，不是权威项目包。
+
+## 2. 项目与仓库边界
+
+合法项目拓扑有两种：
+
+1. Git 根仓库 `.`，加零个或多个已声明成员仓库；
+2. 非 Git 聚合根，加至少一个通过 `loreloop repo add` 声明的 Git 成员仓库。
+
+根仓库、成员仓库和递归子模块必须全部处于干净提交态。快照绑定仓库别名、Git 根历史、
+提交、树、索引形状、每个 blob 的 Git OID、长度和 SHA-256。检测和文档生成只读取已捕获的
+Git blob，不读取工作树文件。
+
+## 3. 文档集合
+
+每个项目固定生成六份 Markdown：
+
+1. 功能清单
+2. 需求规格
+3. 系统架构
+4. 详细设计
+5. 用户手册
+6. 验收规格
+
+源码存在明确接口证据时增加“接口契约”，存在明确数据库结构证据时增加“数据库设计”。因此
+合法集合是 6、7 或 8 份，不允许用空占位文档凑数。
+
+Markdown 是给人和编码代理共同阅读、评审、Git diff 与引用的交付界面，不生成 DOCX。
+机器闭包由 `.loreloop-export.json` 中的 SemanticCore、完整 AST、适用性决策和摘要证明。
+
+## 4. 可移植包与信任模式
+
+- 默认 ZIP 是确定性、扁平、可直接交付的传输包；目录形式继续兼容。
+- 无密钥重放必须在没有源码、SQLite 和 LoreLoop 密钥时验证 AST、Markdown 与 Capsule 闭包。
+- ZIP 不允许路径、目录、链接、重复文件、加密成员、未绑定的额外成员或超限解压内容。
+- `--attest` 可选地把精确 Capsule 摘要与仓库身份/检出位置写入本地证据链。
+- `--trusted` 除可移植闭包外，还必须验证相同本地信任链，并拒绝同历史 clone 替换仓库别名。
+
+## 5. 发布与恢复
+
+- ZIP 首次发布使用不覆盖安装；若导出期间目标突然出现，必须保留操作者文件并失败。
+- ZIP 的显式 `--force` 更新使用同文件系统原子替换，崩溃只能留下完整旧包或完整新包。
+- 目录更新使用完整树发布、原子目录交换、同级 journal 与确定性恢复。
+- 输出目录或 ZIP 本身为符号链接时必须拒绝。
+
+## 6. 检测器和诚实覆盖
+
+当前确定性检测覆盖 Python、TypeScript/JavaScript、Java/Kotlin、Go、Rust、C#、SQL、
+SQLAlchemy、Django ORM/migration、Alembic、Prisma、TypeORM、OpenAPI/Swagger、GraphQL、
+protobuf、Docker、Compose 与 Kubernetes。测试、fixture、snapshot 和 generated 文件保留在
+源码快照覆盖中，但不作为产品语义。
+
+导出必须报告：仓库数、提交态 blob 数、检测文件数、排除数、检测器分布、事实数、文档数，
+以及未语义解析的主要后缀。没有证据的业务结论不得由模板或模型补写。
+
+OpenAPI/Swagger 内容识别必须要求规范版本标记；业务配置中名为 `swagger` 的普通命名空间
+不能触发严格 OpenAPI 解析。
+
+## 7. 里程碑
+
+### M1：可实际运行的源码反构
+
+完成条件：单仓库和非 Git 聚合多仓库均能生成 6/7/8 文档；需求材料可进入需求与验收文档；
+真实项目错误包含仓库别名和文件路径；不调用外部 Agent。
+
+### M2：可交付 Capsule 包
+
+完成条件：ZIP 和兼容目录均可重放；缺失、增加、路径、重复、AST、Markdown、摘要等变异全部
+失败；ZIP 字节在相同输入和运行时下可重复。
+
+### M3：可信重放与崩溃恢复
+
+完成条件：可选 attestation/`--trusted` 闭环通过；仓库 clone 替换失败；ZIP 竞争写入不覆盖；
+目录崩溃恢复在本次环境的 XFS 与 ext4 上通过。
+
+### M4：全量证明与双审
+
+完成条件：在冻结提交的干净本地 clone 中运行全量测试、Ruff、Bandit、wheel、M1–M3 专项门禁
+和大仓库 Dogfood；保存命令日志、摘要、源码哈希与环境；两个独立只读审查者针对同一契约与
+同一实现提交给出无 Critical/Major 的结论。
+
+## 8. 唯一执行入口
+
+冻结实现提交后运行：
+
+```bash
+python verification/authoritative_export/run.py \
+  --output verification/authoritative_export/results/<commit> \
+  --dogfood-repo /path/to/large/clean-or-dirty-git-repository \
+  --filesystem xfs=/tmp \
+  --filesystem ext4=/media/vdc
+```
+
+脚本从指定提交创建干净本地 clone；Dogfood 也从其提交创建干净 clone，因此操作者的工作树和
+本机 `uv.lock` 不参与结论。每个命令的 stdout/stderr 写入独立日志，`manifest.json` 记录提交、
+契约哈希、关键源码哈希、命令、退出码、耗时和日志 SHA-256。任一必需门禁失败时脚本非零退出。
+
+## 9. 当前环境的锁文件例外
+
+操作者工作树的 `uv.lock` 可能被企业镜像工具改写为 Artifactory，因此在脏工作树直接运行完整
+测试时，公开 PyPI 注册表检查会有且只有这一项失败。该本地文件不得修改或提交。正式证明必须
+在冻结提交的干净 clone 中执行；提交态 `uv.lock` 必须只包含 `https://pypi.org/simple`。

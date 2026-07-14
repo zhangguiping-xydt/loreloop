@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, cast
 
+from .authoritative_archive import ExportArchiveError, read_export_archive
 from .authoritative_capsule import CAPSULE_FILENAME, JsonValue
 from .authoritative_capsule_io import CapsuleIoError, parse_capsule, read_export_files
 from .authoritative_capsule_render import CapsuleRenderError, render_capsule_ast
@@ -175,6 +176,8 @@ def _validate_documents(
     package: str,
     trust: str,
     repository: str,
+    *,
+    allow_extra_non_markdown: bool,
 ) -> tuple[str, ...]:
     entries = _array(root.get("documents"), "capsule documents")
     if not 6 <= len(entries) <= 8:
@@ -187,13 +190,16 @@ def _validate_documents(
         raise CapsuleReplayError("capsule contains duplicate document filenames")
     expected_files = {CAPSULE_FILENAME, *filenames}
     missing = expected_files - set(files)
-    extra_markdown = {
-        filename for filename in set(files) - expected_files if filename.lower().endswith(".md")
-    }
-    if missing or extra_markdown:
+    extras = set(files) - expected_files
+    rejected_extras = (
+        {filename for filename in extras if filename.lower().endswith(".md")}
+        if allow_extra_non_markdown
+        else extras
+    )
+    if missing or rejected_extras:
         raise CapsuleReplayError(
             f"export file set mismatch; missing={sorted(missing)}, "
-            f"extra_markdown={sorted(extra_markdown)}"
+            f"extra={sorted(rejected_extras)}"
         )
     required: set[str] = set()
     optional: set[str] = set()
@@ -243,16 +249,12 @@ def _validate_documents(
     return filenames
 
 
-def replay_capsule_directory(
-    export_dir: Path,
+def _replay_capsule_files(
+    files: Mapping[str, bytes],
     *,
+    allow_extra_non_markdown: bool,
     trust_verifier: CapsuleTrustVerifier | None = None,
 ) -> CapsuleReplayResult:
-    """Verify the complete portable package without reading source, keys, or LoreLoop state."""
-    try:
-        files = read_export_files(export_dir)
-    except CapsuleIoError as exc:
-        raise CapsuleReplayError(str(exc)) from exc
     capsule_bytes = files.get(CAPSULE_FILENAME)
     if capsule_bytes is None:
         raise CapsuleReplayError(f"export is missing {CAPSULE_FILENAME}")
@@ -262,7 +264,14 @@ def replay_capsule_directory(
         raise CapsuleReplayError(str(exc)) from exc
     package, core_digest, trust, repository = _validate_core(root)
     try:
-        filenames = _validate_documents(root, files, package, trust, repository)
+        filenames = _validate_documents(
+            root,
+            files,
+            package,
+            trust,
+            repository,
+            allow_extra_non_markdown=allow_extra_non_markdown,
+        )
     except (CapsuleRenderError, IdentityContractError) as exc:
         raise CapsuleReplayError(f"document AST cannot be replayed: {exc}") from exc
     claim = CapsuleTrustClaim(
@@ -283,3 +292,48 @@ def replay_capsule_directory(
         filenames,
         mode,
     )
+
+
+def replay_capsule_directory(
+    export_dir: Path,
+    *,
+    trust_verifier: CapsuleTrustVerifier | None = None,
+) -> CapsuleReplayResult:
+    """Verify one directory package without reading source, keys, or LoreLoop state."""
+    try:
+        files = read_export_files(export_dir)
+    except CapsuleIoError as exc:
+        raise CapsuleReplayError(str(exc)) from exc
+    return _replay_capsule_files(
+        files,
+        allow_extra_non_markdown=True,
+        trust_verifier=trust_verifier,
+    )
+
+
+def replay_capsule_archive(
+    export_archive: Path,
+    *,
+    trust_verifier: CapsuleTrustVerifier | None = None,
+) -> CapsuleReplayResult:
+    """Verify one complete ZIP transport; every archive entry belongs to the package."""
+    try:
+        files = read_export_archive(export_archive)
+    except ExportArchiveError as exc:
+        raise CapsuleReplayError(str(exc)) from exc
+    return _replay_capsule_files(
+        files,
+        allow_extra_non_markdown=False,
+        trust_verifier=trust_verifier,
+    )
+
+
+def replay_capsule_export(
+    export_path: Path,
+    *,
+    trust_verifier: CapsuleTrustVerifier | None = None,
+) -> CapsuleReplayResult:
+    """Replay either the compatible directory form or the deliverable ZIP form."""
+    if export_path.is_dir() and not export_path.is_symlink():
+        return replay_capsule_directory(export_path, trust_verifier=trust_verifier)
+    return replay_capsule_archive(export_path, trust_verifier=trust_verifier)

@@ -48,6 +48,26 @@ def _root(path: Path, alias: str) -> Path:
     return resolved
 
 
+def _root_if_repository(path: Path, alias: str) -> Path | None:
+    """Return a Git root, or None when an aggregate workspace is not a repository."""
+    resolved = path.expanduser().resolve()
+    if (resolved / ".git").exists() or (resolved / ".git").is_symlink():
+        return _root(resolved, alias)
+    completed = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=resolved,
+        check=False,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        return None
+    output = completed.stdout.decode("utf-8", errors="replace").strip()
+    actual = Path(output).resolve()
+    if actual != resolved:
+        raise GitSnapshotError(f"repository {alias!r} is not a Git root: {resolved}")
+    return resolved
+
+
 def _clean(repo: Path, alias: str) -> None:
     changed = (
         _git(repo, "diff", "--name-only", "-z"),
@@ -144,9 +164,16 @@ def capture_source_snapshot(
     root: Path,
     peers: Mapping[str, Path] | None = None,
 ) -> SourceSnapshot:
-    """Capture a clean root, explicit peers, and recursively discovered submodules."""
+    """Capture a Git root or a declared aggregate workspace, plus submodules."""
     peer_items = sorted((peers or {}).items())
-    inputs = [_RepositoryInput(".", "root", root)]
+    root_repository = _root_if_repository(root, ".")
+    inputs: list[_RepositoryInput] = []
+    if root_repository is not None:
+        inputs.append(_RepositoryInput(".", "root", root_repository))
+    elif not peer_items:
+        raise GitSnapshotError(
+            "project root is not a Git repository and no declared Git repositories are available"
+        )
     inputs.extend(_RepositoryInput(alias, "peer", path) for alias, path in peer_items)
     resolved = tuple(_root(item.path, item.alias) for item in inputs)
     if len(resolved) != len(set(resolved)):
@@ -188,7 +215,11 @@ def verify_source_snapshot_metadata(
     peers: Mapping[str, Path] | None = None,
 ) -> None:
     """Verify mutable Git state without re-reading every immutable blob."""
-    inputs = [_RepositoryInput(".", "root", root)]
+    has_root = any(repository.alias == "." for repository in expected.repositories)
+    current_root = _root_if_repository(root, ".")
+    if has_root != (current_root is not None):
+        raise GitSnapshotError("project repository topology changed after snapshot capture")
+    inputs = [_RepositoryInput(".", "root", root)] if has_root else []
     inputs.extend(
         _RepositoryInput(alias, "peer", path) for alias, path in sorted((peers or {}).items())
     )

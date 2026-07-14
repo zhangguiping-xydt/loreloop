@@ -116,6 +116,25 @@ def test_source_snapshot_seals_into_a_payload_free_package_envelope() -> None:
     assert envelope.digests.source_snapshot_hmac == seal.source_snapshot_hmac
 
 
+def test_source_snapshot_accepts_an_aggregate_project_without_synthetic_root() -> None:
+    object_id = authoritative_types.GitObjectId.parse("sha1:" + "a" * 40)
+
+    snapshot = authoritative_types.SourceSnapshot(
+        repositories=(
+            authoritative_types.RepositorySnapshot(
+                alias="backend",
+                role="peer",
+                commit_id=object_id,
+                tree_id=authoritative_types.GitObjectId.parse("sha1:" + "b" * 40),
+                index_sha256="c" * 64,
+                entries=(),
+            ),
+        )
+    )
+
+    assert tuple(repository.alias for repository in snapshot.repositories) == ("backend",)
+
+
 def test_package_envelope_rejects_a_replaced_snapshot_seal() -> None:
     # Given: package digests and an opaque seal with different source HMACs.
     seal = authoritative_types.SealedSnapshot(

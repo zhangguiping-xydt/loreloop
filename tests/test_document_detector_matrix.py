@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from loreloop.knowledge.authoritative_git import GitSnapshotError, capture_source_snapshot
+from loreloop.knowledge.authoritative_records import DetectionError
 from loreloop.knowledge.authoritative_source import detect_source_snapshot
 
 
@@ -93,4 +94,44 @@ def test_detector_matrix_rejects_worktree_drift_after_snapshot(tmp_path: Path) -
 
     # When / Then: detectors never mix current worktree bytes with the captured commit.
     with pytest.raises(GitSnapshotError, match="uncommitted|changed"):
+        _ = detect_source_snapshot(snapshot, root)
+
+
+def test_application_yaml_with_custom_swagger_settings_is_not_openapi(tmp_path: Path) -> None:
+    # Given: valid application configuration using an indentationless YAML sequence and a
+    # custom top-level "swagger" namespace, but no OpenAPI/Swagger version marker.
+    root = _repository(
+        tmp_path / "backend",
+        {
+            "src/main/resources/application.yml": """
+spring:
+  kafka:
+    bootstrapServers:
+    - broker-a:9092
+swagger:
+  enabled: true
+  path: /swagger.json
+""",
+        },
+    )
+    snapshot = capture_source_snapshot(root)
+
+    # When: the detector matrix inspects the file.
+    report = detect_source_snapshot(snapshot, root)
+
+    # Then: application YAML is not sent to the strict OpenAPI parser.
+    assert report.interfaces == ()
+
+
+def test_snapshot_detection_error_identifies_repository_and_file(tmp_path: Path) -> None:
+    root = _repository(
+        tmp_path / "backend",
+        {"contracts/openapi.yaml": "openapi: 3.0.0\npaths:\n  /pets: [unterminated\n"},
+    )
+    snapshot = capture_source_snapshot(root)
+
+    with pytest.raises(
+        DetectionError,
+        match=r"\.:contracts/openapi\.yaml: unterminated YAML scalar",
+    ):
         _ = detect_source_snapshot(snapshot, root)
