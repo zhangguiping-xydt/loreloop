@@ -14,6 +14,7 @@ from .model import Channel, Entry, Kind, Source
 MAX_SEARCH_RECORDS = 200_000
 MAX_SEARCH_TEXT_BYTES = 64 * 1024 * 1024
 MAX_SEARCH_LINE_BYTES = 8 * 1024 * 1024
+MAX_SEARCH_EXPANSION_CHARS = 4_096
 _HEADING = re.compile(r"^#{1,6}\s+(?P<title>.+?)\s*$")
 _TABLE_SEPARATOR = re.compile(r"^\|(?:\s*:?-{3,}:?\s*\|)+$")
 
@@ -87,19 +88,26 @@ def search_baseline(
     query: str,
     *,
     limit: int = 10,
+    expansion: str = "",
 ) -> tuple[BaselineSearchHit, ...]:
     """Verify a package, then rank its Markdown rows without extracting it."""
     if limit < 1:
         raise BaselineSearchError("search limit must be at least 1")
     if not query.strip():
         raise BaselineSearchError("search query must not be empty")
+    if len(expansion) > MAX_SEARCH_EXPANSION_CHARS:
+        raise BaselineSearchError(
+            f"search expansion exceeds {MAX_SEARCH_EXPANSION_CHARS} characters"
+        )
+    if any(ord(character) < 32 and character not in "\t\n\r" for character in expansion):
+        raise BaselineSearchError("search expansion contains a control character")
     try:
         bundle = load_replayed_capsule_export(export_path)
     except CapsuleReplayError as exc:
         raise BaselineSearchError(str(exc)) from exc
     files = dict(bundle.files)
     entries = _search_entries(files, bundle.result.documents)
-    ranked = rank_entries(query, entries, limit=limit)
+    ranked = rank_entries(query, entries, limit=limit, expansion=expansion.strip())
     hits: list[BaselineSearchHit] = []
     for result in ranked:
         entry = result.entry

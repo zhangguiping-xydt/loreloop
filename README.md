@@ -200,6 +200,20 @@ project store:
 loreloop knowledge search "fund ratio" --package baseline.zip
 ```
 
+When the question and the project use different wording, pass bounded
+retrieval-only synonyms, translations, abbreviations, or likely identifiers:
+
+```bash
+loreloop knowledge search "fund ratio" \
+  --package baseline.zip \
+  --expand "housing provident fund contribution ratio HPF hpfRatioConfig"
+```
+
+Expansion changes ranking only. It is never added to the baseline, rendered as
+project knowledge, or allowed to raise the trust of a result. Codex, Claude
+Code, OpenCode, and co-mind can derive these terms in the current host session;
+LoreLoop does not launch a second agent for package search.
+
 Web exploration remains in the live knowledge store by default. To project
 runtime observations back into the deliverable baseline, first approve and
 browser-verify the entries, then opt in explicitly:

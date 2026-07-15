@@ -519,7 +519,7 @@ options:
 $ loreloop knowledge search --help
 usage: loreloop knowledge search [-h]
                                  [--all | --project PROJECT | --package PATH]
-                                 [--tag TAG] [--limit LIMIT]
+                                 [--tag TAG] [--expand TERMS] [--limit LIMIT]
                                  QUERY
 
 positional arguments:
@@ -532,6 +532,8 @@ options:
   --package PATH     search a replay-verified baseline ZIP or directory
                      without importing it
   --tag TAG          filter selected projects by tag
+  --expand TERMS     retrieval-only synonyms, translations and identifiers;
+                     never treated as knowledge
   --limit LIMIT
 
 $ loreloop knowledge import --help

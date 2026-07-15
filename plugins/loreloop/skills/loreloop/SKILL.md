@@ -90,6 +90,20 @@ loreloop knowledge search "<query>" --package baseline.zip
 Do not unpack or import the ZIP merely to search it. Package search replays the
 Capsule first and then ranks the bound Markdown rows.
 
+If the operator's wording may differ from the project vocabulary, or the first
+search returns no useful result, derive 5-15 concise retrieval terms in the
+current host session: synonyms, Chinese/English translations, abbreviations,
+and likely code identifiers. Retry without launching a nested agent:
+
+```text
+loreloop knowledge search "<query>" --package baseline.zip --expand "<terms>"
+```
+
+Expansion is retrieval-only. Never present an expansion term as project
+knowledge, never add it to the answer as evidence, and never let it change a
+result's trust. Answers must cite the replay-verified package content returned
+by the search, not the host's proposed vocabulary.
+
 Web knowledge is not included by default. When the operator explicitly asks to
 update the baseline from Web exploration, include only entries that they have
 approved and LoreLoop has browser-verified, then replace the existing package

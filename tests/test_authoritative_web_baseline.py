@@ -10,6 +10,7 @@ import pytest
 
 from loreloop.cli import _select_governed_web_entries, main
 from loreloop.evidence.chain import EvidenceRecord
+from loreloop.knowledge.authoritative_search import MAX_SEARCH_EXPANSION_CHARS
 from loreloop.knowledge.authoritative_web_input import build_governed_web_input
 from loreloop.knowledge.endorsement import TrustProjectionError, entry_digest
 from loreloop.knowledge.model import Channel, Entry, Kind, Source
@@ -280,6 +281,43 @@ def test_package_includes_governed_web_and_can_be_searched_without_a_store(
     assert "用户手册.md#Web 页面与行为观察" in output
     assert "Observed behavior statement" in output
     assert not (isolated / ".loreloop").exists()
+
+    assert main(
+        [
+            "knowledge",
+            "search",
+            "办结反馈",
+            "--package",
+            str(package),
+        ]
+    ) == 0
+    assert "no matching baseline records" in capsys.readouterr().out
+    assert main(
+        [
+            "knowledge",
+            "search",
+            "办结反馈",
+            "--package",
+            str(package),
+            "--expand",
+            "Observed behavior statement",
+        ]
+    ) == 0
+    expanded_output = capsys.readouterr().out
+    assert "用户手册.md#Web 页面与行为观察" in expanded_output
+    assert "Observed behavior statement" in expanded_output
+    assert main(
+        [
+            "knowledge",
+            "search",
+            "behavior",
+            "--package",
+            str(package),
+            "--expand",
+            "x" * (MAX_SEARCH_EXPANSION_CHARS + 1),
+        ]
+    ) == 2
+    assert "search expansion must be at most" in capsys.readouterr().err
 
     tampered = tmp_path / "tampered.zip"
     with zipfile.ZipFile(package) as source, zipfile.ZipFile(tampered, "w") as target:

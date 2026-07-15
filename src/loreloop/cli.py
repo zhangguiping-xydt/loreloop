@@ -159,6 +159,18 @@ def _add_knowledge_filters(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--offset", type=int, default=0, help="entries to skip before display")
 
 
+def _parse_search_expansion(value: str) -> str:
+    from .knowledge.authoritative_search import MAX_SEARCH_EXPANSION_CHARS
+
+    if len(value) > MAX_SEARCH_EXPANSION_CHARS:
+        raise argparse.ArgumentTypeError(
+            f"search expansion must be at most {MAX_SEARCH_EXPANSION_CHARS} characters"
+        )
+    if any(ord(character) < 32 and character not in "\t\n\r" for character in value):
+        raise argparse.ArgumentTypeError("search expansion contains a control character")
+    return value.strip()
+
+
 def _run_trace(workdir: Path, run_id: str) -> Path | None:
     if not _RUN_ID.match(run_id):
         raise CLIError(
@@ -1827,7 +1839,12 @@ def _search_baseline_package(args: argparse.Namespace) -> int:
         )
     print("verifying baseline and building a transient search index...", file=sys.stderr)
     try:
-        hits = search_baseline(Path(args.package), args.query, limit=args.limit)
+        hits = search_baseline(
+            Path(args.package),
+            args.query,
+            limit=args.limit,
+            expansion=args.expand,
+        )
     except BaselineSearchError as exc:
         raise CLIError(
             "baseline search failed",
@@ -1930,6 +1947,7 @@ def _search_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
         query,
         [item for group in groups for item in group],
         limit=max(args.limit * 2, args.limit),
+        expansion=args.expand,
     )
     ranked.sort(key=lambda pair: (-pair[0], pair[1].project_id, pair[1].entry.id))
     for _, item in ranked[: args.limit]:
@@ -3151,6 +3169,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_knowledge_search.add_argument(
         "--tag", action="append", help="filter selected projects by tag"
+    )
+    p_knowledge_search.add_argument(
+        "--expand",
+        default="",
+        metavar="TERMS",
+        type=_parse_search_expansion,
+        help="retrieval-only synonyms, translations and identifiers; never treated as knowledge",
     )
     p_knowledge_search.add_argument("--limit", type=int, default=10)
     p_knowledge_search.set_defaults(func=cmd_knowledge)

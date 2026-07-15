@@ -175,6 +175,28 @@ def test_search_tag_without_all_selects_tagged_projects(tmp_path, monkeypatch, c
     assert "[hr-fund]" in capsys.readouterr().out
 
 
+def test_local_search_uses_retrieval_only_expansion(tmp_path, monkeypatch, capsys):
+    current = git_repo(tmp_path / "current")
+    add_entry(current, manual_entry())
+    EvidenceChain.for_workdir(current)
+    monkeypatch.chdir(current)
+
+    assert main(["knowledge", "search", "employee benefit parameter"]) == 0
+    assert "no matching knowledge entries" in capsys.readouterr().out
+    assert main(
+        [
+            "knowledge",
+            "search",
+            "employee benefit parameter",
+            "--expand",
+            "公积金 缴存比例 contribution cap",
+        ]
+    ) == 0
+
+    output = capsys.readouterr().out
+    assert "Fund contribution cap" in output
+
+
 def test_federated_ranking_uses_one_corpus_even_when_entry_ids_collide():
     from loreloop.cli import _rank_foreign_entries
     from loreloop.federation.reader import ForeignEntry

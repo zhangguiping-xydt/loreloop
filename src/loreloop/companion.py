@@ -75,6 +75,16 @@ Search the replay-verified package without extracting it:
 
     loreloop knowledge search "<query>" --package baseline.zip
 
+If the question uses different wording, derive 5-15 concise synonyms,
+translations, abbreviations, and likely code identifiers in this current host
+session, then retry without launching a nested agent:
+
+    loreloop knowledge search "<query>" --package baseline.zip --expand "<terms>"
+
+Expansion is retrieval-only. Never present expansion terms as project facts or
+evidence, and never let them change trust. Use only replay-verified package
+content returned by the search in the answer.
+
 When the operator explicitly requests a Web-enriched replacement and has
 approved and verified the relevant Web entries:
 

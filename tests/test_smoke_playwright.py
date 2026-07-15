@@ -284,7 +284,7 @@ def test_real_browser_blocks_javascript_post_without_allow_writes(write_site, br
 
 
 def test_real_web_cli_loop_updates_and_searches_baseline(site, tmp_path):
-    """Real Chromium -> store/chain -> package/replay -> no-import ZIP search."""
+    """Real Chromium -> governed update -> replay -> expanded no-import ZIP search."""
     repo = tmp_path / "project"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -299,6 +299,30 @@ def test_real_web_cli_loop_updates_and_searches_baseline(site, tmp_path):
     assert "local trust: ready" in initialized.stdout
     _git(repo, "add", ".gitignore")
     _git(repo, "commit", "-q", "-m", "ignore LoreLoop state")
+
+    package = tmp_path / "baseline.zip"
+    source_export = _cli(
+        repo,
+        environment,
+        "knowledge",
+        "export",
+        "--format",
+        "package",
+        "--output",
+        str(package),
+    )
+    assert "ZIP package" in source_export.stdout
+    source_baseline = package.read_bytes()
+    source_replay = _cli(repo, environment, "knowledge", "replay", str(package))
+    assert "Capsule replay: no_key" in source_replay.stdout
+    with zipfile.ZipFile(package) as archive:
+        source_capsule = json.loads(archive.read(".loreloop-export.json"))
+        source_rendered = "\n".join(
+            archive.read(name).decode("utf-8")
+            for name in archive.namelist()
+            if name.endswith(".md")
+        )
+    assert "Maximum file size is 50MB." not in source_rendered
 
     ingested = _cli(
         repo,
@@ -333,7 +357,6 @@ def test_real_web_cli_loop_updates_and_searches_baseline(site, tmp_path):
     )
     assert "VERIFIED: Upload limit" in verified.stdout
 
-    package = tmp_path / "baseline.zip"
     exported = _cli(
         repo,
         environment,
@@ -344,28 +367,51 @@ def test_real_web_cli_loop_updates_and_searches_baseline(site, tmp_path):
         "--output",
         str(package),
         "--include-web",
+        "--force",
     )
     assert "included 1 approved and verified Web knowledge entries" in exported.stderr
+    assert package.read_bytes() != source_baseline
     replayed = _cli(repo, environment, "knowledge", "replay", str(package))
     assert "Capsule replay: no_key" in replayed.stdout
     with zipfile.ZipFile(package) as archive:
+        updated_capsule = json.loads(archive.read(".loreloop-export.json"))
         rendered = "\n".join(
             archive.read(name).decode("utf-8")
             for name in archive.namelist()
             if name.endswith(".md")
         )
     assert "Maximum file size is 50MB." in rendered
+    assert (
+        updated_capsule["semantic_core"]["source_snapshot_sha256"]
+        == source_capsule["semantic_core"]["source_snapshot_sha256"]
+    )
+    assert (
+        updated_capsule["semantic_core"]["repository_config_digest"]
+        == source_capsule["semantic_core"]["repository_config_digest"]
+    )
 
     isolated = tmp_path / "search-only"
     isolated.mkdir()
+    plain = _cli(
+        isolated,
+        environment,
+        "knowledge",
+        "search",
+        "附件容量阈值",
+        "--package",
+        str(package),
+    )
+    assert "no matching baseline records" in plain.stdout
     searched = _cli(
         isolated,
         environment,
         "knowledge",
         "search",
-        "Maximum file size",
+        "附件容量阈值",
         "--package",
         str(package),
+        "--expand",
+        "Maximum file size upload limit 50MB",
     )
     assert "Maximum file size is 50MB." in searched.stdout
     assert "verifying baseline and building a transient search index" in searched.stderr

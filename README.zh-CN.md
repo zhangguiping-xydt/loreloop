@@ -184,6 +184,17 @@ loreloop knowledge replay baseline.zip
 loreloop knowledge search "公积金比例" --package baseline.zip
 ```
 
+当提问与项目术语不同，可以显式提供有界的同义词、翻译、缩写和可能的代码标识符：
+
+```bash
+loreloop knowledge search "公积金比例" \
+  --package baseline.zip \
+  --expand "住房公积金 缴存比例 provident fund contribution ratio HPF hpfRatioConfig"
+```
+
+扩展词只影响检索排序，不会写入基线、不会作为项目知识展示，也不能提升结果的信任等级。Codex、
+Claude Code、OpenCode 和 co-mind 可以在当前宿主会话中生成这些词；包检索不会再启动一个 Agent。
+
 Web 探索结果默认仍留在可持续更新的知识库中。需要把运行时页面事实写回交付基线时，只有同时经过
 人工批准和浏览器验证的当前 Web 条目会被纳入：
 

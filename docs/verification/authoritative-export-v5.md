@@ -30,6 +30,11 @@ loreloop knowledge replay baseline.zip
 文件快照上完成 Capsule replay，再对 Capsule 绑定的 Markdown 行执行有界 BM25；不得要求先导入
 SQLite，也不得在验证后重新读取可能已变化的 ZIP。
 
+`--expand <terms>` 只允许提供有界的召回提示，如同义词、翻译、缩写和可能的代码标识符。扩展词
+必须以低于原查询的权重参与排序，不得写入包、SemanticCore、Markdown、Capsule 或证据链，也不得
+被呈现为知识或用于提升信任。宿主 Agent 可以在当前会话中生成扩展词，但包检索不得为此启动嵌套
+Agent；无扩展时的确定性行为必须保持兼容。
+
 ## 2. 项目与仓库边界
 
 合法项目拓扑有两种：
