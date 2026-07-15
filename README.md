@@ -156,10 +156,13 @@ loreloop knowledge export \
   --requirements docs/requirements.md
 ```
 
-The ZIP contains:
+These are reviewable Markdown files, not Word/DOCX documents. Markdown is the
+human view: capability domains, repository boundaries, implementation layers,
+UI entry points, tests, interfaces, and schema are grouped for reading instead
+of emitted as an atomic-record dump. The Capsule JSON is the complete
+machine-verifiable representation used by replay and retrieval.
 
-These are reviewable Markdown files, not Word/DOCX documents; the Capsule JSON
-is the machine-verifiable representation used by replay.
+The package layout is:
 
 ```text
 baseline.zip
@@ -171,7 +174,7 @@ baseline.zip
 ├── your-project-验收规格.md
 ├── your-project-接口契约.md      # only with explicit interface evidence
 ├── your-project-数据库设计.md    # only with explicit schema evidence
-└── .loreloop-export.json         # SemanticCore, complete ASTs, and digests
+└── .loreloop-export.json         # SemanticCore, pre-AST digests, and Markdown digests
 ```
 
 Six core documents are always produced. Interface and database documents are
@@ -186,6 +189,13 @@ The normalized `--project-name` is part of the SemanticCore identity, so names,
 ASTs, Markdown, and package IDs are one deterministic projection rather than
 independent labels.
 
+New exports use the compact Capsule v3 layout: SemanticCore keeps the proof
+facts, while each deterministic pre-AST is stored by digest instead of being
+duplicated in full. LoreLoop still replays older v2 packages that embedded the
+ASTs. Every searchable project fact is also rendered in one human document;
+large class, dependency, UI, test, and constraint inventories live in folded
+`完整知识索引` sections rather than in a hidden machine-only corpus.
+
 The Capsule can prove the package closure on a machine with no source, database,
 or key:
 
@@ -194,7 +204,8 @@ loreloop knowledge replay baseline.zip
 ```
 
 Search the verified package directly without extraction or importing it into a
-project store:
+project store. Retrieval ranks the replay-verified human documents themselves,
+so every hit points to the same filename and section a reviewer can open:
 
 ```bash
 loreloop knowledge search "fund ratio" --package baseline.zip

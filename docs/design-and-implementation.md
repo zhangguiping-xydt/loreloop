@@ -671,6 +671,33 @@ harvest 会输出需要人工关注的集合:
 
 `KnowledgeStore.add` 做精确去重。代码来源的去重 locator key 只取文件部分,避免同一文件跨 commit 产生重复行;具体新鲜度由 snapshot_ref/locator 锚点表达。
 
+### 10.4 权威项目包与人机双层投影
+
+权威项目包不复用面向在线条目的 LLM 反构输出。它从干净 Git 快照和显式需求材料走确定性证明链：
+
+```text
+source snapshots
+→ deterministic detectors
+→ SemanticCore
+→ typed document ASTs
+→ human-readable Markdown
+→ compact Capsule v3
+```
+
+`SemanticCore` 保存全部接口、符号、配置、依赖、页面、测试和数据库原子事实。Markdown 是面向
+人类与编码 Agent 的语义视图：功能清单跨仓库合并入口域，详细设计合并同名技术域并展示分层，
+接口契约先给索引再折叠完整端点。概览负责叙述，文末 `完整知识索引` 按规范归属补齐概览未逐项
+展示的类、方法、依赖、UI、测试、权限和约束。折叠可以降低视觉噪声，但不能隐藏可召回事实。
+
+Capsule v3 保存 SemanticCore、适用性、每份确定性 pre-AST 的 SHA-256 和 Markdown SHA-256，
+不再把同一 AST 记录复制到多个文档节点。无密钥 replay 从 SemanticCore 重建完整 DocumentSet，
+核对 AST 摘要并逐字节核对 Markdown。旧 schema v2 的内嵌 AST 包继续使用同一重建结果验证。
+
+包检索在一次 replay 验证得到的不可变快照上只索引人类可见 Markdown。BM25 只为本次查询保留
+相关词项，但文档长度、词频、IDF 和排序边界保持不变。每个项目知识命中必须返回 Markdown 文件
+和章节；SemanticCore 只负责证明同一内容，不提供文档之外的隐藏召回。`--expand` 只提供低权重
+同义词、翻译和标识符，不写回基线。
+
 ---
 
 ## 11. Web 探索
@@ -754,6 +781,7 @@ loreloop knowledge export [--stale] [--format audit] [--output <file>]
 loreloop knowledge export --format package --output <package.zip> [--project-name <name>] [--requirements <path>]... [--force] [--attest]
 loreloop knowledge export --format docs --output <directory-or-zip> ...  # 兼容别名
 loreloop knowledge replay <directory-or-zip> [--trusted]
+loreloop knowledge search <query> --package <directory-or-zip> [--expand <terms>] [--limit N]
 loreloop knowledge approve <entry_id>
 loreloop knowledge reject <entry_id>
 loreloop knowledge supersede <new_id> <old_id>

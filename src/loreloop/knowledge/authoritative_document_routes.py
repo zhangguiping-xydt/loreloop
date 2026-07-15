@@ -37,7 +37,6 @@ DOCUMENT_ROUTES = (
             {
                 DocumentRowKind.REQUIREMENT,
                 DocumentRowKind.PERMISSION,
-                DocumentRowKind.CONFIGURATION,
                 DocumentRowKind.STATE,
                 DocumentRowKind.ERROR,
                 DocumentRowKind.WEB_REQUIREMENT,
@@ -125,9 +124,46 @@ DOCUMENT_ROUTES = (
     ),
 )
 
-ROUTED_ROW_KINDS = frozenset(
-    row_kind for route in DOCUMENT_ROUTES for row_kind in route.row_kinds
-)
+ROUTED_ROW_KINDS = frozenset(row_kind for route in DOCUMENT_ROUTES for row_kind in route.row_kinds)
+
+CANONICAL_DOCUMENT_OWNER = {
+    DocumentRowKind.INTERFACE: OptionalDocumentFamily.INTERFACE_CONTRACT,
+    DocumentRowKind.COMMAND: OptionalDocumentFamily.INTERFACE_CONTRACT,
+    DocumentRowKind.WEB_INTERFACE: OptionalDocumentFamily.INTERFACE_CONTRACT,
+    DocumentRowKind.UI_SURFACE: RequiredDocumentFamily.USER_GUIDE,
+    DocumentRowKind.WEB_BEHAVIOR: RequiredDocumentFamily.USER_GUIDE,
+    DocumentRowKind.REQUIREMENT: RequiredDocumentFamily.REQUIREMENTS,
+    DocumentRowKind.PERMISSION: RequiredDocumentFamily.REQUIREMENTS,
+    DocumentRowKind.WEB_REQUIREMENT: RequiredDocumentFamily.REQUIREMENTS,
+    DocumentRowKind.WEB_CONSTRAINT: RequiredDocumentFamily.REQUIREMENTS,
+    DocumentRowKind.MODULE: RequiredDocumentFamily.DETAILED_DESIGN,
+    DocumentRowKind.IMPLEMENTATION_FACT: RequiredDocumentFamily.DETAILED_DESIGN,
+    DocumentRowKind.STATE: RequiredDocumentFamily.DETAILED_DESIGN,
+    DocumentRowKind.ERROR: RequiredDocumentFamily.DETAILED_DESIGN,
+    DocumentRowKind.ANNOTATION: RequiredDocumentFamily.DETAILED_DESIGN,
+    DocumentRowKind.DEPENDENCY: RequiredDocumentFamily.ARCHITECTURE,
+    DocumentRowKind.CONFIGURATION: RequiredDocumentFamily.ARCHITECTURE,
+    DocumentRowKind.DEPLOYMENT: RequiredDocumentFamily.ARCHITECTURE,
+    DocumentRowKind.MODULE_REPORT: RequiredDocumentFamily.ARCHITECTURE,
+    DocumentRowKind.APPLICABILITY: RequiredDocumentFamily.ARCHITECTURE,
+    DocumentRowKind.WEB_ARCHITECTURE: RequiredDocumentFamily.ARCHITECTURE,
+    DocumentRowKind.ACCEPTANCE: RequiredDocumentFamily.ACCEPTANCE,
+    DocumentRowKind.TEST: RequiredDocumentFamily.ACCEPTANCE,
+    DocumentRowKind.WEB_ACCEPTANCE: RequiredDocumentFamily.ACCEPTANCE,
+    DocumentRowKind.CURRENT_DATA: OptionalDocumentFamily.DATABASE_DESIGN,
+    DocumentRowKind.HISTORICAL_DATA: OptionalDocumentFamily.DATABASE_DESIGN,
+    DocumentRowKind.MIGRATION_OPERATION: OptionalDocumentFamily.DATABASE_DESIGN,
+    DocumentRowKind.RELATION: OptionalDocumentFamily.DATABASE_DESIGN,
+}
+
+if frozenset(CANONICAL_DOCUMENT_OWNER) != ROUTED_ROW_KINDS:
+    raise RuntimeError("canonical human document ownership must cover every routed row kind")
+
+for _row_kind, _owner in CANONICAL_DOCUMENT_OWNER.items():
+    if not any(
+        route.family is _owner and _row_kind in route.row_kinds for route in DOCUMENT_ROUTES
+    ):
+        raise RuntimeError("canonical human document owner must route its row kind")
 
 SECTION_ROUTES = {
     DocumentRowKind.INTERFACE: ("interfaces", "HTTP 接口"),

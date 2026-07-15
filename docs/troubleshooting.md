@@ -127,11 +127,12 @@ Markdown files named by it. ZIP replay rejects every extra entry. Directory
 replay reads only the Capsule-bound Markdown and ignores unrelated real files
 or directories preserved by `export --force`, including operator Markdown; it
 still rejects top-level links/special nodes and unsafe managed files. Both forms
-reject missing files, changed ASTs, and Markdown that is not the deterministic
-rendering of its AST. Generate a fresh export instead of editing the Capsule by
-hand. Early schema-v2 exports that predate portable SemanticCore evidence or
-canonical project-identity closure are rejected with a regeneration message;
-export them again with the current version. `--trusted` additionally requires
+reject missing files, changed AST digests, and Markdown that is not the
+deterministic rendering of the SemanticCore-derived AST. New schema-v3 exports
+store compact AST digests; schema-v2 exports with portable SemanticCore and
+canonical project identity remain replayable. Earlier weak exports that lack
+those inputs are rejected with a regeneration message. Generate a fresh export
+instead of editing the Capsule by hand. `--trusted` additionally requires
 an earlier `--attest` from the same local trust chain and an unchanged exact
 commit/tree/index/source snapshot in the same checkout instance.
 

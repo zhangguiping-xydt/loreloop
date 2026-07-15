@@ -75,6 +75,9 @@ Search the replay-verified package without extracting it:
 
     loreloop knowledge search "<query>" --package baseline.zip
 
+Every project-knowledge hit must point to a human Markdown file and section.
+Do not treat a Capsule-only fact as operator-visible project knowledge.
+
 If the question uses different wording, derive 5-15 concise synonyms,
 translations, abbreviations, and likely code identifiers in this current host
 session, then retry without launching a nested agent:

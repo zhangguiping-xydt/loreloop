@@ -50,7 +50,8 @@ def _search_entries(files: dict[str, bytes], filenames: tuple[str, ...]) -> list
                 not line
                 or _TABLE_SEPARATOR.fullmatch(line)
                 or line.startswith("- [")
-                or line in {"```", "```mermaid"}
+                or line.startswith("<summary>")
+                or line in {"```", "```mermaid", "<details>", "</details>"}
             ):
                 continue
             encoded = line.encode("utf-8")

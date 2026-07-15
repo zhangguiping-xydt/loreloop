@@ -53,7 +53,7 @@ def export_dir(tmp_path: Path) -> Path:
     )
     document_set = build_document_ast_set(core)
     documents = render_document_set(document_set)
-    capsule = build_capsule(core, document_set, documents)
+    capsule = build_capsule(core, document_set, documents, schema_version=2)
     output = tmp_path / "export"
     output.mkdir()
     for document in documents:
@@ -182,9 +182,7 @@ def test_replay_rejects_resealed_row_routed_to_the_wrong_document(
         if section.get("section_id") == "modules"
     )
     target = next(
-        document
-        for document in documents
-        if _ast(document).get("required_family") == "acceptance"
+        document for document in documents if _ast(document).get("required_family") == "acceptance"
     )
     target_sections = cast(list[JsonValue], _ast(target)["sections"])
     target_sections.append(cast(JsonValue, deepcopy(module_section)))

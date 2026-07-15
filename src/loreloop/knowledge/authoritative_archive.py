@@ -8,7 +8,7 @@ import stat
 import struct
 import tempfile
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from . import authoritative_capsule_io as capsule_io
@@ -219,17 +219,17 @@ def write_export_archive(
         temporary.unlink(missing_ok=True)
 
 
-def read_export_archive(path: Path) -> dict[str, bytes]:
-    """Read a bounded flat ZIP, loading Capsule first and only its exact managed set."""
+def read_export_archive_with_capsule(
+    path: Path,
+) -> tuple[dict[str, bytes], Mapping[str, capsule_io.JsonValue]]:
+    """Read a bounded flat ZIP and return its already validated parsed Capsule."""
     if path.is_symlink():
         raise ExportArchiveError(f"export archive must not be a symlink: {path}")
     descriptor = -1
     try:
         descriptor = os.open(
             path,
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0),
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
         )
         metadata = os.fstat(descriptor)
     except OSError as exc:
@@ -267,7 +267,8 @@ def read_export_archive(path: Path) -> dict[str, bytes]:
                 capsule_info,
                 limit=capsule_io.MAX_CAPSULE_BYTES,
             )
-            filenames = capsule_io.managed_document_filenames(capsule)
+            root = capsule_io.parse_capsule(capsule)
+            filenames = capsule_io.managed_document_filenames_from_root(root)
             expected = {CAPSULE_FILENAME, *filenames}
             missing = expected - set(by_name)
             extras = set(by_name) - expected
@@ -290,11 +291,9 @@ def read_export_archive(path: Path) -> dict[str, bytes]:
                 )
                 total += len(data)
                 if total > capsule_io.MAX_MANAGED_TOTAL_BYTES:
-                    raise ExportArchiveError(
-                        "archive expands beyond the managed total size limit"
-                    )
+                    raise ExportArchiveError("archive expands beyond the managed total size limit")
                 files[filename] = data
-            return files
+            return files, root
     except ExportArchiveError:
         raise
     except capsule_io.CapsuleIoError as exc:
@@ -306,3 +305,9 @@ def read_export_archive(path: Path) -> dict[str, bytes]:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+
+
+def read_export_archive(path: Path) -> dict[str, bytes]:
+    """Read a bounded flat ZIP, loading Capsule first and only its exact managed set."""
+    files, _ = read_export_archive_with_capsule(path)
+    return files

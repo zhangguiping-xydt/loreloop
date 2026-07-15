@@ -103,12 +103,37 @@ def _entry_terms(entry: Entry) -> Counter[str]:
     return counts
 
 
+def _entry_term_profile(
+    entry: Entry, terms_of_interest: frozenset[str] | None
+) -> tuple[Counter[str], float]:
+    """Return exact BM25 length while retaining only terms needed by the query."""
+    content_terms = _terms(entry.content)
+    title_terms = _terms(entry.title)
+    length = len(content_terms) + _TITLE_WEIGHT * len(title_terms)
+    if terms_of_interest is None:
+        counts = Counter(content_terms)
+        for term in title_terms:
+            counts[term] += _TITLE_WEIGHT
+        return counts, length
+    counts = Counter(term for term in content_terms if term in terms_of_interest)
+    for term in title_terms:
+        if term in terms_of_interest:
+            counts[term] += _TITLE_WEIGHT
+    return counts, length
+
+
 class Bm25Scorer:
     """Deterministic BM25 over the candidate entries; no persistent index."""
 
-    def __init__(self, entries: list[Entry]) -> None:
-        self._counts = {e.id: _entry_terms(e) for e in entries}
-        lengths = {eid: sum(c.values()) for eid, c in self._counts.items()}
+    def __init__(
+        self,
+        entries: list[Entry],
+        *,
+        terms_of_interest: frozenset[str] | None = None,
+    ) -> None:
+        profiles = {entry.id: _entry_term_profile(entry, terms_of_interest) for entry in entries}
+        self._counts = {entry_id: profile[0] for entry_id, profile in profiles.items()}
+        lengths = {entry_id: profile[1] for entry_id, profile in profiles.items()}
         self._lengths = lengths
         self._avg_len = (sum(lengths.values()) / len(lengths)) if lengths else 0.0
         doc_freq: Counter[str] = Counter()
@@ -132,11 +157,16 @@ class Bm25Scorer:
             total += self._idf.get(term, 0.0) * (tf * (_BM25_K1 + 1)) / (tf + _BM25_K1 * norm)
         return total
 
+    def matching_terms(self, entry: Entry) -> frozenset[str]:
+        """Return retained query terms for coverage calculation."""
+        return frozenset(self._counts.get(entry.id, ()))
+
 
 def score(task: str, entry: Entry, expansion: str = "") -> float:
     """Convenience single-entry scorer (used by tests); select() batches."""
-    scorer = Bm25Scorer([entry])
-    return scorer.score(_terms(task) + _terms(expansion), entry)
+    query_terms = _terms(task) + _terms(expansion)
+    scorer = Bm25Scorer([entry], terms_of_interest=frozenset(query_terms))
+    return scorer.score(query_terms, entry)
 
 
 @dataclass(frozen=True)
@@ -189,9 +219,12 @@ def rank_entries(
         return []
     demoted = set(drifted_ids) | set(unendorsed_ids)
     endorsed = set(endorsed_ids)
-    scorer = Bm25Scorer(entries)
     original_terms = _terms(task)
     expansion_terms = _terms(expansion)
+    scorer = Bm25Scorer(
+        entries,
+        terms_of_interest=frozenset(original_terms + expansion_terms),
+    )
     ranked = []
     for entry in entries:
         original_score = scorer.score(original_terms, entry)
@@ -202,7 +235,7 @@ def rank_entries(
         if lexical <= 0:
             continue
         adjusted = lexical * _quality_weight(entry, demoted, endorsed)
-        entry_terms = set(_entry_terms(entry))
+        entry_terms = scorer.matching_terms(entry)
         original_unique = set(original_terms)
         expansion_unique = set(expansion_terms)
         ranked.append(

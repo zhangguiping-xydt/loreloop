@@ -19,7 +19,12 @@ from .authoritative_ast import (
     ProjectedValue,
     RequiredDocumentFamily,
 )
-from .authoritative_document_routes import DOCUMENT_ROUTES, ROUTED_ROW_KINDS, SECTION_ROUTES
+from .authoritative_document_routes import (
+    CANONICAL_DOCUMENT_OWNER,
+    DOCUMENT_ROUTES,
+    ROUTED_ROW_KINDS,
+    SECTION_ROUTES,
+)
 from .authoritative_documents import source_document_filenames
 from .authoritative_semantic_model import SemanticCore, SemanticRecord
 
@@ -90,7 +95,13 @@ def _applicability(
     database_ids = tuple(
         record.record_id
         for record in core.records
-        if record.row_kind in {DocumentRowKind.CURRENT_DATA, DocumentRowKind.RELATION}
+        if record.row_kind
+        in {
+            DocumentRowKind.CURRENT_DATA,
+            DocumentRowKind.HISTORICAL_DATA,
+            DocumentRowKind.MIGRATION_OPERATION,
+            DocumentRowKind.RELATION,
+        }
     )
     interface_present = bool(interface_ids)
     database_present = bool(database_ids)
@@ -132,13 +143,22 @@ def build_document_ast_set(core: SemanticCore) -> DocumentSet:
         or (route.family is OptionalDocumentFamily.INTERFACE_CONTRACT and interface_present)
         or (route.family is OptionalDocumentFamily.DATABASE_DESIGN and database_present)
     )
+    active_families = {route.family for route in active_routes}
+    ownerless = tuple(
+        record.record_id
+        for record in core.records
+        if CANONICAL_DOCUMENT_OWNER[record.row_kind] not in active_families
+    )
+    if ownerless:
+        raise AstViolation(
+            "SemanticCore contains searchable records without a human document owner: "
+            + ", ".join(ownerless)
+        )
     routed = tuple(
         tuple(record for record in core.records if record.row_kind in route.row_kinds)
         for route in active_routes
     )
-    routed_ids = {
-        record.record_id for records in routed for record in records
-    }
+    routed_ids = {record.record_id for records in routed for record in records}
     if routed_ids != {record.record_id for record in core.records}:
         raise AstViolation("SemanticCore document routing is not complete")
     routed_leaf_total = sum(len(record.values) for records in routed for record in records)
@@ -168,9 +188,7 @@ def build_document_ast_set(core: SemanticCore) -> DocumentSet:
             coverage,
             (),
             authority_label=(
-                "git_snapshot_plus_governed_web_projection"
-                if has_web
-                else "git_snapshot_verified"
+                "git_snapshot_plus_governed_web_projection" if has_web else "git_snapshot_verified"
             ),
             knowledge_db_status=("governed_web_loaded" if has_web else "not_loaded"),
         )

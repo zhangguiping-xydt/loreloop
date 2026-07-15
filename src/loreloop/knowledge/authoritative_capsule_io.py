@@ -256,9 +256,10 @@ def _safe_document_filename(value: object) -> str:
     return value
 
 
-def managed_document_filenames(capsule_data: bytes) -> tuple[str, ...]:
-    """Return the exact top-level Markdown set named by a bounded canonical Capsule."""
-    root = parse_capsule(capsule_data)
+def managed_document_filenames_from_root(
+    root: Mapping[str, JsonValue],
+) -> tuple[str, ...]:
+    """Return the exact top-level Markdown set named by a parsed Capsule."""
     documents = root.get("documents")
     if not isinstance(documents, list) or not _MIN_DOCUMENTS <= len(documents) <= _MAX_DOCUMENTS:
         raise CapsuleIoError("capsule documents must be a bounded array")
@@ -273,11 +274,7 @@ def managed_document_filenames(capsule_data: bytes) -> tuple[str, ...]:
     families: set[str] = set()
     for filename in filenames:
         matched = next(
-            (
-                family
-                for family in _DOCUMENT_SUFFIXES
-                if filename.endswith(f"-{family}.md")
-            ),
+            (family for family in _DOCUMENT_SUFFIXES if filename.endswith(f"-{family}.md")),
             None,
         )
         if matched is None:
@@ -293,6 +290,11 @@ def managed_document_filenames(capsule_data: bytes) -> tuple[str, ...]:
     ):
         raise CapsuleIoError("capsule document filenames do not form one closed project set")
     return tuple(filenames)
+
+
+def managed_document_filenames(capsule_data: bytes) -> tuple[str, ...]:
+    """Return the exact top-level Markdown set named by a bounded canonical Capsule."""
+    return managed_document_filenames_from_root(parse_capsule(capsule_data))
 
 
 def existing_managed_filenames(export_dir: Path) -> tuple[str, ...]:
@@ -349,8 +351,10 @@ def _read_regular_at(directory_fd: int, name: str, limit: int) -> bytes:
             os.close(descriptor)
 
 
-def read_export_files(export_dir: Path) -> dict[str, bytes]:
-    """Read only Capsule-bound files; ignore real, top-level operator files/directories."""
+def read_export_files_with_capsule(
+    export_dir: Path,
+) -> tuple[dict[str, bytes], Mapping[str, JsonValue]]:
+    """Read Capsule-bound files and return the already validated parsed Capsule."""
     if export_dir.is_symlink():
         raise CapsuleIoError(f"export directory must not be a symlink: {export_dir}")
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -371,7 +375,8 @@ def read_export_files(export_dir: Path) -> dict[str, bytes]:
         if not capsule_present:
             raise CapsuleIoError(f"export is missing {CAPSULE_FILENAME}")
         capsule = _read_regular_at(directory_fd, CAPSULE_FILENAME, MAX_CAPSULE_BYTES)
-        filenames = managed_document_filenames(capsule)
+        root = parse_capsule(capsule)
+        filenames = managed_document_filenames_from_root(root)
         files = {CAPSULE_FILENAME: capsule}
         total = len(capsule)
         if total > MAX_MANAGED_TOTAL_BYTES:
@@ -382,11 +387,17 @@ def read_export_files(export_dir: Path) -> dict[str, bytes]:
             if total > MAX_MANAGED_TOTAL_BYTES:
                 raise CapsuleIoError("managed export exceeds the total size limit")
             files[filename] = document
-        return files
+        return files, root
     except OSError as exc:
         raise CapsuleIoError(f"cannot inspect export directory safely: {export_dir}") from exc
     finally:
         os.close(directory_fd)
+
+
+def read_export_files(export_dir: Path) -> dict[str, bytes]:
+    """Read only Capsule-bound files; ignore real, top-level operator files/directories."""
+    files, _ = read_export_files_with_capsule(export_dir)
+    return files
 
 
 def parse_capsule(data: bytes) -> Mapping[str, JsonValue]:

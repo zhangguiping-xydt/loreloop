@@ -12,6 +12,7 @@ from loreloop.knowledge.authoritative_ast import (
     OptionalDocumentFamily,
 )
 from loreloop.knowledge.authoritative_document_ast import build_document_ast_set
+from loreloop.knowledge.authoritative_document_routes import CANONICAL_DOCUMENT_OWNER
 from loreloop.knowledge.authoritative_git import capture_source_snapshot
 from loreloop.knowledge.authoritative_semantic import build_semantic_core
 from loreloop.knowledge.authoritative_source import detect_source_snapshot, read_snapshot_blobs
@@ -57,6 +58,15 @@ def test_semantic_core_routes_into_exact_typed_document_ast_set(tmp_path: Path) 
         for row in section.rows
     }
     assert routed_ids == {record.record_id for record in core.records}
+    documents_by_family = {
+        document.required_family or document.optional_family: document
+        for document in document_set.documents
+    }
+    for record in core.records:
+        owner = documents_by_family[CANONICAL_DOCUMENT_OWNER[record.row_kind]]
+        assert any(
+            row.record_id == record.record_id for section in owner.sections for row in section.rows
+        )
     assert all(
         row.bindings and row.evidence_ids
         for document in document_set.documents
@@ -64,8 +74,7 @@ def test_semantic_core_routes_into_exact_typed_document_ast_set(tmp_path: Path) 
         for row in section.rows
     )
     assert all(
-        bool(document.evidence_rows)
-        == any(section.rows for section in document.sections)
+        bool(document.evidence_rows) == any(section.rows for section in document.sections)
         for document in document_set.documents
     )
 

@@ -111,7 +111,7 @@ def create_user(name: str) -> dict[str, str]:
     assert "POST" in interface and "/users" in interface and "name:str*" in interface
     assert "<script>" not in interface and "&lt;script&gt;" in interface
     assert "## 源码能力域" in capabilities and capabilities != interface
-    assert "repository" in interface and ":app.py#L" in interface
+    assert "仓库" in interface and ":app.py#L" in interface
     assert "users" in database and "id" in database and "name" in database
     assert "## ER 关系图" in database and "flowchart LR" in database
     assert "REQ-BIZ-001" in requirements and "管理员可以创建用户" in requirements

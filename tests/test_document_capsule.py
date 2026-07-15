@@ -48,9 +48,14 @@ def test_capsule_binds_core_full_ast_and_markdown_without_raw_git_or_secrets(
     # When: Capsule creation and independent recomputation run.
     capsule = build_capsule(core, document_set, documents)
     verify_capsule(capsule, core, document_set, documents)
+    legacy_capsule = build_capsule(core, document_set, documents, schema_version=2)
+    verify_capsule(legacy_capsule, core, document_set, documents)
 
     # Then: portable closure has package/products but no raw source identity or secret bytes.
     assert core.package_id in capsule.content
+    assert '"schema_version":3' in capsule.content
+    assert '"ast":' not in capsule.content
+    assert len(capsule.content) < len(legacy_capsule.content)
     assert "must-not-leak" not in capsule.content
     raw_identities = {repository.commit_id.hex for repository in snapshot.repositories} | {
         repository.tree_id.hex for repository in snapshot.repositories

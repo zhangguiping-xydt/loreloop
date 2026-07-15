@@ -1,4 +1,4 @@
-"""Portable Capsule binding SemanticCore, document ASTs, and Markdown bytes."""
+"""Portable Capsule binding SemanticCore, document AST digests, and Markdown bytes."""
 
 from __future__ import annotations
 
@@ -39,6 +39,8 @@ def _ast_payload(document: DocumentAst) -> CanonicalInput:
 def _document_payloads(
     document_set: DocumentSet,
     documents: tuple[SourceDocument, ...],
+    *,
+    schema_version: int,
 ) -> list[CanonicalInput]:
     markdown = {document.filename: document for document in documents}
     if len(markdown) != len(documents):
@@ -49,15 +51,15 @@ def _document_payloads(
         if rendered is None:
             raise CapsuleError(f"Markdown is missing for AST: {document.path}")
         ast = _ast_payload(document)
-        payloads.append(
-            {
-                "document_id": document.document_id,
-                "filename": document.path,
-                "ast": ast,
-                "ast_sha256": hashlib.sha256(canon_v4(ast)).hexdigest(),
-                "markdown_sha256": hashlib.sha256(rendered.content.encode()).hexdigest(),
-            }
-        )
+        payload: dict[str, CanonicalInput] = {
+            "document_id": document.document_id,
+            "filename": document.path,
+            "ast_sha256": hashlib.sha256(canon_v4(ast)).hexdigest(),
+            "markdown_sha256": hashlib.sha256(rendered.content.encode()).hexdigest(),
+        }
+        if schema_version == 2:
+            payload["ast"] = ast
+        payloads.append(payload)
     if len(payloads) != len(documents):
         raise CapsuleError("Markdown set contains a file without a document AST")
     return payloads
@@ -67,9 +69,16 @@ def build_capsule(
     core: SemanticCore,
     document_set: DocumentSet,
     documents: tuple[SourceDocument, ...],
+    *,
+    schema_version: int = 3,
 ) -> CapsuleArtifact:
     """Build canonical JSON that exposes no raw Git OID, blob bytes, or key material."""
-    payload = _capsule_payload(core, document_set, documents)
+    payload = _capsule_payload(
+        core,
+        document_set,
+        documents,
+        schema_version=schema_version,
+    )
     content = canon_v4(payload).decode() + "\n"
     return CapsuleArtifact(CAPSULE_FILENAME, content, hashlib.sha256(content.encode()).hexdigest())
 
@@ -78,9 +87,13 @@ def _capsule_payload(
     core: SemanticCore,
     document_set: DocumentSet,
     documents: tuple[SourceDocument, ...],
+    *,
+    schema_version: int = 3,
 ) -> CanonicalInput:
+    if schema_version not in {2, 3}:
+        raise CapsuleError("unsupported Capsule schema version")
     return {
-        "schema_version": 2,
+        "schema_version": schema_version,
         "package_id": core.package_id,
         "semantic_core_sha256": core.semantic_core_sha256,
         "semantic_core": semantic_core_payload(core),
@@ -92,7 +105,11 @@ def _capsule_payload(
             }
             for item in document_set.applicability
         ],
-        "documents": _document_payloads(document_set, documents),
+        "documents": _document_payloads(
+            document_set,
+            documents,
+            schema_version=schema_version,
+        ),
     }
 
 
@@ -131,5 +148,15 @@ def verify_capsule(
         raise CapsuleError("capsule belongs to a different SemanticCore")
     if package_id(computed_core) != _text(root.get("package_id"), "package id"):
         raise CapsuleError("package id mismatch")
-    if canon_v4(root) != canon_v4(_capsule_payload(core, document_set, documents)):
+    schema_version = root.get("schema_version")
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool):
+        raise CapsuleError("capsule schema version must be an integer")
+    if canon_v4(root) != canon_v4(
+        _capsule_payload(
+            core,
+            document_set,
+            documents,
+            schema_version=schema_version,
+        )
+    ):
         raise CapsuleError("capsule product closure mismatch")

@@ -9,11 +9,19 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, Protocol, cast
 
-from .authoritative_archive import ExportArchiveError, read_export_archive
-from .authoritative_ast import AstViolation, DocumentRowKind, ProjectedValue
+from .authoritative_archive import (
+    ExportArchiveError,
+    read_export_archive_with_capsule,
+)
+from .authoritative_ast import AstViolation, DocumentRowKind, DocumentSet, ProjectedValue
+from .authoritative_ast_render import render_document_ast
 from .authoritative_bindings import BindingEntry, SourceBinding, SourceTransform
 from .authoritative_capsule import CAPSULE_FILENAME, JsonValue
-from .authoritative_capsule_io import CapsuleIoError, parse_capsule, read_export_files
+from .authoritative_capsule_io import (
+    CapsuleIoError,
+    parse_capsule,
+    read_export_files_with_capsule,
+)
 from .authoritative_capsule_render import CapsuleRenderError, render_capsule_ast
 from .authoritative_document_ast import build_document_ast_set
 from .authoritative_documents import normalize_project_name
@@ -42,7 +50,8 @@ _ROOT_KEYS = {
     "semantic_core",
     "semantic_core_sha256",
 }
-_DOCUMENT_KEYS = {"ast", "ast_sha256", "document_id", "filename", "markdown_sha256"}
+_DOCUMENT_KEYS_V2 = {"ast", "ast_sha256", "document_id", "filename", "markdown_sha256"}
+_DOCUMENT_KEYS_V3 = {"ast_sha256", "document_id", "filename", "markdown_sha256"}
 _APPLICABILITY_KEYS = {"family", "reason_ids", "status"}
 _AST_KEYS = {
     "bindings",
@@ -341,8 +350,8 @@ def _semantic_records(
 
 def _validate_core(root: Mapping[str, JsonValue]) -> SemanticCore:
     _keys(root, _ROOT_KEYS, "capsule")
-    if root.get("schema_version") != 2:
-        raise CapsuleReplayError("unsupported capsule schema version; expected version 2")
+    if root.get("schema_version") not in {2, 3}:
+        raise CapsuleReplayError("unsupported capsule schema version; expected version 2 or 3")
     semantic = _mapping(root.get("semantic_core"), "semantic core")
     if frozenset(semantic) in _LEGACY_SEMANTIC_KEY_SETS:
         raise CapsuleReplayError(
@@ -368,7 +377,7 @@ def _validate_core(root: Mapping[str, JsonValue]) -> SemanticCore:
     core = SemanticCore(
         project, trust, repository, snapshot, records, evidence, core_digest, package
     )
-    if canon_v4(semantic_core_payload(core)) != canon_v4(semantic):
+    if semantic_core_payload(core) != semantic:
         raise CapsuleReplayError("semantic core is not in deterministic portable form")
     return core
 
@@ -393,8 +402,7 @@ def _validate_applicability(value: JsonValue | None, optional: set[str]) -> None
         raise CapsuleReplayError("optional document applicability families are invalid")
 
 
-def _expected_applicability(core: SemanticCore) -> JsonValue:
-    document_set = build_document_ast_set(core)
+def _expected_applicability(document_set: DocumentSet) -> JsonValue:
     return [
         {
             "family": item.family.value,
@@ -416,8 +424,10 @@ def _validate_documents(
     if not 6 <= len(entries) <= 8:
         raise CapsuleReplayError("capsule must contain between six and eight documents")
     documents = tuple(_mapping(value, "capsule document") for value in entries)
+    schema_version = root.get("schema_version")
+    document_keys = _DOCUMENT_KEYS_V2 if schema_version == 2 else _DOCUMENT_KEYS_V3
     for document in documents:
-        _keys(document, _DOCUMENT_KEYS, "capsule document")
+        _keys(document, document_keys, "capsule document")
     filenames = tuple(_safe_markdown_filename(document.get("filename")) for document in documents)
     if len(filenames) != len(set(filenames)):
         raise CapsuleReplayError("capsule contains duplicate document filenames")
@@ -431,14 +441,8 @@ def _validate_documents(
     )
     if missing or rejected_extras:
         raise CapsuleReplayError(
-            f"export file set mismatch; missing={sorted(missing)}, "
-            f"extra={sorted(rejected_extras)}"
+            f"export file set mismatch; missing={sorted(missing)}, extra={sorted(rejected_extras)}"
         )
-    for document, filename in zip(documents, filenames, strict=True):
-        ast = _mapping(document.get("ast"), f"document AST for {filename}")
-        ast_digest = hashlib.sha256(canon_v4(ast)).hexdigest()
-        if ast_digest != _sha256(document.get("ast_sha256"), f"AST digest for {filename}"):
-            raise CapsuleReplayError(f"document AST digest mismatch: {filename}")
     expected_set = build_document_ast_set(core)
     if len(expected_set.documents) != len(documents):
         raise CapsuleReplayError("document set is not the deterministic SemanticCore projection")
@@ -448,41 +452,54 @@ def _validate_documents(
     for document, filename, expected_document in zip(
         documents, filenames, expected_set.documents, strict=True
     ):
-        ast = _mapping(document.get("ast"), f"document AST for {filename}")
-        _keys(ast, _AST_KEYS, f"document AST for {filename}")
-        ast_digest = hashlib.sha256(canon_v4(ast)).hexdigest()
-        if ast_digest != _sha256(document.get("ast_sha256"), f"AST digest for {filename}"):
-            raise CapsuleReplayError(f"document AST digest mismatch: {filename}")
-        if ast.get("schema_version") != 4:
-            raise CapsuleReplayError(f"unsupported document AST schema: {filename}")
-        if ast.get("path") != filename or ast.get("document_id") != document.get("document_id"):
-            raise CapsuleReplayError(f"document identity disagrees with AST: {filename}")
+        expected_ast = asdict(expected_document)
+        expected_ast_digest = hashlib.sha256(canon_v4(expected_ast)).hexdigest()
+        stored_ast_digest = _sha256(document.get("ast_sha256"), f"AST digest for {filename}")
         document_id = _text(document.get("document_id"), f"document id for {filename}")
         if document_id in document_ids:
             raise CapsuleReplayError("capsule contains duplicate document ids")
         document_ids.add(document_id)
-        required_family, optional_family = ast.get("required_family"), ast.get("optional_family")
-        if isinstance(required_family, str):
-            required.add(required_family)
-        if isinstance(optional_family, str):
-            optional.add(optional_family)
-        header = _mapping(ast.get("header"), f"AST header for {filename}")
-        if header.get("package_id") != core.package_id:
-            raise CapsuleReplayError(f"document AST belongs to another package: {filename}")
-        if (
-            header.get("trust_domain_id") != core.trust_domain_id
-            or header.get("repository_config_digest") != core.repository_config_digest
-        ):
-            raise CapsuleReplayError(
-                f"document AST authority disagrees with SemanticCore: {filename}"
-            )
-        if header.get("authority_label") != expected_document.header.authority_label:
-            raise CapsuleReplayError(f"document AST has an invalid authority label: {filename}")
-        if canon_v4(ast) != canon_v4(asdict(expected_document)):
+        if document_id != expected_document.document_id or filename != expected_document.path:
             raise CapsuleReplayError(
                 f"document AST is not the deterministic SemanticCore projection: {filename}"
             )
-        expected_markdown = render_capsule_ast(cast(JsonValue, ast), filenames).encode()
+        if expected_document.required_family is not None:
+            required.add(expected_document.required_family.value)
+        if expected_document.optional_family is not None:
+            optional.add(expected_document.optional_family.value)
+        if schema_version == 2:
+            ast = _mapping(document.get("ast"), f"document AST for {filename}")
+            _keys(ast, _AST_KEYS, f"document AST for {filename}")
+            if hashlib.sha256(canon_v4(ast)).hexdigest() != stored_ast_digest:
+                raise CapsuleReplayError(f"document AST digest mismatch: {filename}")
+            if ast.get("schema_version") != 4:
+                raise CapsuleReplayError(f"unsupported document AST schema: {filename}")
+            if ast.get("path") != filename or ast.get("document_id") != document_id:
+                raise CapsuleReplayError(f"document identity disagrees with AST: {filename}")
+            header = _mapping(ast.get("header"), f"AST header for {filename}")
+            if header.get("package_id") != core.package_id:
+                raise CapsuleReplayError(f"document AST belongs to another package: {filename}")
+            if (
+                header.get("trust_domain_id") != core.trust_domain_id
+                or header.get("repository_config_digest") != core.repository_config_digest
+            ):
+                raise CapsuleReplayError(
+                    f"document AST authority disagrees with SemanticCore: {filename}"
+                )
+            if header.get("authority_label") != expected_document.header.authority_label:
+                raise CapsuleReplayError(f"document AST has an invalid authority label: {filename}")
+            if canon_v4(ast) != canon_v4(expected_ast):
+                raise CapsuleReplayError(
+                    f"document AST is not the deterministic SemanticCore projection: {filename}"
+                )
+            expected_markdown = render_capsule_ast(cast(JsonValue, ast), filenames).encode()
+        else:
+            if expected_ast_digest != stored_ast_digest:
+                raise CapsuleReplayError(f"document AST digest mismatch: {filename}")
+            expected_markdown = render_document_ast(
+                expected_document,
+                filenames,
+            ).content.encode()
         markdown = files[filename]
         if hashlib.sha256(markdown).hexdigest() != _sha256(
             document.get("markdown_sha256"), f"Markdown digest for {filename}"
@@ -493,9 +510,7 @@ def _validate_documents(
     if required != _REQUIRED_FAMILIES or not optional <= _OPTIONAL_FAMILIES:
         raise CapsuleReplayError("document families are incomplete or invalid")
     _validate_applicability(root.get("applicability"), optional)
-    if canon_v4(root.get("applicability")) != canon_v4(
-        _expected_applicability(core)
-    ):
+    if root.get("applicability") != _expected_applicability(expected_set):
         raise CapsuleReplayError(
             "document applicability is not the deterministic SemanticCore projection"
         )
@@ -508,13 +523,28 @@ def _replay_capsule_files(
     allow_extra_non_markdown: bool,
     trust_verifier: CapsuleTrustVerifier | None = None,
 ) -> CapsuleReplayResult:
+    return _load_replayed_capsule_files(
+        files,
+        allow_extra_non_markdown=allow_extra_non_markdown,
+        trust_verifier=trust_verifier,
+    ).result
+
+
+def _load_replayed_capsule_files(
+    files: Mapping[str, bytes],
+    *,
+    allow_extra_non_markdown: bool,
+    trust_verifier: CapsuleTrustVerifier | None = None,
+    root: Mapping[str, JsonValue] | None = None,
+) -> ReplayedCapsuleExport:
     capsule_bytes = files.get(CAPSULE_FILENAME)
     if capsule_bytes is None:
         raise CapsuleReplayError(f"export is missing {CAPSULE_FILENAME}")
-    try:
-        root = parse_capsule(capsule_bytes)
-    except CapsuleIoError as exc:
-        raise CapsuleReplayError(str(exc)) from exc
+    if root is None:
+        try:
+            root = parse_capsule(capsule_bytes)
+        except CapsuleIoError as exc:
+            raise CapsuleReplayError(str(exc)) from exc
     core = _validate_core(root)
     try:
         filenames = _validate_documents(
@@ -538,13 +568,16 @@ def _replay_capsule_files(
         except Exception as exc:
             raise CapsuleReplayError("trusted verifier rejected the exact Capsule digest") from exc
         mode = "trusted"
-    return CapsuleReplayResult(
-        core.package_id,
-        core.semantic_core_sha256,
-        core.trust_domain_id,
-        claim.capsule_sha256,
-        filenames,
-        mode,
+    return ReplayedCapsuleExport(
+        CapsuleReplayResult(
+            core.package_id,
+            core.semantic_core_sha256,
+            core.trust_domain_id,
+            claim.capsule_sha256,
+            filenames,
+            mode,
+        ),
+        files,
     )
 
 
@@ -555,14 +588,15 @@ def replay_capsule_directory(
 ) -> CapsuleReplayResult:
     """Verify one directory package without reading source, keys, or LoreLoop state."""
     try:
-        files = read_export_files(export_dir)
+        files, root = read_export_files_with_capsule(export_dir)
     except CapsuleIoError as exc:
         raise CapsuleReplayError(str(exc)) from exc
-    return _replay_capsule_files(
+    return _load_replayed_capsule_files(
         files,
         allow_extra_non_markdown=True,
         trust_verifier=trust_verifier,
-    )
+        root=root,
+    ).result
 
 
 def replay_capsule_archive(
@@ -572,14 +606,15 @@ def replay_capsule_archive(
 ) -> CapsuleReplayResult:
     """Verify one complete ZIP transport; every archive entry belongs to the package."""
     try:
-        files = read_export_archive(export_archive)
+        files, root = read_export_archive_with_capsule(export_archive)
     except ExportArchiveError as exc:
         raise CapsuleReplayError(str(exc)) from exc
-    return _replay_capsule_files(
+    return _load_replayed_capsule_files(
         files,
         allow_extra_non_markdown=False,
         trust_verifier=trust_verifier,
-    )
+        root=root,
+    ).result
 
 
 def replay_capsule_export(
@@ -599,22 +634,23 @@ def load_replayed_capsule_export(
     """Read and verify one immutable package snapshot for replay-aware consumers."""
     if export_path.is_dir() and not export_path.is_symlink():
         try:
-            files = read_export_files(export_path)
+            files, root = read_export_files_with_capsule(export_path)
         except CapsuleIoError as exc:
             raise CapsuleReplayError(str(exc)) from exc
-        result = _replay_capsule_files(
+        return _load_replayed_capsule_files(
             files,
             allow_extra_non_markdown=True,
             trust_verifier=trust_verifier,
+            root=root,
         )
     else:
         try:
-            files = read_export_archive(export_path)
+            files, root = read_export_archive_with_capsule(export_path)
         except ExportArchiveError as exc:
             raise CapsuleReplayError(str(exc)) from exc
-        result = _replay_capsule_files(
+        return _load_replayed_capsule_files(
             files,
             allow_extra_non_markdown=False,
             trust_verifier=trust_verifier,
+            root=root,
         )
-    return ReplayedCapsuleExport(result, files)
