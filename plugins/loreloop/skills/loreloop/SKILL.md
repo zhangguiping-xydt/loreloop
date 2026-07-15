@@ -114,6 +114,30 @@ loreloop knowledge export --format package --output baseline.zip --include-web -
 loreloop knowledge replay baseline.zip
 ```
 
+When the operator asks for repeatable Web tests, keep discovery candidates
+private until they review and approve them:
+
+```text
+loreloop ingest --from web <url> [--headed]
+loreloop web test generate
+loreloop web test review
+loreloop web test approve <scenario-id>
+git add tests/loreloop/web/<scenario-id>.json && git commit
+loreloop web test run <scenario-id>
+loreloop web test export --format playwright --output <directory>
+```
+
+In a non-Git aggregate with multiple declared repositories, pass
+`--repo <repo-name>` to `web test approve` so the committed authority lives in
+one member repository.
+
+Treat `.loreloop/web-tests/candidates/` as untrusted review material. The
+chain-approved JSON in `tests/loreloop/web/` is the authority; Playwright is a
+derivative export. Do not approve a scenario on the operator's behalf. Keep
+tests read-only unless the operator explicitly authorizes `--allow-writes`.
+Never place credentials in a scenario. Replay results are chain evidence and,
+with `--include-web`, project into the package acceptance specification.
+
 ## Recover local trust without exposing internals
 
 If `doctor`, `begin`, or another command reports that project trust is

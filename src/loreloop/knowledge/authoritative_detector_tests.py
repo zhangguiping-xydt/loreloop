@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import PurePosixPath
 from typing import Final, Literal
 
-from .authoritative_records import DetectionReport, SourceRef, TestRecord
+from ..webexplore.scenarios import WebScenarioError, parse_web_scenario
+from .authoritative_records import DetectionError, DetectionReport, SourceRef, TestRecord
 
 _NON_PRODUCT_TEST_SEGMENTS: Final = frozenset(
     {"fixtures", "fixture", "snapshots", "__snapshots__", "generated"}
@@ -30,6 +32,7 @@ _JVM_METHOD: Final = re.compile(
     r"(?P<name>[A-Za-z_$][\w$]*)\s*\("
 )
 MAX_TEST_CASES_FIELD_BYTES: Final = 4 * 1024 * 1024
+_WEB_SCENARIO_ROOT: Final = ("tests", "loreloop", "web")
 
 
 def is_test_evidence_path(path: str) -> bool:
@@ -49,8 +52,20 @@ def is_test_evidence_path(path: str) -> bool:
 
 def is_supported_test_evidence_path(path: str) -> bool:
     lower = path.lower()
-    return is_test_evidence_path(path) and lower.endswith(
-        (".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".kt", ".go", ".cs")
+    return is_web_scenario_path(path) or (
+        is_test_evidence_path(path)
+        and lower.endswith(
+            (".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".kt", ".go", ".cs")
+        )
+    )
+
+
+def is_web_scenario_path(path: str) -> bool:
+    """Accept only LoreLoop's committed scenario namespace, never arbitrary JSON."""
+    pure = PurePosixPath(path)
+    return (
+        tuple(part.lower() for part in pure.parts[:-1]) == _WEB_SCENARIO_ROOT
+        and pure.suffix.lower() == ".json"
     )
 
 
@@ -141,6 +156,8 @@ def _case_chunks(
 
 def detect_test_source(source: str, repository_alias: str, path: str) -> DetectionReport:
     """Extract test names and framework identity without running the tests."""
+    if is_web_scenario_path(path):
+        return _detect_web_scenario(source, repository_alias, path)
     lower = path.lower()
     if lower.endswith((".java", ".kt")):
         matches = _jvm_tests(source)
@@ -172,5 +189,36 @@ def detect_test_source(source: str, repository_alias: str, path: str) -> Detecti
                 SourceRef(repository_alias, path, _line(source, first_offset)),
             )
             for index, (first_offset, cases) in enumerate(chunks, 1)
+        )
+    )
+
+
+def _detect_web_scenario(source: str, repository_alias: str, path: str) -> DetectionReport:
+    try:
+        raw = json.loads(source)
+    except json.JSONDecodeError as exc:
+        raise DetectionError(f"committed Web scenario is invalid JSON: {exc}") from exc
+    try:
+        scenario = parse_web_scenario(raw)
+    except WebScenarioError as exc:
+        raise DetectionError(f"committed Web scenario is invalid: {exc}") from exc
+    cases = tuple(
+        [
+            *(f"step {index}: {step.op}" for index, step in enumerate(scenario.script.steps, 1)),
+            *(
+                f"assert {assertion.kind}: {assertion.value}"
+                for assertion in scenario.assertions
+            ),
+        ]
+    )
+    return DetectionReport(
+        tests=(
+            TestRecord(
+                scenario.title,
+                "loreloop-web",
+                "integration",
+                cases,
+                SourceRef(repository_alias, path, 1),
+            ),
         )
     )

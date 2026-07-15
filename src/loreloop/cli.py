@@ -980,6 +980,7 @@ def _probe_writable_directory(path: Path, *, create: bool = False) -> tuple[bool
 def cmd_ingest(args: argparse.Namespace) -> int:
     workdir = _workdir()
     code_policy = None
+    web_capture = None
     if args.source == "code":
         repo_name, repo = _resolve_ingest_repo(workdir, args.target)
         try:
@@ -1037,8 +1038,10 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     else:
+        from .evidence.artifacts import ArtifactStore
         from .webexplore.browser import PlaywrightBrowser
         from .webexplore.explorer import Explorer
+        from .webexplore.scenarios import WEB_EXPLORATION_EVENT
         from .webexplore.web_reverse import reverse_web
 
         browser = PlaywrightBrowser(headed=args.headed)
@@ -1072,12 +1075,35 @@ def cmd_ingest(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
             entries = reverse_web(_inference_agent(args.agent), result.pages)
+            artifacts = ArtifactStore.for_workdir(workdir)
+            pages = []
+            for observation in result.pages:
+                artifact = artifacts.save_observation(observation)[0]
+                pages.append(
+                    {
+                        "url": observation.url,
+                        "title": observation.title,
+                        "snapshot": observation.snapshot_hash,
+                        "artifact": artifact,
+                    }
+                )
+            web_capture = (
+                WEB_EXPLORATION_EVENT,
+                {
+                    "start_url": args.target,
+                    "trace": str(result.trace_path.relative_to(state_root(workdir))),
+                    "pages": pages,
+                },
+            )
         finally:
             browser.close()
     refreshed = 0
     chain = EvidenceChain.for_workdir(workdir)
     if code_policy is not None:
         record_ingestion_policy(chain, repo_name, code_policy)
+    if web_capture is not None:
+        event, payload = web_capture
+        chain.append(event, payload)
     with _store(workdir) as store:
         for entry in entries:
             stored, was_refreshed = store.plan_add_or_refresh(entry)
@@ -1223,6 +1249,133 @@ def cmd_project(args: argparse.Namespace) -> int:
     removed = remove_project(args.registry_project_id)
     print(f"removed project {removed.project_id}")
     return 0
+
+
+def cmd_web(args: argparse.Namespace) -> int:
+    from .evidence.artifacts import ArtifactStore
+    from .webexplore.scenarios import (
+        WebScenarioError,
+        approve_candidate,
+        approved_scenario,
+        export_playwright,
+        generate_latest_candidates,
+        list_approved_scenarios,
+        list_candidate_scenarios,
+        run_scenario,
+        scenario_locator,
+        write_candidate,
+    )
+
+    workdir = _workdir()
+    chain = EvidenceChain.for_workdir(workdir)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    if args.web_test_action == "generate":
+        paths = generate_latest_candidates(workdir, chain, artifacts)
+        for path in paths:
+            print(f"candidate: {path.relative_to(workdir)}")
+        print(f"generated {len(paths)} candidate Web scenario(s)")
+        print("Next: loreloop web test review")
+        return 0
+    if args.web_test_action == "review":
+        candidates = list_candidate_scenarios(workdir)
+        approved = list_approved_scenarios(workdir)
+        for _, scenario in candidates:
+            print(
+                f"candidate  {scenario.scenario_id}  [{scenario.risk}]  "
+                f"{scenario.title}  ({len(scenario.script.steps)} steps, "
+                f"{len(scenario.assertions)} assertions)"
+            )
+        for _, scenario in approved:
+            print(
+                f"approved   {scenario.scenario_id}  [{scenario.risk}]  "
+                f"{scenario.title}"
+            )
+        if not candidates and not approved:
+            print("no Web scenarios found")
+        return 0
+    if args.web_test_action == "approve":
+        path, scenario, _ = approve_candidate(
+            workdir,
+            args.scenario_id,
+            chain,
+            repository_alias=args.repo,
+        )
+        locator = scenario_locator(workdir, path)
+        print(f"approved: {scenario.title}  ({scenario.scenario_id})")
+        print(f"published: {locator}")
+        repository = path.parents[3]
+        relative = path.relative_to(repository)
+        print(f"Next: git -C {repository} add {relative} && git -C {repository} commit")
+        return 0
+    if args.web_test_action == "record":
+        from .webexplore.browser import PlaywrightBrowser
+        from .webexplore.recorder import record_scenario
+
+        browser = PlaywrightBrowser(headed=True)
+        try:
+            scenario = record_scenario(
+                browser,
+                artifacts,
+                args.url,
+                title=args.title,
+                risk=args.risk,
+                allow_writes=args.allow_writes,
+            )
+        finally:
+            browser.close()
+        path = write_candidate(workdir, scenario)
+        print(f"recorded candidate: {path.relative_to(workdir)}")
+        print("Next: loreloop web test review")
+        return 0
+    if args.web_test_action == "run":
+        from .webexplore.browser import PlaywrightBrowser
+
+        records = chain.verify()
+        if args.all:
+            selected = [
+                approved_scenario(workdir, scenario.scenario_id, records)
+                for _, scenario in list_approved_scenarios(workdir)
+            ]
+        elif args.scenario_id:
+            selected = [approved_scenario(workdir, args.scenario_id, records)]
+        else:
+            raise WebScenarioError("choose a scenario id or --all")
+        if not selected:
+            raise WebScenarioError("no approved Web scenarios are available")
+        browser = PlaywrightBrowser(headed=args.headed)
+        failures = 0
+        try:
+            for _, scenario in selected:
+                result = run_scenario(
+                    scenario,
+                    browser,
+                    chain,
+                    artifacts,
+                    allow_writes=args.allow_writes,
+                )
+                label = "PASS" if result.passed else "FAIL"
+                print(f"{label}: {scenario.scenario_id}  {scenario.title}")
+                for assertion in result.assertions:
+                    mark = "PASS" if assertion["passed"] else "FAIL"
+                    print(f"  {mark} {assertion['kind']}: {assertion['value']}")
+                failures += not result.passed
+        finally:
+            browser.close()
+        print(f"{len(selected) - failures} passed, {failures} failed")
+        return 0 if failures == 0 else 1
+    if args.web_test_action == "export":
+        records = chain.verify()
+        selected = tuple(
+            approved_scenario(workdir, scenario.scenario_id, records)
+            for _, scenario in list_approved_scenarios(workdir)
+        )
+        if not selected:
+            raise WebScenarioError("no approved Web scenarios are available")
+        paths = export_playwright(selected, Path(args.output), force=args.force)
+        for path in paths:
+            print(f"exported: {path}")
+        return 0
+    raise WebScenarioError(f"unsupported Web test action: {args.web_test_action}")
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -2452,6 +2605,7 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
     from .knowledge.authoritative_semantic import build_semantic_core
     from .knowledge.authoritative_source import detect_snapshot_blobs, read_snapshot_blobs
     from .knowledge.authoritative_web_input import build_governed_web_input
+    from .knowledge.authoritative_web_test_input import build_governed_web_test_results
     from .knowledge.repos import RepoConfigError, load_repos
 
     if args.stale:
@@ -2484,12 +2638,22 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
         if args.include_web:
             web_entries = _governed_web_entries(workdir)
             web_report, web_blobs = build_governed_web_input(web_entries)
-            report = normalize_detection_report(merge_reports(report, web_report))
-            semantic_blobs = (*blobs, *web_blobs)
+            web_test_report, web_test_blobs = build_governed_web_test_results(
+                EvidenceChain.for_workdir(workdir).verify()
+            )
+            report = normalize_detection_report(
+                merge_reports(report, web_report, web_test_report)
+            )
+            semantic_blobs = (*blobs, *web_blobs, *web_test_blobs)
             print(
                 f"included {len(web_entries)} approved and verified Web knowledge entries",
                 file=sys.stderr,
             )
+            if web_test_report.web_knowledge:
+                print(
+                    f"included {len(web_test_report.web_knowledge)} governed Web-test result(s)",
+                    file=sys.stderr,
+                )
         project_name = args.project_name or workdir.name
         core = build_semantic_core(snapshot, semantic_blobs, report, project_name=project_name)
         document_set = build_document_ast_set(core)
@@ -3035,6 +3199,54 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_project_remove.set_defaults(func=cmd_project)
 
+    p_web = sub.add_parser("web", help="govern replayable Web test scenarios")
+    web_sub = p_web.add_subparsers(dest="web_command", required=True)
+    p_web_test = web_sub.add_parser("test", help="generate, approve, run or export Web tests")
+    web_test_sub = p_web_test.add_subparsers(dest="web_test_action", required=True)
+    p_web_test_generate = web_test_sub.add_parser(
+        "generate", help="generate candidate scenarios from the latest captured exploration"
+    )
+    p_web_test_generate.set_defaults(func=cmd_web)
+    p_web_test_review = web_test_sub.add_parser(
+        "review", help="list candidate and approved Web scenarios"
+    )
+    p_web_test_review.set_defaults(func=cmd_web)
+    p_web_test_approve = web_test_sub.add_parser(
+        "approve", help="publish one reviewed candidate into the committed test suite"
+    )
+    p_web_test_approve.add_argument("scenario_id", metavar="SCENARIO_ID")
+    p_web_test_approve.add_argument(
+        "--repo", metavar="REPO_NAME", help="repository that will own the approved test"
+    )
+    p_web_test_approve.set_defaults(func=cmd_web)
+    p_web_test_record = web_test_sub.add_parser(
+        "record", help="record a headed user journey as a private candidate"
+    )
+    p_web_test_record.add_argument("url", metavar="URL")
+    p_web_test_record.add_argument("--title")
+    p_web_test_record.add_argument(
+        "--risk", choices=("read-only", "writes"), default="read-only"
+    )
+    p_web_test_record.add_argument("--allow-writes", action="store_true")
+    p_web_test_record.set_defaults(func=cmd_web)
+    p_web_test_run = web_test_sub.add_parser(
+        "run", help="replay one or all chain-approved Web scenarios"
+    )
+    p_web_test_run.add_argument("scenario_id", metavar="SCENARIO_ID", nargs="?")
+    p_web_test_run.add_argument("--all", action="store_true")
+    p_web_test_run.add_argument("--headed", action="store_true")
+    p_web_test_run.add_argument("--allow-writes", action="store_true")
+    p_web_test_run.set_defaults(func=cmd_web)
+    p_web_test_export = web_test_sub.add_parser(
+        "export", help="export approved scenarios as deterministic Playwright tests"
+    )
+    p_web_test_export.add_argument(
+        "--format", choices=("playwright",), default="playwright"
+    )
+    p_web_test_export.add_argument("--output", required=True, metavar="DIRECTORY")
+    p_web_test_export.add_argument("--force", action="store_true")
+    p_web_test_export.set_defaults(func=cmd_web)
+
     p_verify = sub.add_parser("verify", help="verify an expectation against a live page")
     p_verify.add_argument("run_id")
     p_verify.add_argument("url", help="page URL, or same-origin base URL for --script")
@@ -3303,6 +3515,7 @@ def main(argv: list[str] | None = None) -> int:
     from .knowledge.code_reverse import ExtractionError
     from .knowledge.endorsement import TrustProjectionError
     from .knowledge.store import InvalidKnowledgeProjection, SchemaVersionError
+    from .webexplore.scenarios import WebScenarioError
     from .paths import StatePathError
     from .webexplore.browser import BrowserError, BrowserUnavailable
 
@@ -3366,6 +3579,7 @@ def main(argv: list[str] | None = None) -> int:
         TrustProjectionError,
         BrowserError,
         BrowserUnavailable,
+        WebScenarioError,
         sqlite3.Error,
         subprocess.CalledProcessError,
         EOFError,
@@ -3389,6 +3603,7 @@ def main(argv: list[str] | None = None) -> int:
             "harvest": "inspect `loreloop report <run-id>` and resolve the reported blocker",
             "repo": "run `loreloop repo --help` and correct the repository declaration",
             "project": "run `loreloop project --help` and correct the registry operation",
+            "web": "run `loreloop web test --help`, review the scenario, then retry",
             "knowledge": "run `loreloop knowledge --help` and retry the relevant knowledge action",
         }
         return _print_cli_error(

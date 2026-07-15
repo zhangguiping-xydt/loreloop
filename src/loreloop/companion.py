@@ -91,6 +91,28 @@ approved and verified the relevant Web entries:
     loreloop knowledge export --format package --output baseline.zip --include-web --force
     loreloop knowledge replay baseline.zip
 
+When the operator asks for repeatable Web tests:
+
+    loreloop ingest --from web <url> [--headed]
+    loreloop web test generate
+    loreloop web test review
+    loreloop web test approve <scenario-id>
+    git add tests/loreloop/web/<scenario-id>.json && git commit
+    loreloop web test run <scenario-id>
+    loreloop web test export --format playwright --output <directory>
+
+In a non-Git aggregate with multiple declared repositories, pass
+`--repo <repo-name>` to `web test approve` so the committed authority lives in
+one member repository.
+
+Candidates under `.loreloop/web-tests/candidates/` are untrusted review
+material. Never approve one on the operator's behalf. The chain-approved JSON
+under `tests/loreloop/web/` is authoritative; Playwright is only a derivative
+export. Keep tests read-only unless the operator explicitly authorizes
+`--allow-writes`, never store credentials, and treat replay results as chain
+evidence that can enter the package acceptance specification with
+`--include-web`.
+
 ## Local trust recovery
 
 LoreLoop manages local trust automatically during normal initialization. If a

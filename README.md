@@ -220,6 +220,19 @@ browser-verify the entries, then opt in explicitly:
 
 ```bash
 loreloop ingest --from web https://app.example.com --headed
+
+# Turn captured pages into reviewable, replayable test candidates.
+loreloop web test generate
+loreloop web test review
+loreloop web test approve <scenario-id>
+git add tests/loreloop/web/<scenario-id>.json
+git commit -m "add governed web test"
+
+# Replay the exact chain-approved file locally or in CI.
+loreloop web test run --all
+loreloop web test export --format playwright --output tests/playwright/generated
+
+# Govern extracted Web knowledge separately.
 loreloop knowledge review --status draft
 loreloop knowledge approve <entry-id>
 loreloop knowledge verify <entry-id> --headed
@@ -230,6 +243,19 @@ loreloop knowledge export \
   --force
 loreloop knowledge replay baseline.zip
 ```
+
+Files under `.loreloop/web-tests/candidates/` are private, untrusted review
+material. Approval publishes the exact scenario to `tests/loreloop/web/` and
+binds its digest to the evidence chain; only that matching file can run.
+Generated Playwright specs are derivative output, not the authority. Scenarios
+are read-only by default. Recording or replaying a write-risk journey requires
+an explicit `--allow-writes`, and password/token/secret/API-key fields are not
+recorded. Each replay stores its trace, observation, assertions, and result on
+the chain. With `--include-web`, the latest governed result also appears as an
+acceptance fact in the package.
+In a non-Git aggregate workspace with more than one declared repository, use
+`loreloop web test approve <scenario-id> --repo <repo-name>`; the approved JSON
+is written into that repository so its committed snapshot remains authoritative.
 
 `--include-web` reads the local projection and tamper-evident chain. Draft,
 approval-only, verification-only, contradicted, rejected, superseded, or

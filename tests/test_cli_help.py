@@ -60,6 +60,14 @@ PUBLIC_HELP_PATHS = [
     ("knowledge", "unsupersede"),
     ("knowledge", "verify"),
     ("knowledge", "usage"),
+    ("web",),
+    ("web", "test"),
+    ("web", "test", "generate"),
+    ("web", "test", "review"),
+    ("web", "test", "approve"),
+    ("web", "test", "record"),
+    ("web", "test", "run"),
+    ("web", "test", "export"),
 ]
 
 

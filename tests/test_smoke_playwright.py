@@ -29,6 +29,7 @@ from loreloop.evidence.artifacts import ArtifactStore  # noqa: E402
 from loreloop.evidence.chain import EvidenceChain  # noqa: E402
 from loreloop.webexplore.actions import execute_action_script, parse_action_script  # noqa: E402
 from loreloop.webexplore.browser import PlaywrightBrowser  # noqa: E402
+from loreloop.webexplore.recorder import record_scenario  # noqa: E402
 from loreloop.webexplore.verify import verify_expectation, verify_script_expectation  # noqa: E402
 
 PAGE = """<!doctype html>
@@ -38,6 +39,8 @@ PAGE = """<!doctype html>
   <p>Maximum file size is 50MB.</p>
   <button onclick="document.getElementById('status').innerText = 'Filtered results: 1 item'">Filter</button>
   <p id="status"></p>
+  <label>Query <input type="search" name="query"></label>
+  <label>Password <input type="password" name="password"></label>
   <form><input type="file" name="doc"><input type="submit"></form>
   <a href="/other.html">other</a>
 </body></html>
@@ -257,6 +260,29 @@ def test_script_verify_against_real_page(site, browser, tmp_path):
     assert artifacts.load(rec.payload["trace_artifact"])["status"] == "completed"
 
 
+def test_real_recorder_captures_safe_controls_but_not_passwords(site, browser, tmp_path):
+    artifacts = ArtifactStore.for_workdir(tmp_path)
+
+    def interact(_message: str) -> str:
+        browser.page.get_by_label("Query").fill("one item")
+        browser.page.get_by_label("Query").dispatch_event("change")
+        browser.page.get_by_label("Password").fill("must-not-record")
+        browser.page.get_by_label("Password").dispatch_event("change")
+        return ""
+
+    scenario = record_scenario(
+        browser,
+        artifacts,
+        site,
+        wait_for_operator=interact,
+    )
+
+    payload = scenario.canonical_json
+    assert "one item" in payload
+    assert "must-not-record" not in payload
+    assert any(step.op == "fill" for step in scenario.script.steps)
+
+
 def test_real_browser_blocks_javascript_post_without_allow_writes(write_site, browser):
     base, posted = write_site
     script = parse_action_script(
@@ -339,6 +365,38 @@ def test_real_web_cli_loop_updates_and_searches_baseline(site, tmp_path):
     assert "ingested 1 knowledge entries" in ingested.stdout
     assert "explored 1 pages" in ingested.stderr
 
+    generated = _cli(repo, environment, "web", "test", "generate")
+    assert "generated 1 candidate Web scenario(s)" in generated.stdout
+    candidate_files = tuple((repo / ".loreloop/web-tests/candidates").glob("*.json"))
+    assert len(candidate_files) == 1
+    scenario_id = json.loads(candidate_files[0].read_text(encoding="utf-8"))["id"]
+    reviewed = _cli(repo, environment, "web", "test", "review")
+    assert f"candidate  {scenario_id}" in reviewed.stdout
+    scenario_approval = _cli(repo, environment, "web", "test", "approve", scenario_id)
+    assert f"approved: Page remains available: Upload Console  ({scenario_id})" in scenario_approval.stdout
+    approved_path = repo / f"tests/loreloop/web/{scenario_id}.json"
+    assert approved_path.is_file()
+    _git(repo, "add", str(approved_path.relative_to(repo)))
+    _git(repo, "commit", "-q", "-m", "add governed web scenario")
+
+    scenario_run = _cli(repo, environment, "web", "test", "run", scenario_id)
+    assert f"PASS: {scenario_id}" in scenario_run.stdout
+    playwright_output = tmp_path / "playwright-export"
+    scenario_export = _cli(
+        repo,
+        environment,
+        "web",
+        "test",
+        "export",
+        "--format",
+        "playwright",
+        "--output",
+        str(playwright_output),
+    )
+    spec = playwright_output / f"{scenario_id}.spec.ts"
+    assert f"exported: {spec}" in scenario_export.stdout
+    assert "Upload Console" in spec.read_text(encoding="utf-8")
+
     listed = _cli(repo, environment, "knowledge", "list", "--channel", "web")
     match = re.search(r"(?m)^([0-9a-f]{8})\s+", listed.stdout)
     assert match is not None
@@ -370,20 +428,32 @@ def test_real_web_cli_loop_updates_and_searches_baseline(site, tmp_path):
         "--force",
     )
     assert "included 1 approved and verified Web knowledge entries" in exported.stderr
+    assert "included 1 governed Web-test result(s)" in exported.stderr
     assert package.read_bytes() != source_baseline
     replayed = _cli(repo, environment, "knowledge", "replay", str(package))
     assert "Capsule replay: no_key" in replayed.stdout
     with zipfile.ZipFile(package) as archive:
         updated_capsule = json.loads(archive.read(".loreloop-export.json"))
+        acceptance_document = archive.read(
+            next(name for name in archive.namelist() if name.endswith("-验收规格.md"))
+        ).decode("utf-8")
         rendered = "\n".join(
             archive.read(name).decode("utf-8")
             for name in archive.namelist()
             if name.endswith(".md")
         )
     assert "Maximum file size is 50MB." in rendered
+    assert "loreloop-web" in acceptance_document
+    assert "Page remains available: Upload Console" in acceptance_document
+    assert "最近一次受治理执行结果：通过" in acceptance_document
+    assert any(
+        record["row_kind"] == "TestRow"
+        and record["values"]["/framework"] == "loreloop-web"
+        for record in updated_capsule["semantic_core"]["records"]
+    )
     assert (
         updated_capsule["semantic_core"]["source_snapshot_sha256"]
-        == source_capsule["semantic_core"]["source_snapshot_sha256"]
+        != source_capsule["semantic_core"]["source_snapshot_sha256"]
     )
     assert (
         updated_capsule["semantic_core"]["repository_config_digest"]

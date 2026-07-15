@@ -1,13 +1,13 @@
 $ loreloop --help
 usage: loreloop [-h] [--agent {claude,codex,opencode,co-mind}]
-                {doctor,codex,opencode,claude,comind,trust,init,demo,ingest,repo,project,verify,begin,complete,run,check,report,harvest,knowledge}
+                {doctor,codex,opencode,claude,comind,trust,init,demo,ingest,repo,project,web,verify,begin,complete,run,check,report,harvest,knowledge}
                 ...
 
 Reverse-engineer project knowledge, apply it to coding-agent work, and return
 accepted outcomes to a tamper-evident knowledge loop.
 
 positional arguments:
-  {doctor,codex,opencode,claude,comind,trust,init,demo,ingest,repo,project,verify,begin,complete,run,check,report,harvest,knowledge}
+  {doctor,codex,opencode,claude,comind,trust,init,demo,ingest,repo,project,web,verify,begin,complete,run,check,report,harvest,knowledge}
     doctor              check prerequisites and writable trust state
     codex               install or inspect the native Codex integration
     opencode            install or inspect the native OpenCode integration
@@ -19,6 +19,7 @@ positional arguments:
     ingest              reverse-engineer knowledge from a source
     repo                manage repositories in this trust domain
     project             manage the federation project registry
+    web                 govern replayable Web test scenarios
     verify              verify an expectation against a live page
     begin               prepare knowledge for the coding-agent session already
                         in use
@@ -653,3 +654,90 @@ usage: loreloop knowledge usage [-h]
 
 options:
   -h, --help  show this help message and exit
+
+$ loreloop web --help
+usage: loreloop web [-h] {test} ...
+
+positional arguments:
+  {test}
+    test      generate, approve, run or export Web tests
+
+options:
+  -h, --help  show this help message and exit
+
+$ loreloop web test --help
+usage: loreloop web test [-h] {generate,review,approve,record,run,export} ...
+
+positional arguments:
+  {generate,review,approve,record,run,export}
+    generate            generate candidate scenarios from the latest captured
+                        exploration
+    review              list candidate and approved Web scenarios
+    approve             publish one reviewed candidate into the committed test
+                        suite
+    record              record a headed user journey as a private candidate
+    run                 replay one or all chain-approved Web scenarios
+    export              export approved scenarios as deterministic Playwright
+                        tests
+
+options:
+  -h, --help            show this help message and exit
+
+$ loreloop web test generate --help
+usage: loreloop web test generate [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+$ loreloop web test review --help
+usage: loreloop web test review [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+$ loreloop web test approve --help
+usage: loreloop web test approve [-h] [--repo REPO_NAME] SCENARIO_ID
+
+positional arguments:
+  SCENARIO_ID
+
+options:
+  -h, --help        show this help message and exit
+  --repo REPO_NAME  repository that will own the approved test
+
+$ loreloop web test record --help
+usage: loreloop web test record [-h] [--title TITLE]
+                                [--risk {read-only,writes}] [--allow-writes]
+                                URL
+
+positional arguments:
+  URL
+
+options:
+  -h, --help            show this help message and exit
+  --title TITLE
+  --risk {read-only,writes}
+  --allow-writes
+
+$ loreloop web test run --help
+usage: loreloop web test run [-h] [--all] [--headed] [--allow-writes]
+                             [SCENARIO_ID]
+
+positional arguments:
+  SCENARIO_ID
+
+options:
+  -h, --help      show this help message and exit
+  --all
+  --headed
+  --allow-writes
+
+$ loreloop web test export --help
+usage: loreloop web test export [-h] [--format {playwright}] --output
+                                DIRECTORY [--force]
+
+options:
+  -h, --help            show this help message and exit
+  --format {playwright}
+  --output DIRECTORY
+  --force

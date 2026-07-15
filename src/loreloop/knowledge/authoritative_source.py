@@ -19,6 +19,7 @@ from .authoritative_detector_sql import detect_sql_source
 from .authoritative_detector_tests import (
     detect_test_source,
     is_supported_test_evidence_path,
+    is_web_scenario_path,
 )
 from .authoritative_detector_typescript import detect_typescript_source
 from .authoritative_detector_ui import detect_vue_source
@@ -195,12 +196,19 @@ def _test_text(blob: SnapshotBlob) -> str:
             f"supported test source exceeds semantic loading limits: "
             f"{blob.repository_alias}:{blob.path}"
         )
-    for encoding in ("utf-8", "gb18030", "latin-1"):
+    encodings = (
+        ("utf-8",)
+        if is_web_scenario_path(blob.path)
+        else ("utf-8", "gb18030", "latin-1")
+    )
+    for encoding in encodings:
         try:
             return blob.data.decode(encoding)
         except UnicodeDecodeError:
             continue
-    raise AssertionError("latin-1 decoding must be total")
+    raise DetectionError(
+        f"supported test source is not valid UTF-8: {blob.repository_alias}:{blob.path}"
+    )
 
 
 def _is_config(path: str) -> bool:
