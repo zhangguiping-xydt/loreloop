@@ -57,16 +57,18 @@ automated or headless delegation.
 ## Export the authoritative project package
 
 When the operator asks to export project knowledge, a knowledge baseline, or
-reverse-engineered project documents, export the deliverable package rather
-than the legacy entry audit:
+reverse-engineered project documents, export a directly readable directory
+rather than the legacy entry audit:
 
 ```text
-loreloop knowledge export --format package --output baseline.zip
+loreloop knowledge export --format docs --output baseline
 ```
 
-The ZIP contains six fixed Markdown documents, evidence-backed optional
-interface/database documents, and the portable Capsule. `--format docs` is a
-compatibility alias for the same package pipeline. Use `--format audit` only
+The directory contains six fixed Markdown documents, evidence-backed optional
+interface/database documents, and the portable Capsule. It can be opened,
+searched, and replayed without manual extraction. Use the compressed command
+`loreloop knowledge export --format package --output baseline.zip` only when
+the operator explicitly asks for a handoff artifact. Use `--format audit` only
 when the operator explicitly asks for the entry-by-entry knowledge audit.
 
 Run the command from the initialized project workspace. The workspace may be
@@ -77,14 +79,14 @@ not add `--force` unless the operator explicitly authorizes replacing an
 existing output. Verify a produced package with:
 
 ```text
-loreloop knowledge replay baseline.zip
+loreloop knowledge replay baseline
 ```
 
 Search a package directly when the operator asks a question about an exported
 baseline:
 
 ```text
-loreloop knowledge search "<query>" --package baseline.zip
+loreloop knowledge search "<query>" --package baseline
 ```
 
 Do not unpack or import the ZIP merely to search it. Package search replays the
@@ -101,7 +103,7 @@ current host session: synonyms, Chinese/English translations, abbreviations,
 and likely code identifiers. Retry without launching a nested agent:
 
 ```text
-loreloop knowledge search "<query>" --package baseline.zip --expand "<terms>"
+loreloop knowledge search "<query>" --package baseline --expand "<terms>"
 ```
 
 Expansion is retrieval-only. Never present an expansion term as project
@@ -115,8 +117,8 @@ approved and LoreLoop has browser-verified, then replace the existing package
 only with explicit overwrite authorization:
 
 ```text
-loreloop knowledge export --format package --output baseline.zip --include-web --force
-loreloop knowledge replay baseline.zip
+loreloop knowledge export --format docs --output baseline --include-web --force
+loreloop knowledge replay baseline
 ```
 
 When the operator asks for repeatable Web tests, keep discovery candidates

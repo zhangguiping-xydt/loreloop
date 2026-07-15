@@ -693,6 +693,10 @@ Capsule v3 保存 SemanticCore、适用性、每份确定性 pre-AST 的 SHA-256
 不再把同一 AST 记录复制到多个文档节点。无密钥 replay 从 SemanticCore 重建完整 DocumentSet，
 核对 AST 摘要并逐字节核对 Markdown。旧 schema v2 的内嵌 AST 包继续使用同一重建结果验证。
 
+日常导出使用 `--format docs` 和目录 `baseline/`，便于直接打开、Git diff 和检索；只有明确需要
+传输或归档时才使用 `--format package` 生成 `baseline.zip`。两种载体具有相同证明语义，replay
+与 search 均直接接受目录或 ZIP，不要求操作者手工解压。
+
 包检索在一次 replay 验证得到的不可变快照上只索引人类可见 Markdown。BM25 只为本次查询保留
 相关词项，但文档长度、词频、IDF 和排序边界保持不变。每个项目知识命中必须返回 Markdown 文件
 和章节；SemanticCore 只负责证明同一内容，不提供文档之外的隐藏召回。`--expand` 只提供低权重
@@ -779,7 +783,7 @@ loreloop harvest <run_id> [--agent claude|codex|opencode|co-mind]
 loreloop knowledge list [--stale]
 loreloop knowledge export [--stale] [--format audit] [--output <file>]
 loreloop knowledge export --format package --output <package.zip> [--project-name <name>] [--requirements <path>]... [--force] [--attest]
-loreloop knowledge export --format docs --output <directory-or-zip> ...  # 兼容别名
+loreloop knowledge export --format docs --output <directory> ...  # 日常可读基线；默认 baseline/
 loreloop knowledge replay <directory-or-zip> [--trusted]
 loreloop knowledge search <query> --package <directory-or-zip> [--expand <terms>] [--limit N]
 loreloop knowledge approve <entry_id>

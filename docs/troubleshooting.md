@@ -114,8 +114,9 @@ tools, rules, hooks, MCP servers, and static headers.
 
 ## A document export or Capsule replay fails
 
-`knowledge export --format package` reads only committed Git blobs and refuses
-a dirty root, peer, or submodule. The workspace root itself may be a non-Git
+`knowledge export --format docs` and `--format package` read only committed Git
+blobs and refuse a dirty root, peer, or submodule. Use docs for the directly
+readable `baseline/` directory and package only for a compressed ZIP. The workspace root itself may be a non-Git
 aggregate when at least one Git member is declared. Commit or restore source
 changes first. ZIP publication uses atomic file replacement; directory
 publication is recovered from its hidden sibling journal after interruption.

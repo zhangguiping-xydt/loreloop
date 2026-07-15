@@ -142,16 +142,16 @@ loreloop ingest --from code .
 loreloop knowledge review
 ```
 
-Generate a deliverable authoritative project package from clean committed Git
-snapshots for handoff, onboarding, or requirement development. By default this
-path does not call an agent or open the SQLite store or a key. A non-Git workspace root
-is supported when its member repositories have been declared with
+Generate a directly readable authoritative baseline from clean committed Git
+snapshots for onboarding or requirement development. By default this path does
+not call an agent or open the SQLite store or a key. A non-Git workspace root is
+supported when its member repositories have been declared with
 `loreloop repo add`:
 
 ```bash
 loreloop knowledge export \
-  --format package \
-  --output baseline.zip \
+  --format docs \
+  --output baseline \
   --project-name your-project \
   --requirements docs/requirements.md
 ```
@@ -162,10 +162,10 @@ UI entry points, tests, interfaces, and schema are grouped for reading instead
 of emitted as an atomic-record dump. The Capsule JSON is the complete
 machine-verifiable representation used by replay and retrieval.
 
-The package layout is:
+The readable directory layout is:
 
 ```text
-baseline.zip
+baseline/
 ├── your-project-功能清单.md
 ├── your-project-需求规格.md
 ├── your-project-系统架构.md
@@ -200,7 +200,7 @@ The Capsule can prove the package closure on a machine with no source, database,
 or key:
 
 ```bash
-loreloop knowledge replay baseline.zip
+loreloop knowledge replay baseline
 ```
 
 Search the verified package directly without extraction or importing it into a
@@ -208,7 +208,7 @@ project store. Retrieval ranks the replay-verified human documents themselves,
 so every hit points to the same filename and section a reviewer can open:
 
 ```bash
-loreloop knowledge search "fund ratio" --package baseline.zip
+loreloop knowledge search "fund ratio" --package baseline
 ```
 
 When the question and the project use different wording, pass bounded
@@ -216,8 +216,15 @@ retrieval-only synonyms, translations, abbreviations, or likely identifiers:
 
 ```bash
 loreloop knowledge search "fund ratio" \
-  --package baseline.zip \
+  --package baseline \
   --expand "housing provident fund contribution ratio HPF hpfRatioConfig"
+```
+
+Create a compressed handoff artifact only when one is needed:
+
+```bash
+loreloop knowledge export --format package --output baseline.zip
+loreloop knowledge replay baseline.zip
 ```
 
 Expansion changes ranking only. It is never added to the baseline, rendered as
@@ -248,11 +255,11 @@ loreloop knowledge review --status draft
 loreloop knowledge approve <entry-id>
 loreloop knowledge verify <entry-id> --headed
 loreloop knowledge export \
-  --format package \
-  --output baseline.zip \
+  --format docs \
+  --output baseline \
   --include-web \
   --force
-loreloop knowledge replay baseline.zip
+loreloop knowledge replay baseline
 ```
 
 Files under `.loreloop/web-tests/candidates/` are private, untrusted review
@@ -282,9 +289,10 @@ loreloop knowledge export --format package --output baseline.zip --attest
 loreloop knowledge replay baseline.zip --trusted
 ```
 
-`--format docs` remains a compatibility alias and can still target a directory.
-The default `--format audit` remains the separate single-file, entry-by-entry
-trust export; it is not the project document package.
+`--format docs` defaults to the readable `baseline/` directory. Package mode
+(`--format package`) defaults to the compressed `baseline.zip` transport. The
+default `--format audit` remains the separate single-file, entry-by-entry trust export;
+it is not the project document package.
 
 When a requirement document is ready, commit it to any declared repository and
 prepare the task in the coding-agent session you already use:

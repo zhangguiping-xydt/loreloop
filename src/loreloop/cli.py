@@ -2614,7 +2614,8 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
             "the source snapshot is rebuilt from the current clean Git commits",
             "remove --stale and retry, or use --format audit for knowledge-entry drift",
         )
-    output = Path(args.output or "baseline.zip")
+    default_output = "baseline.zip" if args.format == "package" else "baseline"
+    output = Path(args.output or default_output)
     archive_output = is_archive_output(output)
     output_existed: bool | None = None
     try:
@@ -3409,13 +3410,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--format",
         choices=("audit", "package", "docs"),
         default="audit",
-        help="audit entries or deterministic project package; docs is a compatibility alias",
+        help="audit entries, readable project docs, or a compressed project package",
     )
     p_knowledge_export.add_argument(
         "--output",
         help=(
             "audit Markdown file, source-docs directory, or deliverable .zip package; "
-            "package/docs defaults to baseline.zip"
+            "docs defaults to baseline/ and package defaults to baseline.zip"
         ),
     )
     p_knowledge_export.add_argument("--project-name", help="project name used in source documents")

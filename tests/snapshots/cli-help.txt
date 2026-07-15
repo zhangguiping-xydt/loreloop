@@ -559,11 +559,11 @@ options:
   -h, --help            show this help message and exit
   --stale               audit only: export entries with drifted code anchors
   --format {audit,package,docs}
-                        audit entries or deterministic project package; docs
-                        is a compatibility alias
+                        audit entries, readable project docs, or a compressed
+                        project package
   --output OUTPUT       audit Markdown file, source-docs directory, or
-                        deliverable .zip package; package/docs defaults to
-                        baseline.zip
+                        deliverable .zip package; docs defaults to baseline/
+                        and package defaults to baseline.zip
   --project-name PROJECT_NAME
                         project name used in source documents
   --requirements PATH   committed Markdown requirements; use repo:NAME/path

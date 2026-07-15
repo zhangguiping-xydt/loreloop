@@ -58,7 +58,7 @@ def test_plugin_skill_finishes_installation_with_bundled_installer():
     assert "configuration files directly" in skill
     assert "directly" in skill
     assert 'Run `loreloop begin "<task>"`' in skill
-    assert "knowledge export --format package --output baseline.zip" in skill
+    assert "knowledge export --format docs --output baseline" in skill
     assert "Use `--format audit` only" in skill
     assert "command omitted" in skill
 

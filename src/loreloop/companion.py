@@ -52,14 +52,16 @@ automated or headless delegation.
 ## Export the authoritative project package
 
 When the operator asks to export project knowledge, a knowledge baseline, or
-reverse-engineered project documents, export the deliverable package rather
-than the legacy entry audit:
+reverse-engineered project documents, export a directly readable directory
+rather than the legacy entry audit:
 
-    loreloop knowledge export --format package --output baseline.zip
+    loreloop knowledge export --format docs --output baseline
 
-The ZIP contains six fixed Markdown documents, evidence-backed optional
-interface/database documents, and the portable Capsule. `--format docs` is a
-compatibility alias for the same package pipeline. Use `--format audit` only
+The directory contains six fixed Markdown documents, evidence-backed optional
+interface/database documents, and the portable Capsule. It can be opened,
+searched, and replayed without manual extraction. Use the compressed command
+`loreloop knowledge export --format package --output baseline.zip` only when
+the operator explicitly asks for a handoff artifact. Use `--format audit` only
 when the operator explicitly asks for the entry-by-entry knowledge audit.
 
 Run the command from the initialized project workspace. The workspace may be
@@ -69,11 +71,11 @@ string shown above; never issue a shell tool call with its command omitted. Do
 not add `--force` unless the operator explicitly authorizes replacing an
 existing output. Verify a produced package with:
 
-    loreloop knowledge replay baseline.zip
+    loreloop knowledge replay baseline
 
 Search the replay-verified package without extracting it:
 
-    loreloop knowledge search "<query>" --package baseline.zip
+    loreloop knowledge search "<query>" --package baseline
 
 Every project-knowledge hit must point to a human Markdown file and section.
 Do not treat a Capsule-only fact as operator-visible project knowledge.
@@ -82,7 +84,7 @@ If the question uses different wording, derive 5-15 concise synonyms,
 translations, abbreviations, and likely code identifiers in this current host
 session, then retry without launching a nested agent:
 
-    loreloop knowledge search "<query>" --package baseline.zip --expand "<terms>"
+    loreloop knowledge search "<query>" --package baseline --expand "<terms>"
 
 Expansion is retrieval-only. Never present expansion terms as project facts or
 evidence, and never let them change trust. Use only replay-verified package
@@ -91,8 +93,8 @@ content returned by the search in the answer.
 When the operator explicitly requests a Web-enriched replacement and has
 approved and verified the relevant Web entries:
 
-    loreloop knowledge export --format package --output baseline.zip --include-web --force
-    loreloop knowledge replay baseline.zip
+    loreloop knowledge export --format docs --output baseline --include-web --force
+    loreloop knowledge replay baseline
 
 When the operator asks for repeatable Web tests:
 

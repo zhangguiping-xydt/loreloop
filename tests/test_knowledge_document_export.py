@@ -149,6 +149,21 @@ def test_package_export_defaults_to_baseline_zip(
     assert main(["knowledge", "replay", str(package)]) == 0
 
 
+def test_docs_export_defaults_to_readable_baseline_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repository(tmp_path / "demo", {"app.py": "VALUE = 1\n"})
+    monkeypatch.chdir(repo)
+
+    assert main(["knowledge", "export", "--format", "docs"]) == 0
+
+    baseline = repo / "baseline"
+    assert baseline.is_dir()
+    assert len(tuple(baseline.glob("*.md"))) == 6
+    assert (baseline / ".loreloop-export.json").is_file()
+    assert main(["knowledge", "replay", str(baseline)]) == 0
+
+
 def test_cli_docs_export_emits_only_six_documents_without_optional_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
