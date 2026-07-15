@@ -90,6 +90,11 @@ loreloop knowledge search "<query>" --package baseline.zip
 Do not unpack or import the ZIP merely to search it. Package search replays the
 Capsule first and then ranks the bound Markdown rows.
 
+Every project-knowledge hit must point to a human Markdown file and section.
+Do not treat a Capsule-only fact as operator-visible project knowledge. If a
+search result cannot be located in the human documents, report the package as
+inconsistent instead of relying on hidden machine content.
+
 If the operator's wording may differ from the project vocabulary, or the first
 search returns no useful result, derive 5-15 concise retrieval terms in the
 current host session: synonyms, Chinese/English translations, abbreviations,
