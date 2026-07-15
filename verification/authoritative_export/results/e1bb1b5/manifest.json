@@ -1,6 +1,6 @@
 {
   "contract": "docs/verification/authoritative-export-v5.md",
-  "contract_sha256": "53ca1ec45ccc9494c8d39db06a2d38def3728f0b6614416eea43241f14a2156e",
+  "contract_sha256": "1d66c1117e459488bbbd880a062c050a6de56d4b4418d91ff72dd5afc909c969",
   "dogfood": {
     "commit": "0455028a3cd25d87f76bc389f89261eee658657a",
     "entries": [
@@ -16,7 +16,7 @@
     ],
     "path": "artifacts/dogfood-knowledge.zip",
     "public_ref": "refs/heads/main",
-    "public_ref_tip": "3c0654c00271babc8b6531d80fcb87a1168bb79b",
+    "public_ref_tip": "3ce986d52665b1a2c9efffd04689bf79a74d85e2",
     "remote_url": "https://github.com/openclaw/openclaw.git",
     "source": "/media/vdc/worktree/openclaw-discord-probe",
     "tracked_files": 20167,
@@ -80,10 +80,10 @@
         "--collect-only",
         "-q"
       ],
-      "duration_seconds": 5.314,
+      "duration_seconds": 2.706,
       "exit_code": 0,
       "log": "logs/01-pytest-collect.log",
-      "log_sha256": "93f9c8a97a9742ea5ad97dbd01876e632b829150f783b0b7791895cba500bd4e",
+      "log_sha256": "70c64ad6f118ceb326999afd349933c749f94b23e752a11d4ec849ed67d0c066",
       "name": "pytest-collect"
     },
     {
@@ -93,10 +93,10 @@
         "pytest",
         "-q"
       ],
-      "duration_seconds": 143.21,
+      "duration_seconds": 94.897,
       "exit_code": 0,
       "log": "logs/02-full-test-suite.log",
-      "log_sha256": "7893679ea8948b6a03db7eda24343e37d914d0e6525348d10e906407292026b6",
+      "log_sha256": "307ac5087eafcbdfaa27fce1af09a2d5c589ae9682fbbdacc690c6cd981a16ad",
       "name": "full-test-suite"
     },
     {
@@ -107,7 +107,7 @@
         "tests",
         "plugins"
       ],
-      "duration_seconds": 0.148,
+      "duration_seconds": 0.05,
       "exit_code": 0,
       "log": "logs/03-ruff.log",
       "log_sha256": "69462bc0ee6dcbd9d0df1bce9a612c8fd36794653b17d42b8e7cd50c55e6eed0",
@@ -123,7 +123,7 @@
         "src/loreloop/example",
         "-lll"
       ],
-      "duration_seconds": 4.78,
+      "duration_seconds": 3.622,
       "exit_code": 0,
       "log": "logs/04-bandit-medium-high.log",
       "log_sha256": "9cb9c83cff124bef8e41702bc8e7d053eecf66448ed6783cd846bbac51e23982",
@@ -140,10 +140,10 @@
         "tests/test_document_detector_matrix.py",
         "tests/test_document_git_snapshot.py"
       ],
-      "duration_seconds": 39.459,
+      "duration_seconds": 22.499,
       "exit_code": 0,
       "log": "logs/05-six-seven-eight-and-aggregate.log",
-      "log_sha256": "e08673d23ec222fe40ef8fdd68b925c84e0ddf6581919207feaccebb39c51a3c",
+      "log_sha256": "e1a16459765988f4fd870e9716c1fd072e8cb4f5cf02c77a7eb5e7dfbbe200db",
       "name": "six-seven-eight-and-aggregate"
     },
     {
@@ -157,10 +157,10 @@
         "tests/test_cli_capsule_replay.py",
         "tests/test_authoritative_trust.py"
       ],
-      "duration_seconds": 31.946,
+      "duration_seconds": 17.14,
       "exit_code": 0,
       "log": "logs/06-capsule-mutants-and-trust.log",
-      "log_sha256": "54d4c419cb13aee9c7dba935bbe64ee0d72a988adde9653b071b46a595292249",
+      "log_sha256": "05d109abbe93103710c602e93bd3cc588194dc25f2b7d3fbadff7a19c148f141",
       "name": "capsule-mutants-and-trust"
     },
     {
@@ -169,12 +169,12 @@
         "build",
         "--wheel",
         "--out-dir",
-        "/tmp/loreloop-authoritative-proof-44sexz4i/dist"
+        "/tmp/loreloop-authoritative-proof-v7w5y0nj/dist"
       ],
-      "duration_seconds": 4.26,
+      "duration_seconds": 2.352,
       "exit_code": 0,
       "log": "logs/07-wheel.log",
-      "log_sha256": "53c1e6f6dc7fe2015b54d3f425dcb9f0b733b68b549d3b90afd3101ef96bdac2",
+      "log_sha256": "e8307569232ea10578d26f6a0aab4a57347aefc83ad40d749df6018a6ef67e21",
       "name": "wheel"
     },
     {
@@ -186,7 +186,7 @@
         "export",
         "--help"
       ],
-      "duration_seconds": 0.335,
+      "duration_seconds": 0.3,
       "exit_code": 0,
       "log": "logs/08-cli-package-help.log",
       "log_sha256": "c0c743074aff4986d93ec6ebf08f80725e7fe0a2ddb26a9019b86dbf414301e3",
@@ -200,10 +200,10 @@
         "-q",
         "tests/test_smoke_playwright.py"
       ],
-      "duration_seconds": 32.432,
+      "duration_seconds": 27.234,
       "exit_code": 0,
       "log": "logs/09-playwright-web-e2e.log",
-      "log_sha256": "6543fbbb9a5456b64155ad10109f2872819c4fbcc3b6b81e303f4dc21e6e115a",
+      "log_sha256": "5759ddf9c378cc2c9ee841a5ff1f4021ef8709b1e5ab90dae30bd63120afd09a",
       "name": "playwright-web-e2e"
     },
     {
@@ -212,12 +212,12 @@
         "venv",
         "--python",
         "/media/vdc/code/ai/loreloop/.venv/bin/python",
-        "/tmp/loreloop-authoritative-proof-44sexz4i/wheel-venv"
+        "/tmp/loreloop-authoritative-proof-v7w5y0nj/wheel-venv"
       ],
-      "duration_seconds": 0.195,
+      "duration_seconds": 0.155,
       "exit_code": 0,
       "log": "logs/10-wheel-venv.log",
-      "log_sha256": "da9799b88239b866f5b41de6917768b681e71b15e15af0ba7e471946aebd0ae7",
+      "log_sha256": "7bc74a9aca8bcbb2eac8e6bbc19720f9c0060b019443a8440584672b8898af7c",
       "name": "wheel-venv"
     },
     {
@@ -226,42 +226,42 @@
         "pip",
         "install",
         "--python",
-        "/tmp/loreloop-authoritative-proof-44sexz4i/wheel-venv/bin/python",
-        "/media/vdc/code/ai/loreloop/verification/authoritative_export/results/f30fdfd/artifacts/loreloop-0.1.0-py3-none-any.whl"
+        "/tmp/loreloop-authoritative-proof-v7w5y0nj/wheel-venv/bin/python",
+        "/media/vdc/code/ai/loreloop/verification/authoritative_export/results/e1bb1b5/artifacts/loreloop-0.1.0-py3-none-any.whl"
       ],
-      "duration_seconds": 0.138,
+      "duration_seconds": 0.119,
       "exit_code": 0,
       "log": "logs/11-wheel-install.log",
-      "log_sha256": "5e202c06fd7cee3a3118529cbee9f259da0d4c2f4ac725ca9696e841d4e2c0b6",
+      "log_sha256": "1bae40f2514756a24f05fa857b020d586bb4631eb6ca0becfec1f16e0fd9a958",
       "name": "wheel-install"
     },
     {
       "command": [
-        "/tmp/loreloop-authoritative-proof-44sexz4i/wheel-venv/bin/loreloop",
+        "/tmp/loreloop-authoritative-proof-v7w5y0nj/wheel-venv/bin/loreloop",
         "knowledge",
         "export",
         "--format",
         "package",
         "--output",
-        "/tmp/loreloop-authoritative-proof-44sexz4i/wheel-smoke.zip"
+        "/tmp/loreloop-authoritative-proof-v7w5y0nj/wheel-smoke.zip"
       ],
-      "duration_seconds": 1.258,
+      "duration_seconds": 0.821,
       "exit_code": 0,
       "log": "logs/12-wheel-export-smoke.log",
-      "log_sha256": "41028cc9eaefb5785172ca1034efbc25f2ec19d9d4036edad26e95a402d90e97",
+      "log_sha256": "53b19609895a3df4b020a939bb7bd663cdc1d78c5a7fe15cdf5080b4e27e7d0f",
       "name": "wheel-export-smoke"
     },
     {
       "command": [
-        "/tmp/loreloop-authoritative-proof-44sexz4i/wheel-venv/bin/loreloop",
+        "/tmp/loreloop-authoritative-proof-v7w5y0nj/wheel-venv/bin/loreloop",
         "knowledge",
         "replay",
-        "/tmp/loreloop-authoritative-proof-44sexz4i/wheel-smoke.zip"
+        "/tmp/loreloop-authoritative-proof-v7w5y0nj/wheel-smoke.zip"
       ],
-      "duration_seconds": 0.756,
+      "duration_seconds": 0.582,
       "exit_code": 0,
       "log": "logs/13-wheel-replay-smoke.log",
-      "log_sha256": "933850d9a7ed81e8f7702f5742733ed4419c90885b73ba94f8ba8a702ffab822",
+      "log_sha256": "b8d33cecf593dd92a31a963e4c40d6037861f0ebbced6ab16c3973b9a068e2d9",
       "name": "wheel-replay-smoke"
     },
     {
@@ -271,12 +271,12 @@
         "pytest",
         "-q",
         "tests/test_authoritative_publish.py",
-        "--basetemp=/tmp/loreloop-xfs-mm2c16hv/pytest"
+        "--basetemp=/tmp/loreloop-xfs-2iepkdq1/pytest"
       ],
-      "duration_seconds": 1.918,
+      "duration_seconds": 0.89,
       "exit_code": 0,
       "log": "logs/14-publication-xfs.log",
-      "log_sha256": "f86dd20ef783b45d76e64bef3a61731ac643037dcd81d56eb77b834aa083789d",
+      "log_sha256": "c5c92fb337b1a096e633bb274753d439f750e0326c569479f806715db6ae360b",
       "name": "publication-xfs"
     },
     {
@@ -286,12 +286,12 @@
         "pytest",
         "-q",
         "tests/test_authoritative_publish.py",
-        "--basetemp=/media/vdc/loreloop-ext4-i4ix0xse/pytest"
+        "--basetemp=/media/vdc/loreloop-ext4-fda16evx/pytest"
       ],
-      "duration_seconds": 2.275,
+      "duration_seconds": 0.988,
       "exit_code": 0,
       "log": "logs/15-publication-ext4.log",
-      "log_sha256": "b2f7336c1ee11fe7814205e79770029dafed9704c6a16006905bb4e0766b7e46",
+      "log_sha256": "a74508aad74f687ff5e7d59dcde04339d00ad9af21e0431f5012765e213aa274",
       "name": "publication-ext4"
     },
     {
@@ -305,7 +305,7 @@
         "https://github.com/openclaw/openclaw.git",
         "+refs/heads/main:refs/loreloop-proof/public-dogfood"
       ],
-      "duration_seconds": 13.421,
+      "duration_seconds": 7.826,
       "exit_code": 0,
       "log": "logs/16-dogfood-public-fetch.log",
       "log_sha256": "7a1e16ab43822dcef89a48198cacf8c83368734ea3d941025997f919f8ffc608",
@@ -319,7 +319,7 @@
         "0455028a3cd25d87f76bc389f89261eee658657a",
         "refs/loreloop-proof/public-dogfood"
       ],
-      "duration_seconds": 0.018,
+      "duration_seconds": 0.014,
       "exit_code": 0,
       "log": "logs/17-dogfood-public-ancestry.log",
       "log_sha256": "1f6e591c53953cccd09883a37dc885ab56c423c46eeee60f3c168138eb5c9741",
@@ -335,14 +335,14 @@
         "--format",
         "package",
         "--output",
-        "/tmp/loreloop-authoritative-proof-44sexz4i/dogfood-knowledge.zip",
+        "/tmp/loreloop-authoritative-proof-v7w5y0nj/dogfood-knowledge.zip",
         "--project-name",
         "dogfood"
       ],
-      "duration_seconds": 212.619,
+      "duration_seconds": 151.327,
       "exit_code": 0,
       "log": "logs/18-large-project-export.log",
-      "log_sha256": "2cc6745ba2e4daa2c4884159668aa4b7d13fe08ce71a1e423e1f84b5f5c3fb29",
+      "log_sha256": "5d1f7016d0635fdec23cf149cb415b3032b80aae21e87ca04eab950007960ef7",
       "name": "large-project-export"
     },
     {
@@ -352,25 +352,25 @@
         "loreloop.cli",
         "knowledge",
         "replay",
-        "/tmp/loreloop-authoritative-proof-44sexz4i/dogfood-knowledge.zip"
+        "/tmp/loreloop-authoritative-proof-v7w5y0nj/dogfood-knowledge.zip"
       ],
-      "duration_seconds": 236.575,
+      "duration_seconds": 176.35,
       "exit_code": 0,
       "log": "logs/19-large-project-replay.log",
-      "log_sha256": "1840d5ede6931f8188d450e86ec9de75c74fcc3cbc41f8db2610e4125faaf994",
+      "log_sha256": "d3a5ca03b3a66f1b735361df8e139df0870917118b160e2528cf4f0f0884ede7",
       "name": "large-project-replay"
     }
   ],
-  "git_tree_id": "a56afe4928d2af85272ad5117a479355ac2266a1",
-  "git_tree_listing_sha256": "3775728f43b2c62a70a94b0ccfe29ae4ef4e9829641e78bc066ba7bebfcde27f",
-  "implementation_commit": "f30fdfdecfe7f18f4eb4e1297b8900308b65ef6b",
+  "git_tree_id": "6a9639273efd6fa9fc55d6874b3aa8a99760ad8c",
+  "git_tree_listing_sha256": "c5c06e092e2a9ebb0c55d7dd88683cadc882b8b90024c18f9d8ea51637935c6b",
+  "implementation_commit": "e1bb1b5f8a8e431fa4cfcdfc7ebcba682def25a5",
   "proof_runner_sha256": "ddff2736c68d399cc819f3c0b539b6858a06d9658e97f6133cf4b84c50536909",
   "schema_version": 1,
   "source_sha256": {
     "src/loreloop/__init__.py": "91447944015cec709e8aa7655f7e9d64e1e4508e7023a57fe3746911c0fc6fed",
     "src/loreloop/agents.py": "c4b47de6e1cbf63d0b15011063058b71042048423d49bd42c9a79df5468de0a1",
-    "src/loreloop/cli.py": "1a79d1302cdd12123e1d53ca6e00ef1c748758c17b75c56ccd20bb157d00383e",
-    "src/loreloop/companion.py": "18659ff229eca288e1770fd0103fc4f507f99341acd5a8eabb878ead21dbf9c8",
+    "src/loreloop/cli.py": "08b1db3f5e63e87c9a20edcb2087b057c0e898ee79278db97517c4a1a1c144f8",
+    "src/loreloop/companion.py": "b82dc5c9fe0633b58e6d3608e0e06f96f50a0bb932b28db1135d9a1855c6638f",
     "src/loreloop/delegate/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "src/loreloop/delegate/context_pack.py": "1376974148eee69cfccb28f82fe77bc9479668c80b41e676bbb188574af2d684",
     "src/loreloop/delegate/expand.py": "d95eabc5d6edfe45ee2ff6096c64ad8ca1a68b468b4dc1fc5f97dff8fb4d2c5a",
@@ -416,7 +416,7 @@
     "src/loreloop/knowledge/authoritative_detector_python_routes.py": "e6160d623812af80595ead6231791670a0f1649d5284a3d870c6989ebd1e47f5",
     "src/loreloop/knowledge/authoritative_detector_rust.py": "2e8445502b96a3e39bc1f71a555aa3c21b6e2f8568fc9f46ea81ea69345e1314",
     "src/loreloop/knowledge/authoritative_detector_sql.py": "539a3a055bde3945c8f7d90a1c853c44d67a39a14fa0524f5a2e10d6407ef412",
-    "src/loreloop/knowledge/authoritative_detector_tests.py": "a4dcb8f8b26add3f572b40898cdfcac04c5e9b8cf734edff8f467da86cc31ed3",
+    "src/loreloop/knowledge/authoritative_detector_tests.py": "6d497c39b170747ea55bf504d878792fb043e893e7db897e8bb604afb48bf27c",
     "src/loreloop/knowledge/authoritative_detector_typeorm.py": "84ef4d2e92c3e120e053f77b457bc439210ce856a81b816d249c19636f1a8141",
     "src/loreloop/knowledge/authoritative_detector_typescript.py": "5c5dfefeebf4db8aa5972e2660919a299588b8db7d593e68ea03cf60bcdbdaf5",
     "src/loreloop/knowledge/authoritative_detector_ui.py": "1ad3ae0dbe8ec0b48f8e607d2a3504c857f2ad2557ca275b21dfbdfa6913eb31",
@@ -438,10 +438,11 @@
     "src/loreloop/knowledge/authoritative_semantic.py": "a1eceb460b01f9aa8d2a67be6d7a154d7f4e81f7fc08ca46a5d2346be526abc5",
     "src/loreloop/knowledge/authoritative_semantic_model.py": "314e8cd7724ca6517f701d20e598065a9089fce140f7b9828745e26b2fd91e44",
     "src/loreloop/knowledge/authoritative_semantic_records.py": "6c3c3c2459117a6d1850ea2282a35eb6e1c14b2847042dc3f965bdc5ebf6778c",
-    "src/loreloop/knowledge/authoritative_source.py": "ee4d3442bdc2bf0028ab46e616dcb89ea10e456bfcafeec7e1ddbbeb81199683",
+    "src/loreloop/knowledge/authoritative_source.py": "ba76c2a64668081eee447c5a7243ecfab6797020d4d68a1debab8bcd0d252292",
     "src/loreloop/knowledge/authoritative_trust.py": "274c4810739f0ddad7bb49a81f9367be06752c00cf3c23953e1daec88872eb0a",
     "src/loreloop/knowledge/authoritative_types.py": "29651882f39d7a2bde26c4f4401e42065e6a840fec24b64ce0a90538949a65b7",
     "src/loreloop/knowledge/authoritative_web_input.py": "4421530fa6b8c2123152e1d0fcfb290106116b4ca20dcbce04298857dfc09139",
+    "src/loreloop/knowledge/authoritative_web_test_input.py": "83d149930a8d4520e03005d73242847294984ea122321cf3649514fda79d39cc",
     "src/loreloop/knowledge/code_reverse.py": "54cd56cf4857bd85b8b960cc86fb762436727c48ef38e59511caa1e858b30bdd",
     "src/loreloop/knowledge/endorsement.py": "2f02d2e7dcf7d3f3c37154dcda3d4dee55102bd921bc1429883bd495e982c5dd",
     "src/loreloop/knowledge/harvest.py": "4d3b349971886996be262f0dfb7968f13d807d473a4809b468aac8eb1d3d18f6",
@@ -457,13 +458,15 @@
     "src/loreloop/webexplore/actions.py": "df2f78aa25316996ed8821c99fe85ed05494576272db9447c98f7d9763aa3d50",
     "src/loreloop/webexplore/browser.py": "aff2222918237786a09e3d45d29ed60a53eb14e9cdd13e8c81b836022a4ce1f7",
     "src/loreloop/webexplore/explorer.py": "f0fb5bc2d36e65b0c044a90747e57d6eff50be5a5c19f428feb2f4fe52d27f6e",
+    "src/loreloop/webexplore/recorder.py": "7225310777b46742c989693c33e7d2befdf2e9d3446fc48bbe20de991f5af6bc",
+    "src/loreloop/webexplore/scenarios.py": "88922842347776a582c4a3ed4276a0a4efe4587779c20cafbaa7edc7559cb990",
     "src/loreloop/webexplore/verify.py": "f28444a3424c3b708217ba11affdeef4374883fc2bb334ca15d001e1669580a9",
     "src/loreloop/webexplore/web_reverse.py": "2f2eb1e5675d9174e2c4235b60407bf2adb828a6cd0635d5e3591f267200e3d5"
   },
   "status": "passed",
-  "tracked_file_count": 253,
+  "tracked_file_count": 257,
   "wheel": {
-    "bytes": 257836,
+    "bytes": 274027,
     "entries": [
       "loreloop-0.1.0.dist-info/METADATA",
       "loreloop-0.1.0.dist-info/RECORD",
@@ -546,6 +549,7 @@
       "loreloop/knowledge/authoritative_trust.py",
       "loreloop/knowledge/authoritative_types.py",
       "loreloop/knowledge/authoritative_web_input.py",
+      "loreloop/knowledge/authoritative_web_test_input.py",
       "loreloop/knowledge/code_reverse.py",
       "loreloop/knowledge/endorsement.py",
       "loreloop/knowledge/harvest.py",
@@ -561,10 +565,12 @@
       "loreloop/webexplore/actions.py",
       "loreloop/webexplore/browser.py",
       "loreloop/webexplore/explorer.py",
+      "loreloop/webexplore/recorder.py",
+      "loreloop/webexplore/scenarios.py",
       "loreloop/webexplore/verify.py",
       "loreloop/webexplore/web_reverse.py"
     ],
     "path": "artifacts/loreloop-0.1.0-py3-none-any.whl",
-    "sha256": "1740dd00f8aec5d0d3ebf1a98f51479ae63b48becda8a0824d3a34e2ec63e16f"
+    "sha256": "1eb8715e5e351b57ce7a3044f944b16a668ab329b6dfe66c266e15edd867f829"
   }
 }

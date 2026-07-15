@@ -1,0 +1,10 @@
+$ uv pip install --python /tmp/loreloop-authoritative-proof-v7w5y0nj/wheel-venv/bin/python /media/vdc/code/ai/loreloop/verification/authoritative_export/results/e1bb1b5/artifacts/loreloop-0.1.0-py3-none-any.whl
+
+[stdout]
+
+[stderr]
+Using Python 3.11.15 environment at: /tmp/loreloop-authoritative-proof-v7w5y0nj/wheel-venv
+Resolved 1 package in 5ms
+Prepared 1 package in 19ms
+Installed 1 package in 8ms
+ + loreloop==0.1.0 (from file:///media/vdc/code/ai/loreloop/verification/authoritative_export/results/e1bb1b5/artifacts/loreloop-0.1.0-py3-none-any.whl)
