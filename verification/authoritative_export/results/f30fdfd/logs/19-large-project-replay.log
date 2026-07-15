@@ -1,4 +1,4 @@
-$ /media/vdc/code/ai/loreloop/.venv/bin/python -m loreloop.cli knowledge replay /tmp/loreloop-authoritative-proof-fy33sw42/dogfood-knowledge.zip
+$ /media/vdc/code/ai/loreloop/.venv/bin/python -m loreloop.cli knowledge replay /tmp/loreloop-authoritative-proof-44sexz4i/dogfood-knowledge.zip
 
 [stdout]
 Capsule replay: no_key

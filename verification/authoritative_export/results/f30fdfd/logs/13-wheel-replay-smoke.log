@@ -1,0 +1,10 @@
+$ /tmp/loreloop-authoritative-proof-44sexz4i/wheel-venv/bin/loreloop knowledge replay /tmp/loreloop-authoritative-proof-44sexz4i/wheel-smoke.zip
+
+[stdout]
+Capsule replay: no_key
+  package_id: c07c483ff30c03c26b6290c49c7de97d3da935c7dffa073f0ff1eda141a95ba9
+  semantic_core_sha256: d03e8f34aa89dce6842911f4bce1b42bfc0b5a83bc482b64c91d5ee8263b9b68
+  capsule_sha256: c4e2ae093b3b750405e36ad3da6cdb811a42004547c6f7b817d6f937581747c9
+  documents: 7
+
+[stderr]

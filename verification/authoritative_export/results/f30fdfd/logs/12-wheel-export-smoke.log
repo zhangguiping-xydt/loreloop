@@ -1,7 +1,7 @@
-$ /tmp/loreloop-authoritative-proof-fy33sw42/wheel-venv/bin/loreloop knowledge export --format package --output /tmp/loreloop-authoritative-proof-fy33sw42/wheel-smoke.zip
+$ /tmp/loreloop-authoritative-proof-44sexz4i/wheel-venv/bin/loreloop knowledge export --format package --output /tmp/loreloop-authoritative-proof-44sexz4i/wheel-smoke.zip
 
 [stdout]
-exported 7 reverse-engineered documents to ZIP package /tmp/loreloop-authoritative-proof-fy33sw42/wheel-smoke.zip
+exported 7 reverse-engineered documents to ZIP package /tmp/loreloop-authoritative-proof-44sexz4i/wheel-smoke.zip
 
 [stderr]
 capturing clean Git source snapshot...

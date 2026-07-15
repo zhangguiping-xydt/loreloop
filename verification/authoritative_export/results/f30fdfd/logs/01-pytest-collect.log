@@ -384,6 +384,7 @@ tests/test_federation.py::test_missing_foreign_key_degrades_trust_without_creati
 tests/test_federation.py::test_rejected_foreign_entries_are_not_returned
 tests/test_federation.py::test_search_selects_project_by_alias_and_reports_foreign_trust
 tests/test_federation.py::test_search_tag_without_all_selects_tagged_projects
+tests/test_federation.py::test_local_search_uses_retrieval_only_expansion
 tests/test_federation.py::test_federated_ranking_uses_one_corpus_even_when_entry_ids_collide
 tests/test_federation.py::test_import_is_always_born_draft_with_foreign_digest_provenance
 tests/test_federation.py::test_cli_reports_corrupt_registry_without_traceback
@@ -628,6 +629,6 @@ tests/test_webexplore.py::test_verify_script_records_replayable_artifacts
 tests/test_webexplore.py::test_verify_script_rejects_cross_origin_final_observation
 tests/test_webexplore.py::test_verify_script_failure_records_no_final_snapshot
 
-626 tests collected in 2.74s
+627 tests collected in 4.42s
 
 [stderr]
