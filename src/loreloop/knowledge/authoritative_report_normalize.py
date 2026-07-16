@@ -109,6 +109,17 @@ def normalize_detection_report(report: DetectionReport) -> DetectionReport:
                 item.scope,
             ),
         ),
+        implementation_facts=_unique(
+            report.implementation_facts,
+            lambda item: (
+                item.source.repository_alias,
+                item.source.path,
+                item.subject,
+                item.predicate,
+                item.object,
+                item.detail,
+            ),
+        ),
         requirements=_unique(
             report.requirements,
             lambda item: (

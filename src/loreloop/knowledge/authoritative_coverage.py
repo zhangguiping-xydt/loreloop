@@ -92,6 +92,7 @@ def render_coverage_summary(
                 f"governed_web={len(report.web_knowledge)}",
                 f"configurations={len(report.configurations)}",
                 f"dependencies={len(report.dependencies)}",
+                f"implementation_facts={len(report.implementation_facts)}",
                 f"tables={len(report.tables)}",
                 f"indexes={len(report.indexes)}",
                 f"source_issues={len(report.source_issues)}",

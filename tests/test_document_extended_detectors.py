@@ -170,6 +170,51 @@ app.MapPost("/users", CreateUser);
     assert [item.name for item in report.dependencies] == ["Microsoft.AspNetCore.Mvc"]
 
 
+def test_csharp_detector_extracts_legacy_ui_asmx_config_and_data_access_facts() -> None:
+    source = r'''
+using System.Web.Services;
+public partial class EmployeeForm : System.Windows.Forms.Form {
+    string keySync = "SyncEmpSpan";
+    public void btnSave_Click(object sender, EventArgs e) {
+        var current = db.Select("AC_ATM_USER_INFO", "*");
+        db.Insert("AC_ATM_DATA_STATE");
+    }
+    [WebMethod]
+    public string SyncEmployee(string employeeId) { return employeeId; }
+}
+'''
+
+    report = detect_extended_source(source, ".", "Client/EmployeeForm.asmx.cs")
+
+    assert [(item.name, item.entry, item.actions) for item in report.ui_surfaces] == [
+        ("EmployeeForm", "Client/EmployeeForm.asmx.cs", ("btnSave_Click",))
+    ]
+    assert [(item.method, item.name, item.return_type) for item in report.interfaces] == [
+        ("SOAP", "SyncEmployee", "string")
+    ]
+    assert [item.key for item in report.configurations] == ["SyncEmpSpan"]
+    assert {(item.predicate, item.object) for item in report.implementation_facts} == {
+        ("reads", "AC_ATM_USER_INFO"),
+        ("writes", "AC_ATM_DATA_STATE"),
+        ("hosts", "ASMX Web Service"),
+    }
+
+
+def test_csharp_web_service_proxy_is_not_reported_as_a_host() -> None:
+    source = r'''
+using System.Web.Services;
+public class ObjectHelperProxy {
+    private System.Web.Services.Protocols.SoapHttpClientProtocol client;
+}
+'''
+
+    report = detect_extended_source(
+        source, ".", "Center/Business/Web References/ObjectHelper/Reference.cs"
+    )
+
+    assert not [item for item in report.implementation_facts if item.predicate == "hosts"]
+
+
 def test_platform_detector_extracts_docker_compose_and_kubernetes_facts() -> None:
     dockerfile = """
 FROM python:3.13-slim AS runtime
@@ -244,6 +289,39 @@ spec:
     assert next(item for item in kube_report.configurations if item.key == "API_TOKEN").required
     assert [(item.method, item.path) for item in kube_report.interfaces] == [("ANY", "/api")]
     assert "must-not-leak" not in repr((docker_report, compose_report))
+
+
+def test_dotnet_detector_extracts_output_framework_references_and_build_targets() -> None:
+    project = '''
+<Project>
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
+    <AssemblyName>Attendance.Client</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup><Reference Include="DevExpress.Data, Version=1.0.0.0" /></ItemGroup>
+</Project>
+'''
+    build = '''
+<project>
+  <property name="BuildMode" value="release" />
+  <target name="compile" />
+</project>
+'''
+
+    project_report = detect_extended_source(project, ".", "Client/Client.csproj")
+    build_report = detect_extended_source(build, ".", "Build/Build.XML")
+
+    assert [item.key for item in project_report.configurations] == ["TargetFrameworkVersion"]
+    assert [item.name for item in project_report.dependencies] == ["DevExpress"]
+    assert [(item.predicate, item.object) for item in project_report.implementation_facts] == [
+        ("hosts", "desktop executable")
+    ]
+    assert [item.key for item in build_report.configurations] == ["BuildMode"]
+    assert [(item.predicate, item.object) for item in build_report.implementation_facts] == [
+        ("configures", "build target:compile")
+    ]
+
 
 
 def test_dockerfile_ignores_multiline_build_commands() -> None:

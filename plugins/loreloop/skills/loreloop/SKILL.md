@@ -107,20 +107,21 @@ evidence. Bounded UTF-8 damage is reported in the generated detailed design;
 facts anchored to damaged lines are excluded. Never rewrite source encodings
 merely to make an export pass.
 
-Search a package directly when the operator asks a question about an exported
-baseline:
+Search the replay-verified SemanticCore Agent view when the operator asks a
+question about an exported baseline:
 
 ```text
 loreloop knowledge search "<query>" --package baseline
 ```
 
 Do not unpack or import the ZIP merely to search it. Package search replays the
-Capsule first and then ranks the bound Markdown rows.
+Capsule first and then ranks the exact Agent-view records.
 
-Every project-knowledge hit must point to a human Markdown file and section.
-Do not treat a Capsule-only fact as operator-visible project knowledge. If a
-search result cannot be located in the human documents, report the package as
-inconsistent instead of relying on hidden machine content.
+Every hit is mapped to its owning human document domain and exact source
+evidence. Do not claim that an atomic Agent fact appears verbatim in the human
+Markdown; use the human view for narrative review and the Agent view for
+precise code, interface, field, and symbol lookup. Replay, not text
+duplication, proves that both views came from the same SemanticCore.
 
 If the operator's wording may differ from the project vocabulary, or the first
 search returns no useful result, derive 5-15 concise retrieval terms in the

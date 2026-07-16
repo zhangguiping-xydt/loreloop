@@ -143,6 +143,7 @@ class CapsuleReplayResult:
 class ReplayedCapsuleExport:
     result: CapsuleReplayResult
     files: Mapping[str, bytes]
+    core: SemanticCore
 
 
 def _mapping(value: JsonValue | None, label: str) -> Mapping[str, JsonValue]:
@@ -351,8 +352,8 @@ def _semantic_records(
 
 def _validate_core(root: Mapping[str, JsonValue]) -> SemanticCore:
     _keys(root, _ROOT_KEYS, "capsule")
-    if root.get("schema_version") not in {2, 3}:
-        raise CapsuleReplayError("unsupported capsule schema version; expected version 2 or 3")
+    if root.get("schema_version") not in {2, 3, 4, 5}:
+        raise CapsuleReplayError("unsupported capsule schema version; expected version 2, 3, or 4")
     semantic = _mapping(root.get("semantic_core"), "semantic core")
     if frozenset(semantic) in _LEGACY_SEMANTIC_KEY_SETS:
         raise CapsuleReplayError(
@@ -510,13 +511,20 @@ def _validate_documents(
                 raise CapsuleReplayError(
                     f"document AST is not the deterministic SemanticCore projection: {filename}"
                 )
-            expected_markdown = render_capsule_ast(cast(JsonValue, ast), filenames).encode()
+            expected_markdown = render_capsule_ast(
+                cast(JsonValue, ast),
+                filenames,
+                include_agent_appendix=True,
+                human_view_version=1,
+            ).encode()
         else:
             if expected_ast_digest != stored_ast_digest:
                 raise CapsuleReplayError(f"document AST digest mismatch: {filename}")
             expected_markdown = render_document_ast(
                 expected_document,
                 filenames,
+                include_agent_appendix=schema_version == 3,
+                human_view_version=2 if schema_version == 5 else 1,
             ).content.encode()
         markdown = files[filename]
         if hashlib.sha256(markdown).hexdigest() != _sha256(
@@ -596,6 +604,7 @@ def _load_replayed_capsule_files(
             mode,
         ),
         files,
+        core,
     )
 
 

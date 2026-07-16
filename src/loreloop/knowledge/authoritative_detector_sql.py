@@ -9,6 +9,7 @@ from .authoritative_records import (
     DatabaseColumn,
     DatabaseIndex,
     DatabaseTable,
+    DependencyRecord,
     DetectionError,
     DetectionReport,
     ForeignKeyRecord,
@@ -47,6 +48,10 @@ _CONSTRAINT: Final = re.compile(
     r"\s+(?:PRIMARY\s+KEY|NOT\s+NULL|NULL|UNIQUE|DEFAULT|REFERENCES|CHECK|COLLATE)\b",
     re.IGNORECASE,
 )
+_DATABASE_LINK: Final = re.compile(
+    rf"^\s*CREATE\s+(?:SHARED\s+|PUBLIC\s+)?DATABASE\s+LINK\s+(?P<name>{_IDENT})",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _name(raw: str) -> str:
@@ -59,6 +64,52 @@ def _name(raw: str) -> str:
 
 def _names(raw: str) -> tuple[str, ...]:
     return tuple(_name(item.strip()) for item in raw.split(",") if item.strip())
+
+
+def _mask_sql_comments(sql: str) -> str:
+    """Mask comments without changing offsets or treating comment markers in strings as syntax."""
+    characters = list(sql)
+    quote: str | None = None
+    index = 0
+    while index < len(characters):
+        character = characters[index]
+        if quote is not None:
+            if character == quote:
+                if index + 1 < len(characters) and characters[index + 1] == quote:
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+            continue
+        if character in {"'", '"', "`"}:
+            quote = character
+            index += 1
+            continue
+        if character == "-" and index + 1 < len(characters) and characters[index + 1] == "-":
+            while index < len(characters) and characters[index] not in {"\r", "\n"}:
+                characters[index] = " "
+                index += 1
+            continue
+        if character == "/" and index + 1 < len(characters) and characters[index + 1] == "*":
+            characters[index] = " "
+            characters[index + 1] = " "
+            index += 2
+            while index < len(characters):
+                if (
+                    characters[index] == "*"
+                    and index + 1 < len(characters)
+                    and characters[index + 1] == "/"
+                ):
+                    characters[index] = " "
+                    characters[index + 1] = " "
+                    index += 2
+                    break
+                if characters[index] not in {"\r", "\n"}:
+                    characters[index] = " "
+                index += 1
+            continue
+        index += 1
+    return "".join(characters)
 
 
 def _closing_parenthesis(sql: str, opening: int) -> int:
@@ -197,6 +248,7 @@ def detect_sql_source(
     base_line: int = 1,
 ) -> DetectionReport:
     """Extract explicit tables, columns, keys, constraints, and indexes."""
+    sql = _mask_sql_comments(sql)
     tables: list[DatabaseTable] = []
     inline_indexes: list[DatabaseIndex] = []
     position = 0
@@ -222,4 +274,17 @@ def detect_sql_source(
             for match in _CREATE_INDEX.finditer(sql)
         ),
     )
-    return DetectionReport(tables=tuple(tables), indexes=indexes)
+    dependencies = tuple(
+        DependencyRecord(
+            _name(match.group("name")),
+            None,
+            "database_link",
+            SourceRef(
+                repository_alias,
+                path,
+                base_line + sql[: match.start()].count("\n"),
+            ),
+        )
+        for match in _DATABASE_LINK.finditer(sql)
+    )
+    return DetectionReport(tables=tuple(tables), indexes=indexes, dependencies=dependencies)

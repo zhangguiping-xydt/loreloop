@@ -102,12 +102,15 @@ evidence. Bounded UTF-8 damage is reported in the generated detailed design;
 facts anchored to damaged lines are excluded. Never rewrite source encodings
 merely to make an export pass.
 
-Search the replay-verified package without extracting it:
+Search the replay-verified SemanticCore Agent view without extracting the
+package:
 
     loreloop knowledge search "<query>" --package baseline
 
-Every project-knowledge hit must point to a human Markdown file and section.
-Do not treat a Capsule-only fact as operator-visible project knowledge.
+Every hit is an exact Agent-view fact mapped to its owning human document
+domain and source evidence. Do not claim that an atomic Agent fact appears
+verbatim in the human Markdown; use the human view for narrative review and
+the Agent view for precise code, interface, field, and symbol lookup.
 
 If the question uses different wording, derive 5-15 concise synonyms,
 translations, abbreviations, and likely code identifiers in this current host

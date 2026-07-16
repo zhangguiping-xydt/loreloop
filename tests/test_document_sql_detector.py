@@ -83,6 +83,31 @@ def test_sql_detector_accepts_legacy_unquoted_unicode_column_names() -> None:
     assert report.tables[0].primary_key == ("员工编号",)
 
 
+def test_sql_detector_records_database_links_as_architecture_dependencies() -> None:
+    sql = "CREATE PUBLIC DATABASE LINK hrdb.us.oracle.com CONNECT TO app USING 'HRDB';\n"
+
+    report = detect_sql_source(sql, ".", "DB/DB_LINKs/hrdb.sql")
+
+    assert [(item.name, item.scope) for item in report.dependencies] == [
+        ("hrdb.us.oracle.com", "database_link")
+    ]
+
+
+def test_sql_detector_ignores_commented_and_granted_database_link_phrases() -> None:
+    sql = """
+    -- Create database link
+    CREATE DATABASE LINK ATM.US.ORACLE.COM CONNECT TO app USING 'ATM';
+    /* CREATE DATABASE LINK ignored.example CONNECT TO app USING 'IGNORED'; */
+    GRANT CREATE DATABASE LINK TO ATM;
+    """
+
+    report = detect_sql_source(sql, ".", "DB/DB_LINKs/atm.sql")
+
+    assert [(item.name, item.scope) for item in report.dependencies] == [
+        ("ATM.US.ORACLE.COM", "database_link")
+    ]
+
+
 def test_sql_detector_rejects_unclosed_explicit_schema() -> None:
     # Given: source claims to create a table but the schema is incomplete.
     # When / Then: applicability fails closed instead of silently omitting the table.

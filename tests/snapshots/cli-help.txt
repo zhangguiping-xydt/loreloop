@@ -213,7 +213,7 @@ usage: loreloop init [-h] [--skill | --no-skill]
 
 options:
   -h, --help  show this help message and exit
-  --skill     install the companion skill without asking
+  --skill     install or refresh the companion skill without asking
   --no-skill  skip companion skill installation
 
 $ loreloop demo --help

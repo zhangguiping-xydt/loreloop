@@ -111,7 +111,8 @@ def create_user(name: str) -> dict[str, str]:
     user_guide = (target / "demo-用户手册.md").read_text(encoding="utf-8")
     assert "POST" in interface and "/users" in interface and "name:str*" in interface
     assert "<script>" not in interface and "&lt;script&gt;" in interface
-    assert "## 源码能力域" in capabilities and capabilities != interface
+    assert "## 系统能力概览" in capabilities and capabilities != interface
+    assert "## 已实现功能清单" in capabilities
     assert "仓库" in interface and ":app.py#L" in interface
     assert "users" in database and "id" in database and "name" in database
     assert "## ER 关系图" in database and "flowchart LR" in database
@@ -123,9 +124,10 @@ def create_user(name: str) -> dict[str, str]:
     assert "## HTTP 接口" not in user_guide
     assert requirements != user_guide
     assert "UsersPage" in user_guide and "click:createUser" in user_guide
-    assert interface.index("## HTTP 接口") < interface.index("## 覆盖缺口与未确认事项")
+    assert interface.index("## HTTP 接口") < interface.index("## 契约可信边界")
     assert "## 证据附录：完整可召回事实" not in interface
-    assert "全部可召回事实已经进入正文" in interface
+    assert "证据化人类视图" in interface
+    assert "Capsule Agent 视图" in interface
     assert "未发现结构化错误码或异常响应契约" in interface
     acceptance = (target / "demo-验收规格.md").read_text(encoding="utf-8")
     assert "创建成功后返回用户标识" in acceptance
@@ -185,9 +187,9 @@ def test_cli_docs_export_emits_only_six_documents_without_optional_evidence(
     requirements = (target / "library-需求规格.md").read_text(encoding="utf-8")
     user_guide = (target / "library-用户手册.md").read_text(encoding="utf-8")
     acceptance = (target / "library-验收规格.md").read_text(encoding="utf-8")
-    assert "不能作为完整业务需求规格" in requirements
-    assert "无法形成可执行用户操作手册" in user_guide
-    assert "不能用于正式项目验收" in acceptance
+    assert "不能替代未来需求决策" in requirements
+    assert "当前没有可确认的 UI/CLI 入口" in user_guide
+    assert "当前没有提交态正式验收条款" in acceptance
     assert len({requirements, user_guide, acceptance}) == 3
 
 
@@ -417,10 +419,16 @@ def test_cli_docs_export_can_capture_exact_working_tree_without_changing_git(
     detailed = (target / "demo-详细设计.md").read_text(encoding="utf-8")
     assert "可验证工作树快照" in detailed
     assert "工作树" in detailed
-    assert "| working | working() |" in detailed
-    assert "| extra | extra() |" in detailed
+    assert "| working | working() |" not in detailed
+    assert "| extra | extra() |" not in detailed
     assert "| original | original() |" not in detailed
     assert "| staged | staged() |" not in detailed
+    assert main(["knowledge", "search", "working", "--package", str(target)]) == 0
+    searched = capsys.readouterr().out
+    assert "working" in searched
+    assert "demo-详细设计.md#Agent视图" in searched
+    assert main(["knowledge", "search", "extra", "--package", str(target)]) == 0
+    assert "extra" in capsys.readouterr().out
     assert main(["knowledge", "replay", str(target)]) == 0
     status_after = subprocess.run(
         ["git", "status", "--porcelain=v1"],
@@ -443,6 +451,7 @@ def test_cli_docs_export_can_capture_exact_working_tree_without_changing_git(
 def test_working_tree_export_excludes_its_default_baseline_on_regeneration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     repo = _repository(tmp_path / "demo", {"app.py": "def committed(): return 1\n"})
     _ = (repo / "app.py").write_text("def first(): return 1\n", encoding="utf-8")
@@ -482,8 +491,12 @@ def test_working_tree_export_excludes_its_default_baseline_on_regeneration(
     )
 
     detailed = (repo / "baseline/demo-详细设计.md").read_text(encoding="utf-8")
-    assert "| second | second() |" in detailed
+    assert "| second | second() |" not in detailed
     assert "| first | first() |" not in detailed
+    assert main(["knowledge", "search", "second", "--package", "baseline"]) == 0
+    searched = capsys.readouterr().out
+    assert "second" in searched
+    assert "demo-详细设计.md#Agent视图" in searched
     assert main(["knowledge", "replay", "baseline"]) == 0
 
 

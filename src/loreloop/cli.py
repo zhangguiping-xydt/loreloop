@@ -2016,7 +2016,10 @@ def _search_baseline_package(args: argparse.Namespace) -> int:
             "--tag applies to registered projects and cannot be combined with --package",
             "remove --tag and retry the package search",
         )
-    print("verifying baseline and building a transient search index...", file=sys.stderr)
+    print(
+        "verifying baseline and building a transient Agent-view index...",
+        file=sys.stderr,
+    )
     try:
         hits = search_baseline(
             Path(args.package),

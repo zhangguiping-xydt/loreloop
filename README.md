@@ -186,7 +186,8 @@ baseline/
 
 Six core documents are always produced. Interface and database documents are
 added only when the source supports them. Deterministic detectors currently
-cover Python, TypeScript/JavaScript, Vue SFCs, Java/Kotlin, Go, Rust, C#, SQL,
+cover Python, TypeScript/JavaScript, Vue SFCs, Java/Kotlin, Go, Rust, C#, legacy
+.NET project/build metadata, WinForms/ASP.NET code-behind, ASMX WebMethods, SQL,
 SQLAlchemy, Django ORM, Prisma, TypeORM, common migrations, OpenAPI/Swagger,
 GraphQL, protobuf, Docker, Compose, and Kubernetes. The CLI prints repository,
 detector, fact, document, and unsupported-suffix coverage.
@@ -196,12 +197,16 @@ The normalized `--project-name` is part of the SemanticCore identity, so names,
 ASTs, Markdown, and package IDs are one deterministic projection rather than
 independent labels.
 
-New exports use the compact Capsule v3 layout: SemanticCore keeps the proof
-facts, while each deterministic pre-AST is stored by digest instead of being
-duplicated in full. LoreLoop still replays older v2 packages that embedded the
-ASTs. Every searchable project fact is also rendered in one human document;
-large class, dependency, UI, test, and constraint inventories live in folded
-`完整知识索引` sections rather than in a hidden machine-only corpus.
+New exports use the evidence-backed split-view Capsule v5 layout. The Markdown
+files are a separate human semantic view: deployable units, implemented
+capabilities, triggers, roles, data reads/writes, UI areas, acceptance
+candidates, contracts, gaps, and evidence links.
+The Capsule SemanticCore is the separate Agent view: exact atomic records,
+identities, values, and source bindings used for retrieval. Both projections
+come from the same SemanticCore; replay verifies every human Markdown digest,
+the deterministic pre-AST digests, and the complete Agent record set. LoreLoop
+still replays v4 packages with the earlier split-view renderer and v2/v3
+packages whose Agent inventory was embedded in human Markdown appendices.
 
 The Capsule can prove the package closure on a machine with no source, database,
 or key:
@@ -211,8 +216,8 @@ loreloop knowledge replay baseline
 ```
 
 Search the verified package directly without extraction or importing it into a
-project store. Retrieval ranks the replay-verified human documents themselves,
-so every hit points to the same filename and section a reviewer can open:
+project store. Retrieval ranks the replay-verified SemanticCore Agent view and
+maps every hit back to its owning human document family and source evidence:
 
 ```bash
 loreloop knowledge search "fund ratio" --package baseline

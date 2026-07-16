@@ -170,6 +170,22 @@ def build_semantic_records(
             item.source,
             {"name": item.name, "requirement": item.requirement, "scope": item.scope},
         )
+    for item in report.implementation_facts:
+        _add(
+            context,
+            records,
+            evidence,
+            "FACT",
+            DocumentRowKind.IMPLEMENTATION_FACT,
+            item.predicate,
+            item.source,
+            {
+                "subject": item.subject,
+                "predicate": item.predicate,
+                "object": item.object,
+                "detail": item.detail,
+            },
+        )
     for item in report.requirements:
         _add(
             context,

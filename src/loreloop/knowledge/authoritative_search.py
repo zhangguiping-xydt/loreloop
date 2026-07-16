@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..delegate.context_pack import _terms, rank_entries
+from .authoritative_document_ast import build_document_ast_set
+from .authoritative_document_routes import CANONICAL_DOCUMENT_OWNER, SECTION_ROUTES
 from .authoritative_capsule_replay import CapsuleReplayError, load_replayed_capsule_export
+from .authoritative_semantic_model import SemanticCore
 from .model import Channel, Entry, Kind, Source
 
 MAX_SEARCH_RECORDS = 200_000
@@ -173,6 +176,83 @@ def _search_entries(files: dict[str, bytes], filenames: tuple[str, ...]) -> list
     return entries
 
 
+def _agent_search_entries(core: SemanticCore) -> list[Entry]:
+    """Build the transient Agent view directly from the replayed SemanticCore."""
+    document_set = build_document_ast_set(core)
+    family_paths = {
+        (document.required_family or document.optional_family): document.path
+        for document in document_set.documents
+    }
+    evidence = {item.evidence_id: item for item in core.evidence}
+    entries: list[Entry] = []
+    total_bytes = 0
+    for record in core.records:
+        owner = CANONICAL_DOCUMENT_OWNER[record.row_kind]
+        filename = family_paths.get(owner)
+        if filename is None:
+            raise BaselineSearchError(
+                f"Agent record lacks its replay-verified human document owner: {record.record_id}"
+            )
+        source = evidence.get(record.evidence_id)
+        if source is None:
+            raise BaselineSearchError(
+                f"Agent record lacks replay-verified source evidence: {record.record_id}"
+            )
+        values = {
+            projected.pointer.removeprefix("/"): projected.value for projected in record.values
+        }
+        preferred = next(
+            (
+                str(values[key])
+                for key in (
+                    "statement",
+                    "description",
+                    "signature",
+                    "title",
+                    "name",
+                    "qualified_name",
+                    "path",
+                    "table",
+                    "external_id",
+                    "issue",
+                )
+                if values.get(key) not in {None, ""}
+            ),
+            record.row_kind.value,
+        )
+        lines = [
+            f"类型: {record.row_kind.value}",
+            f"事实: {preferred}",
+            *(f"{key}: {value}" for key, value in values.items()),
+            (f"源码: {source.source.repository_alias}:{source.source.path}#L{source.source.line}"),
+        ]
+        content = "\n".join(dict.fromkeys(lines))
+        total_bytes += len(content.encode("utf-8"))
+        if total_bytes > MAX_SEARCH_TEXT_BYTES:
+            raise BaselineSearchError(
+                f"baseline Agent view exceeds {MAX_SEARCH_TEXT_BYTES} searchable bytes"
+            )
+        if len(entries) >= MAX_SEARCH_RECORDS:
+            raise BaselineSearchError(
+                f"baseline Agent view exceeds {MAX_SEARCH_RECORDS} searchable records"
+            )
+        section = SECTION_ROUTES[record.row_kind][1]
+        entries.append(
+            Entry(
+                id=record.record_id,
+                title=f"{filename} Agent视图 {section} {preferred}",
+                content=content,
+                kind=Kind.BEHAVIOR,
+                source=Source(
+                    Channel.EVIDENCE,
+                    filename,
+                    symbol=f"Agent视图 · {section}",
+                ),
+            )
+        )
+    return entries
+
+
 def _best_snippet(content: str, query: str, expansion: str) -> str:
     """Choose the matching visible line instead of truncating a whole section."""
     lines = [
@@ -191,6 +271,8 @@ def _best_snippet(content: str, query: str, expansion: str) -> str:
         line_terms = set(_terms(line))
         score = 4.0 * len(line_terms & original_terms)
         score += len(line_terms & expansion_terms)
+        if line.startswith("事实:"):
+            score += 10.0
         if query_folded and query_folded in line.casefold():
             score += 100.0
         return score, -len(line)
@@ -222,7 +304,7 @@ def search_baseline(
     limit: int = 10,
     expansion: str = "",
 ) -> tuple[BaselineSearchHit, ...]:
-    """Verify a package, then rank its Markdown rows without extracting it."""
+    """Verify a package, then rank its separate SemanticCore Agent view."""
     if limit < 1:
         raise BaselineSearchError("search limit must be at least 1")
     if not query.strip():
@@ -237,8 +319,7 @@ def search_baseline(
         bundle = load_replayed_capsule_export(export_path)
     except CapsuleReplayError as exc:
         raise BaselineSearchError(str(exc)) from exc
-    files = dict(bundle.files)
-    entries = _search_entries(files, bundle.result.documents)
+    entries = _agent_search_entries(bundle.core)
     ranked = rank_entries(
         query,
         entries,

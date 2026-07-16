@@ -49,11 +49,42 @@ def _document(document: DocumentAst) -> MarkdownDocument:
     )
 
 
-def render_document_ast(document: DocumentAst, paths: tuple[str, ...]) -> SourceDocument:
+def render_document_ast(
+    document: DocumentAst,
+    paths: tuple[str, ...],
+    *,
+    include_agent_appendix: bool = False,
+    human_view_version: int | None = None,
+) -> SourceDocument:
     """Render one validated AST without reading source or detector objects."""
-    return SourceDocument(document.path, render_markdown(_document(document), paths))
+    return SourceDocument(
+        document.path,
+        render_markdown(
+            _document(document),
+            paths,
+            include_agent_appendix=include_agent_appendix,
+            human_view_version=(
+                1
+                if human_view_version is None and include_agent_appendix
+                else human_view_version or 2
+            ),
+        ),
+    )
 
 
-def render_document_set(document_set: DocumentSet) -> tuple[SourceDocument, ...]:
+def render_document_set(
+    document_set: DocumentSet,
+    *,
+    include_agent_appendix: bool = False,
+    human_view_version: int | None = None,
+) -> tuple[SourceDocument, ...]:
     paths = tuple(document.path for document in document_set.documents)
-    return tuple(render_document_ast(document, paths) for document in document_set.documents)
+    return tuple(
+        render_document_ast(
+            document,
+            paths,
+            include_agent_appendix=include_agent_appendix,
+            human_view_version=human_view_version,
+        )
+        for document in document_set.documents
+    )

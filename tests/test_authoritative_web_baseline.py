@@ -280,7 +280,7 @@ def test_package_includes_governed_web_and_can_be_searched_without_a_store(
     )
 
     output = capsys.readouterr().out
-    assert "用户手册.md#Web 页面与行为观察" in output
+    assert "用户手册.md#Agent视图 · Web 页面与行为观察" in output
     assert "Observed behavior statement" in output
     assert not (isolated / ".loreloop").exists()
 
@@ -313,7 +313,7 @@ def test_package_includes_governed_web_and_can_be_searched_without_a_store(
     )
     expanded_capture = capsys.readouterr()
     expanded_output = expanded_capture.out
-    assert "用户手册.md#Web 页面与行为观察" in expanded_output
+    assert "用户手册.md#Agent视图 · Web 页面与行为观察" in expanded_output
     assert "Observed behavior statement" in expanded_output
     assert "low-confidence matches depend on --expand" in expanded_capture.err
     assert (

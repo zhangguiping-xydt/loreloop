@@ -484,5 +484,5 @@ def test_real_web_cli_loop_updates_and_searches_baseline(site, tmp_path):
         "Maximum file size upload limit 50MB",
     )
     assert "Maximum file size is 50MB." in searched.stdout
-    assert "verifying baseline and building a transient search index" in searched.stderr
+    assert "verifying baseline and building a transient Agent-view index" in searched.stderr
     assert not (isolated / ".loreloop").exists()

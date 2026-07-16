@@ -107,6 +107,15 @@ class DependencyRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class ImplementationFactRecord:
+    subject: str
+    predicate: Literal["reads", "writes", "hosts", "calls", "uses", "configures"]
+    object: str
+    detail: str | None
+    source: SourceRef
+
+
+@dataclass(frozen=True, slots=True)
 class RequirementRecord:
     external_id: str | None
     title: str | None
@@ -181,6 +190,7 @@ class DetectionReport:
     web_knowledge: tuple[WebKnowledgeRecord, ...] = ()
     configurations: tuple[ConfigurationRecord, ...] = ()
     dependencies: tuple[DependencyRecord, ...] = ()
+    implementation_facts: tuple[ImplementationFactRecord, ...] = ()
     requirements: tuple[RequirementRecord, ...] = ()
     acceptances: tuple[AcceptanceRecord, ...] = ()
     tables: tuple[DatabaseTable, ...] = ()
@@ -207,6 +217,9 @@ def merge_reports(*reports: DetectionReport) -> DetectionReport:
         web_knowledge=tuple(item for report in reports for item in report.web_knowledge),
         configurations=tuple(item for report in reports for item in report.configurations),
         dependencies=tuple(item for report in reports for item in report.dependencies),
+        implementation_facts=tuple(
+            item for report in reports for item in report.implementation_facts
+        ),
         requirements=tuple(item for report in reports for item in report.requirements),
         acceptances=tuple(item for report in reports for item in report.acceptances),
         tables=tuple(item for report in reports for item in report.tables),

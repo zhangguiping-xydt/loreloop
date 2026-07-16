@@ -6,6 +6,7 @@ from loreloop.knowledge.authoritative_records import (
     DatabaseTable,
     DependencyRecord,
     DetectionReport,
+    ImplementationFactRecord,
     InterfaceRecord,
     SourceRef,
 )
@@ -23,6 +24,10 @@ def test_normalization_keeps_one_real_source_for_repeated_semantic_fact() -> Non
         dependencies=(
             DependencyRecord("react", "^19", "typescript_import", first),
             DependencyRecord("react", "^19", "typescript_import", second),
+        ),
+        implementation_facts=(
+            ImplementationFactRecord("sync", "writes", "USERS", None, first),
+            ImplementationFactRecord("sync", "writes", "USERS", None, second),
         ),
         configurations=(
             ConfigurationRecord("API_URL", None, True, False, first),
@@ -51,6 +56,7 @@ def test_normalization_keeps_one_real_source_for_repeated_semantic_fact() -> Non
     assert normalized.dependencies == report.dependencies[:1]
     assert normalized.configurations == report.configurations[:1]
     assert normalized.interfaces == report.interfaces[:1]
+    assert normalized.implementation_facts == report.implementation_facts
     assert normalized.tables == report.tables[:1]
 
 

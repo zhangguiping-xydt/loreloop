@@ -63,7 +63,7 @@ def test_capsule_binds_core_full_ast_and_markdown_without_raw_git_or_secrets(
 
     # Then: portable closure has package/products but no raw source identity or secret bytes.
     assert core.package_id in capsule.content
-    assert '"schema_version":3' in capsule.content
+    assert '"schema_version":5' in capsule.content
     assert '"ast":' not in capsule.content
     assert len(capsule.content) < len(legacy_capsule.content)
     assert "must-not-leak" not in capsule.content

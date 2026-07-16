@@ -52,7 +52,7 @@ def export_dir(tmp_path: Path) -> Path:
         project_name="demo",
     )
     document_set = build_document_ast_set(core)
-    documents = render_document_set(document_set)
+    documents = render_document_set(document_set, include_agent_appendix=True)
     capsule = build_capsule(core, document_set, documents, schema_version=2)
     output = tmp_path / "export"
     output.mkdir()
@@ -91,7 +91,11 @@ def _reseal_document(
     ast = _ast(document)
     document["ast_sha256"] = hashlib.sha256(canon_v4(ast)).hexdigest()
     filenames = tuple(cast(str, item["filename"]) for item in _documents(payload))
-    markdown = render_capsule_ast(cast(JsonValue, ast), filenames)
+    markdown = render_capsule_ast(
+        cast(JsonValue, ast),
+        filenames,
+        include_agent_appendix=payload["schema_version"] in {2, 3},
+    )
     filename = cast(str, document["filename"])
     _ = (export_dir / filename).write_text(markdown, encoding="utf-8")
     document["markdown_sha256"] = hashlib.sha256(markdown.encode()).hexdigest()
@@ -108,6 +112,39 @@ def test_no_key_replay_proves_complete_package_closure(export_dir: Path) -> None
         result.capsule_sha256
         == hashlib.sha256((export_dir / CAPSULE_FILENAME).read_bytes()).hexdigest()
     )
+
+
+def test_schema_v4_replay_keeps_the_frozen_split_view_renderer(tmp_path: Path) -> None:
+    repo = tmp_path / "schema-v4-project"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.name", "LoreLoop Test")
+    _git(repo, "config", "user.email", "loreloop@example.invalid")
+    _ = (repo / "app.py").write_text(
+        '@app.get("/health")\ndef health(): return {"ok": True}\n', encoding="utf-8"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "initial")
+    snapshot = capture_source_snapshot(repo)
+    core = build_semantic_core(
+        snapshot,
+        read_snapshot_blobs(snapshot, repo),
+        detect_source_snapshot(snapshot, repo),
+        project_name="schema-v4",
+    )
+    document_set = build_document_ast_set(core)
+    documents = render_document_set(document_set, human_view_version=1)
+    capsule = build_capsule(core, document_set, documents, schema_version=4)
+    output = tmp_path / "schema-v4-export"
+    output.mkdir()
+    for document in documents:
+        _ = (output / document.filename).write_text(document.content, encoding="utf-8")
+    _ = (output / capsule.filename).write_text(capsule.content, encoding="utf-8")
+
+    result = replay_capsule_directory(output)
+
+    assert result.package_id == core.package_id
+    assert "## 文档集导航" in documents[0].content
 
 
 def test_replay_rejects_markdown_even_if_attacker_updates_its_digest(export_dir: Path) -> None:

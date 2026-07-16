@@ -4,6 +4,13 @@ import subprocess
 from pathlib import Path
 
 from loreloop.cli import main
+from loreloop.knowledge.authoritative_markdown_render import (
+    EvidenceLocation,
+    MarkdownDocument,
+    MarkdownRow,
+    MarkdownSection,
+    _human_capabilities,
+)
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -82,31 +89,34 @@ def test_large_fact_inventory_renders_as_human_views_and_remains_searchable(
     capsule = (output / ".loreloop-export.json").read_text(encoding="utf-8")
 
     appendix_heading = "## 证据附录：完整可召回事实"
-    detailed_overview = detailed.partition(appendix_heading)[0]
-    user_guide_overview = user_guide.partition(appendix_heading)[0]
-    acceptance_overview = acceptance.partition(appendix_heading)[0]
-    assert len(detailed_overview.splitlines()) < 500
-    assert "## 本文导航" in detailed
-    assert "## 设计摘要" in detailed
+    assert appendix_heading not in detailed
+    assert appendix_heading not in architecture
+    assert appendix_heading not in user_guide
+    assert appendix_heading not in acceptance
+    assert len(detailed.splitlines()) < 500
+    assert "## 快速导航" in detailed
+    assert "## 设计总览" in detailed
     assert "## 模块详细设计" in detailed
-    assert "模块协作视图" in detailed
-    assert appendix_heading in detailed
-    assert "zz_deep_symbol_079" in detailed
+    assert "zz_deep_symbol_079" not in detailed
     assert "record_id" not in "\n".join(
         path.read_text(encoding="utf-8") for path in output.glob("*.md")
     )
-    assert "当前提交态没有可识别的需求" in requirements
+    assert "当前没有明确提交的产品需求材料" in requirements
+    assert "源码反构的现状规格" in requirements
     assert "VUE_APP_I18N_LOCALE" not in requirements
     assert "VUE_APP_I18N_LOCALE" in architecture
-    assert "功能区域" in user_guide
-    assert len(user_guide_overview.splitlines()) < 200
-    assert "代表测试套件与用例" in acceptance
-    assert len(acceptance_overview.splitlines()) < 200
+    assert "用户入口与可执行操作" in user_guide
+    assert len(user_guide.splitlines()) < 200
+    assert "已存在测试证据" in acceptance
+    assert len(acceptance.splitlines()) < 200
     assert "## 接口域索引" in interface
     assert "### . · /srv/salary" in interface
     assert interface.count("/srv/salary/item-") == 40
-    assert '"schema_version":3' in capsule
+    assert '"schema_version":5' in capsule
     assert '"ast":' not in capsule
+    assert "zz_deep_symbol_079" in capsule
+    assert "证据化人类视图" in detailed
+    assert "精确事实由独立 Capsule Agent 视图提供" in detailed
 
     assert (
         main(
@@ -124,6 +134,65 @@ def test_large_fact_inventory_renders_as_human_views_and_remains_searchable(
     )
     searched = capsys.readouterr().out
     assert "zz_deep_symbol_079" in searched
-    assert "readable-详细设计.md#模块与符号" in searched
+    assert "readable-详细设计.md#Agent视图 · 模块与符号" in searched
     assert ".loreloop-export.json" not in searched
     assert "<details>" not in searched
+
+
+def test_human_capability_selection_preserves_core_runtime_features() -> None:
+    center = (
+        "Synchronization_Dept",
+        "Synchronization_CheckUserInfo",
+        "Syschronization_CardNo",
+        "SyschCarNo",
+        "DataDistribute",
+        "DataSend",
+    )
+    web = (
+        "ApplyLeave",
+        "NewRemedyForm",
+        "ApplyEvection",
+        "MoaApprove",
+        "ApproveBusinessQuery",
+        "ApproveBuiness",
+        "ApproveOverTime",
+        "MyApply",
+        "ApproveBackHomeForPublic",
+        "ApplyBackHomeForPublicChange",
+    )
+    rows: list[MarkdownRow] = []
+    evidence: list[tuple[str, EvidenceLocation]] = []
+    for index, name in enumerate((*center, *web), 1):
+        evidence_id = f"E-{index:02d}"
+        unit = "Center/Business/Business" if name in center else "Web/ATM/UI/Web"
+        rows.append(
+            MarkdownRow(
+                "ModuleRow",
+                f"R-{index:02d}",
+                (("qualified_name", name), ("signature", name)),
+                (evidence_id,),
+            )
+        )
+        evidence.append((evidence_id, EvidenceLocation(".", f"{unit}/{name}.cs", 1)))
+    document = MarkdownDocument(
+        "demo 功能清单",
+        "capability_catalog",
+        "git_snapshot",
+        None,
+        "digest",
+        len(rows),
+        (MarkdownSection("模块", tuple(rows)),),
+        tuple(evidence),
+    )
+
+    selected = _human_capabilities(document, dict(evidence), limit=10)
+    titles = [str(item["title"]) for item in selected]
+
+    assert set(titles[:6]) == {
+        "部门数据同步",
+        "人员信息同步与校验",
+        "卡号同步",
+        "车牌号同步",
+        "配置与数据分发",
+        "业务数据发送",
+    }

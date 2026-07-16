@@ -88,9 +88,7 @@ def _document(ast: Mapping[str, JsonValue]) -> MarkdownDocument:
             _row(item, f"AST section {index} row")
             for item in _array(section.get("rows"), f"AST section {index} rows")
         )
-        sections.append(
-            MarkdownSection(_text(section.get("title"), "AST section title"), rows)
-        )
+        sections.append(MarkdownSection(_text(section.get("title"), "AST section title"), rows))
     evidence: list[tuple[str, EvidenceLocation]] = []
     for index, raw in enumerate(_array(ast.get("evidence_rows"), "AST evidence rows")):
         row = _row(raw, f"AST evidence row {index}")
@@ -98,7 +96,11 @@ def _document(ast: Mapping[str, JsonValue]) -> MarkdownDocument:
         repository = values.get("repository_alias")
         path = values.get("path")
         line = values.get("line")
-        if not isinstance(repository, str) or not isinstance(path, str) or not isinstance(line, int):
+        if (
+            not isinstance(repository, str)
+            or not isinstance(path, str)
+            or not isinstance(line, int)
+        ):
             raise CapsuleRenderError(f"AST evidence row {index} has invalid source values")
         evidence.append((row.record_id, EvidenceLocation(repository, path, line)))
     return MarkdownDocument(
@@ -113,6 +115,17 @@ def _document(ast: Mapping[str, JsonValue]) -> MarkdownDocument:
     )
 
 
-def render_capsule_ast(ast_value: JsonValue, paths: tuple[str, ...]) -> str:
+def render_capsule_ast(
+    ast_value: JsonValue,
+    paths: tuple[str, ...],
+    *,
+    include_agent_appendix: bool = False,
+    human_view_version: int = 1,
+) -> str:
     """Render one stored AST after the replay layer validates its exact projection."""
-    return render_markdown(_document(_mapping(ast_value, "document AST")), paths)
+    return render_markdown(
+        _document(_mapping(ast_value, "document AST")),
+        paths,
+        include_agent_appendix=include_agent_appendix,
+        human_view_version=human_view_version,
+    )

@@ -187,7 +187,8 @@ baseline/
 ```
 
 固定生成六份核心文档；接口和数据库文档只在源码有明确证据时生成。当前检测覆盖 Python、
-TypeScript/JavaScript、Vue SFC、Java/Kotlin、Go、Rust、C#、SQL、SQLAlchemy、Django ORM、
+TypeScript/JavaScript、Vue SFC、Java/Kotlin、Go、Rust、C#、旧式 .NET 项目/构建元数据、
+WinForms/ASP.NET code-behind、ASMX WebMethod、SQL、SQLAlchemy、Django ORM、
 Prisma、TypeORM、常见 migration、OpenAPI/Swagger、GraphQL、protobuf、Docker、Compose 和
 Kubernetes。受支持语言的测试文件只投影为验收规格中的测试证据，不会混入功能清单或详细设计。
 终端会列出各仓库文件数、检测器覆盖、事实数量和未语义解析的文件类型。
@@ -206,9 +207,13 @@ loreloop knowledge replay baseline
 loreloop knowledge search "公积金比例" --package baseline
 ```
 
-检索只索引 Capsule 已验证的人类可见 Markdown，并按章节内的段落、列表和表格块建立临时
-BM25 索引，而不是把每一行拆成孤立知识。结果仍定位到原 Markdown 文件和章节，摘要优先显示
-真正命中的可见事实；Mermaid 图形语法不会污染召回。默认路径不需要模型、向量库或数据库。
+新导出使用证据化分离视图的 Capsule v5。Markdown 是独立的人类语义视图，按运行单元、已实现
+能力、触发入口、角色边界、数据读写、UI 功能区、验收候选、契约、缺口和证据组织；Capsule
+中的 SemanticCore 是独立的 Agent 视图，保存精确原子记录、字段、
+身份和源码绑定。两者都由同一 SemanticCore 投影，replay 会同时校验人类文档、确定性 pre-AST
+和 Agent 记录全集。检索使用 Agent 视图，并把结果映射回对应的人类文档领域和源码证据；默认
+路径不需要模型、向量库或数据库。v4 基线继续使用冻结的旧分离视图重放，v2/v3 基线继续按
+原有附录格式重放。
 
 当提问与项目术语不同，可以显式提供有界的同义词、翻译、缩写和可能的代码标识符：
 

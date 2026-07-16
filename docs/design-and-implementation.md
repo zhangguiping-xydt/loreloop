@@ -681,27 +681,29 @@ source snapshots
 → SemanticCore
 → typed document ASTs
 → human-readable Markdown
-→ compact Capsule v3
+→ evidence-backed split-view Capsule v5
 ```
 
-`SemanticCore` 保存全部接口、符号、配置、依赖、页面、测试和数据库原子事实。Markdown 是面向
-人类与编码 Agent 的语义视图：功能清单跨仓库合并入口域，详细设计合并同名技术域并展示分层，
-接口契约先给索引再折叠完整端点。概览负责叙述，文末 `证据附录：完整可召回事实` 按规范归属补齐概览未逐项
-展示的类、方法、依赖、UI、测试、权限和约束。折叠可以降低视觉噪声，但不能隐藏可召回事实。
+`SemanticCore` 保存全部接口、符号、配置、依赖、页面、测试、显式数据读写和数据库原子事实。
+Capsule v5 在其上生成独立的人类语义视图：按运行单元归纳架构，按已实现能力组织功能、现状规格
+和详细设计，按功能区域组织 UI，按显式副作用生成验收候选，并把数据库收敛为核心实体、字段详情
+和全量索引。任何正式需求、角色、状态和性能结论仍须显式材料；受控归纳不能制造事实。精确类、
+方法、依赖、UI、测试、权限和约束留在 Capsule 的 Agent 视图。两种视图通过稳定记录 ID、规范
+归属、pre-AST 和内容摘要保持一致，而不是共享同一套排版。
 
-Capsule v3 保存 SemanticCore、适用性、每份确定性 pre-AST 的 SHA-256 和 Markdown SHA-256，
-不再把同一 AST 记录复制到多个文档节点。无密钥 replay 从 SemanticCore 重建完整 DocumentSet，
-核对 AST 摘要并逐字节核对 Markdown。旧 schema v2 的内嵌 AST 包继续使用同一重建结果验证。
+Capsule v5 保存独立 Agent 视图 SemanticCore、适用性、每份确定性 pre-AST 的 SHA-256 和人类视图
+Markdown SHA-256，不再把同一 AST 记录复制到多个文档节点。无密钥 replay 从 SemanticCore
+重建完整 DocumentSet，核对 AST 摘要并逐字节核对 Markdown。schema v4 使用冻结的旧分离视图
+渲染器验证；schema v2/v3 继续按原有人类文档附录投影验证。
 
 日常导出使用 `--format docs` 和目录 `baseline/`，便于直接打开、Git diff 和检索；只有明确需要
 传输或归档时才使用 `--format package` 生成 `baseline.zip`。两种载体具有相同证明语义，replay
 与 search 均直接接受目录或 ZIP，不要求操作者手工解压。
 
-包检索在一次 replay 验证得到的不可变快照上只索引人类可见 Markdown。临时索引按章节内段落、
-列表和表格块组合上下文，排除 Mermaid 语法；长块摘要选择实际命中的可见事实。BM25 只为本次
-查询保留相关词项，但文档长度、词频、IDF 和排序边界保持不变。每个项目知识命中必须返回
-Markdown 文件和章节；SemanticCore 只负责证明同一内容，不提供文档之外的隐藏召回。`--expand`
-只提供低权重同义词、翻译和标识符，不写回基线；纯扩展命中必须标记低置信度。
+包检索在一次 replay 验证得到的不可变快照上索引 SemanticCore Agent 视图，并把每个命中映射到
+规范归属的人类文档领域及源码证据。BM25 只为本次查询保留相关词项，但文档长度、词频、IDF 和
+排序边界保持不变。`--expand` 只提供低权重同义词、翻译和标识符，不写回基线；纯扩展命中必须
+标记低置信度。
 
 ---
 

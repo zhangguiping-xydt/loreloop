@@ -19,6 +19,7 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 JSON_LOADS: Callable[[str], JsonValue] = json.loads
 AST_ASDICT: Callable[[DocumentAst], CanonicalInput] = asdict
 CAPSULE_FILENAME = ".loreloop-export.json"
+CURRENT_CAPSULE_SCHEMA = 5
 
 
 class CapsuleError(ValueError):
@@ -93,7 +94,7 @@ def build_capsule(
     document_set: DocumentSet,
     documents: tuple[SourceDocument, ...],
     *,
-    schema_version: int = 3,
+    schema_version: int = CURRENT_CAPSULE_SCHEMA,
 ) -> CapsuleArtifact:
     """Build canonical JSON that exposes no raw Git OID, blob bytes, or key material."""
     payload = _capsule_payload(
@@ -111,9 +112,9 @@ def _capsule_payload(
     document_set: DocumentSet,
     documents: tuple[SourceDocument, ...],
     *,
-    schema_version: int = 3,
+    schema_version: int = CURRENT_CAPSULE_SCHEMA,
 ) -> CanonicalInput:
-    if schema_version not in {2, 3}:
+    if schema_version not in {2, 3, 4, 5}:
         raise CapsuleError("unsupported Capsule schema version")
     return {
         "schema_version": schema_version,

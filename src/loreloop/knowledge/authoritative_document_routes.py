@@ -26,6 +26,7 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.REQUIREMENT,
                 DocumentRowKind.PERMISSION,
                 DocumentRowKind.MODULE,
+                DocumentRowKind.IMPLEMENTATION_FACT,
                 DocumentRowKind.WEB_INTERFACE,
                 DocumentRowKind.WEB_BEHAVIOR,
             }
@@ -40,6 +41,10 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.PERMISSION,
                 DocumentRowKind.STATE,
                 DocumentRowKind.ERROR,
+                DocumentRowKind.MODULE,
+                DocumentRowKind.UI_SURFACE,
+                DocumentRowKind.INTERFACE,
+                DocumentRowKind.IMPLEMENTATION_FACT,
                 DocumentRowKind.WEB_REQUIREMENT,
                 DocumentRowKind.WEB_CONSTRAINT,
             }
@@ -55,6 +60,8 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.DEPLOYMENT,
                 DocumentRowKind.MODULE_REPORT,
                 DocumentRowKind.MODULE,
+                DocumentRowKind.IMPLEMENTATION_FACT,
+                DocumentRowKind.CURRENT_DATA,
                 DocumentRowKind.APPLICABILITY,
                 DocumentRowKind.WEB_ARCHITECTURE,
                 DocumentRowKind.WEB_CONSTRAINT,
@@ -83,6 +90,7 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.COMMAND,
                 DocumentRowKind.REQUIREMENT,
                 DocumentRowKind.PERMISSION,
+                DocumentRowKind.IMPLEMENTATION_FACT,
                 DocumentRowKind.WEB_BEHAVIOR,
             }
         ),
@@ -95,6 +103,10 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.ACCEPTANCE,
                 DocumentRowKind.TEST,
                 DocumentRowKind.REQUIREMENT,
+                DocumentRowKind.MODULE,
+                DocumentRowKind.UI_SURFACE,
+                DocumentRowKind.INTERFACE,
+                DocumentRowKind.IMPLEMENTATION_FACT,
                 DocumentRowKind.WEB_ACCEPTANCE,
             }
         ),
@@ -121,6 +133,7 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.HISTORICAL_DATA,
                 DocumentRowKind.MIGRATION_OPERATION,
                 DocumentRowKind.RELATION,
+                DocumentRowKind.IMPLEMENTATION_FACT,
             }
         ),
     ),
