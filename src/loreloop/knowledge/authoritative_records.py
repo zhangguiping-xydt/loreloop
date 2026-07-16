@@ -158,6 +158,20 @@ class DatabaseIndex:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceIssueRecord:
+    path: str
+    issue: Literal["lossy_utf8_recovery", "unreadable_text_encoding"]
+    selected_encoding: str | None
+    replacement_count: int
+    dropped_fact_count: int
+    source: SourceRef
+
+    def __post_init__(self) -> None:
+        if not self.path or self.replacement_count < 0 or self.dropped_fact_count < 0:
+            raise DetectionError("invalid source issue record")
+
+
+@dataclass(frozen=True, slots=True)
 class DetectionReport:
     interfaces: tuple[InterfaceRecord, ...] = ()
     symbols: tuple[SymbolRecord, ...] = ()
@@ -171,6 +185,7 @@ class DetectionReport:
     acceptances: tuple[AcceptanceRecord, ...] = ()
     tables: tuple[DatabaseTable, ...] = ()
     indexes: tuple[DatabaseIndex, ...] = ()
+    source_issues: tuple[SourceIssueRecord, ...] = ()
 
     @property
     def interface_document_applicable(self) -> bool:
@@ -196,4 +211,5 @@ def merge_reports(*reports: DetectionReport) -> DetectionReport:
         acceptances=tuple(item for report in reports for item in report.acceptances),
         tables=tuple(item for report in reports for item in report.tables),
         indexes=tuple(item for report in reports for item in report.indexes),
+        source_issues=tuple(item for report in reports for item in report.source_issues),
     )

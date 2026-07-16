@@ -53,6 +53,12 @@ Agent；无扩展时的确定性行为必须保持兼容。
 Git blob，不读取工作树文件。同一个物理 Git common directory 不能以 peer、submodule 或
 linked worktree 等多个别名重复进入项目快照；事实去重不能跨仓库别名丢失成员仓库证据。
 
+受支持文本源码的确定性解码顺序是严格 UTF-8、GB18030，然后仅针对主体仍为 UTF-8 的有界损坏
+执行 `utf-8-repaired` 投影。任何包含替换字符或锚定到损坏行的候选事实都必须丢弃；恢复状态、
+替换数量和丢弃数量必须作为 `AnnotationRow` 进入 SemanticCore、详细设计和 Capsule。超过恢复
+阈值的文件不得猜测编码，只记录“无法安全解码”覆盖缺口。所有路径始终绑定原始 blob 字节和
+SHA-256，导出不得修改业务源码。
+
 ## 3. 文档集合
 
 每个项目固定生成六份 Markdown：

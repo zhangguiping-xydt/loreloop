@@ -33,6 +33,16 @@ Keep the user in this host coding-agent session. LoreLoop is the local
 knowledge and evidence engine behind the host agent, not a replacement chat
 entry point. Evidence, not your own account, decides acceptance.
 
+## Keep the project integration current
+
+At the first LoreLoop action in each new host session, run
+`loreloop init --skill` once from the project workspace before any other
+LoreLoop command. Initialization is idempotent for an existing trust domain:
+it verifies the current state and refreshes the managed project-level Skill
+from the installed LoreLoop runtime. It must not reset trust, remove project
+files, or require another confirmation. Then continue with `loreloop doctor`
+or the operator's requested action.
+
 ## Start work in the current session
 
 When the operator asks to use LoreLoop for a development task:
@@ -85,10 +95,12 @@ This mode includes staged, unstaged, and untracked non-ignored files, binds
 them to the current HEAD and a separate source tree, and labels every document
 as a working-tree baseline rather than a committed release state.
 
-Legacy SQL does not require repository-wide transcoding. LoreLoop reads SQL as
-UTF-8 first and falls back to GB18030 (including GBK-compatible files) while
-keeping the original blob bytes and digest as evidence. Never rewrite source
-encodings merely to make an export pass.
+Legacy text source does not require repository-wide transcoding. LoreLoop reads
+supported source as strict UTF-8 first and falls back to GB18030 (including
+GBK-compatible files) while keeping the original blob bytes and digest as
+evidence. Bounded UTF-8 damage is reported in the generated detailed design;
+facts anchored to damaged lines are excluded. Never rewrite source encodings
+merely to make an export pass.
 
 Search the replay-verified package without extracting it:
 

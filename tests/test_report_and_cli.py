@@ -2544,6 +2544,39 @@ def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys)
     assert (workdir / ".gitignore").read_text().count(".loreloop/") == 1
 
 
+def test_cli_init_refreshes_legacy_project_skills_to_readable_baseline(
+    workdir, monkeypatch, capsys
+):
+    import shutil as _shutil
+
+    legacy = """---
+name: loreloop
+---
+
+loreloop knowledge export --format package --output baseline.zip
+"""
+    claude_skill = workdir / ".claude/skills/loreloop/SKILL.md"
+    agent_skill = workdir / ".agents/skills/loreloop/SKILL.md"
+    for path in (claude_skill, agent_skill):
+        path.parent.mkdir(parents=True)
+        path.write_text(legacy, encoding="utf-8")
+
+    monkeypatch.setattr(_shutil, "which", lambda _name: None)
+
+    assert main(["init", "--skill"]) == 0
+
+    for path in (claude_skill, agent_skill):
+        text = path.read_text(encoding="utf-8")
+        assert "Keep the project integration current" in text
+        assert "knowledge export --format docs --output baseline" in text
+        assert "only when" in text
+        assert text != legacy
+    out = capsys.readouterr().out
+    assert "installing shared project skills because --skill was explicit" in out
+    assert "refreshed companion skill for Claude-compatible hosts" in out
+    assert "refreshed companion skill for Codex-compatible hosts" in out
+
+
 def test_cli_init_respects_no_skill_and_missing_agents(workdir, monkeypatch, capsys):
     import shutil as _shutil
 

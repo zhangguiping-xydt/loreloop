@@ -16,7 +16,7 @@ from .authoritative_records import (
 )
 from .authoritative_redaction import redact_default
 
-_IDENT: Final = r'(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$.]*)'
+_IDENT: Final = r'(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[^\W\d][\w$.]*)'
 _CREATE_TABLE: Final = re.compile(
     rf"\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?P<name>{_IDENT})\s*\(",
     re.IGNORECASE,
@@ -27,8 +27,7 @@ _CREATE_INDEX: Final = re.compile(
     re.IGNORECASE,
 )
 _INLINE_INDEX: Final = re.compile(
-    r"^(?P<unique>UNIQUE\s+)?(?:KEY|INDEX)\s+"
-    + rf"(?P<name>{_IDENT})\s*\((?P<columns>[^)]+)\)",
+    r"^(?P<unique>UNIQUE\s+)?(?:KEY|INDEX)\s+" + rf"(?P<name>{_IDENT})\s*\((?P<columns>[^)]+)\)",
     re.IGNORECASE,
 )
 _FOREIGN_KEY: Final = re.compile(
@@ -203,9 +202,7 @@ def detect_sql_source(
     position = 0
     while match := _CREATE_TABLE.search(sql, position):
         line = base_line + sql[: match.start()].count("\n")
-        table, table_indexes, position = _table(
-            sql, match, SourceRef(repository_alias, path, line)
-        )
+        table, table_indexes, position = _table(sql, match, SourceRef(repository_alias, path, line))
         tables.append(table)
         inline_indexes.extend(table_indexes)
     indexes = (

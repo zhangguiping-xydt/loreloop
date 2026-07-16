@@ -16,6 +16,7 @@ from loreloop.knowledge.authoritative_source import (
     SnapshotBlob,
     _test_text,
     _text,
+    detect_snapshot_blobs,
     source_text_encoding,
 )
 
@@ -85,23 +86,76 @@ def test_test_source_decoding_accepts_legacy_comments_without_weakening_product_
     assert "public void works" in _test_text(blob)
 
 
-def test_sql_source_decoding_accepts_gb18030_without_weakening_other_sources() -> None:
+def test_product_source_decoding_accepts_gb18030_without_rewriting_bytes() -> None:
     data = "-- 用户表\nCREATE TABLE legacy_users (id INTEGER PRIMARY KEY);\n".encode("gb18030")
     sql = SnapshotBlob("backend", "schema/legacy.sql", data, "0" * 64)
     python = SnapshotBlob("backend", "legacy.py", data, "0" * 64)
+    csharp_data = "// 中文注释\npublic class LegacyUser {}\n".encode("gb18030")
+    csharp = SnapshotBlob("backend", "LegacyUser.cs", csharp_data, "1" * 64)
 
     assert source_text_encoding(sql) == "gb18030"
     assert "legacy_users" in _text(sql)
-    with pytest.raises(DetectionError, match="UTF-8"):
-        _ = _text(python)
+    assert source_text_encoding(python) == "gb18030"
+    assert "legacy_users" in _text(python)
+    assert source_text_encoding(csharp) == "gb18030"
+    assert "LegacyUser" in _text(csharp)
+
+
+def test_lightly_damaged_utf8_is_recovered_and_recorded_as_a_coverage_gap() -> None:
+    data = b"public class Employee {}\r\n// copyright: \x80 2006\r\n"
+    blob = SnapshotBlob("backend", "Employee.cs", data, "0" * 64)
+
+    report = detect_snapshot_blobs((blob,))
+
+    assert source_text_encoding(blob) == "utf-8-repaired"
+    assert any(item.qualified_name == "Employee" for item in report.symbols)
+    assert len(report.source_issues) == 1
+    issue = report.source_issues[0]
+    assert issue.issue == "lossy_utf8_recovery"
+    assert issue.selected_encoding == "utf-8-repaired"
+    assert issue.replacement_count == 1
+    assert issue.dropped_fact_count == 0
+
+
+def test_lossy_utf8_drops_facts_anchored_to_a_damaged_line() -> None:
+    blob = SnapshotBlob(
+        "backend",
+        "DamagedName.cs",
+        b"public class Employ\x80ee {}\r\n",
+        "0" * 64,
+    )
+
+    report = detect_snapshot_blobs((blob,))
+
+    assert source_text_encoding(blob) == "utf-8-repaired"
+    assert not report.symbols
+    assert report.source_issues[0].dropped_fact_count >= 1
+
+
+def test_heavily_corrupted_source_is_not_recovered_as_text() -> None:
+    blob = SnapshotBlob(
+        "backend",
+        "MostlyBroken.cs",
+        b"public class Good {}\n" + b"\x80" * 500,
+        "0" * 64,
+    )
+
+    report = detect_snapshot_blobs((blob,))
+
+    assert source_text_encoding(blob) is None
+    assert not report.symbols
+    assert report.source_issues[0].issue == "unreadable_text_encoding"
 
 
 def test_sql_source_decoding_rejects_invalid_or_binary_legacy_bytes() -> None:
-    blob = SnapshotBlob("backend", "schema/broken.sql", b"\x81\x30\x81\x00", "0" * 64)
+    blob = SnapshotBlob("backend", "Broken.cs", b"\x81\x30\x81\x00", "0" * 64)
 
     assert source_text_encoding(blob) is None
     with pytest.raises(DetectionError, match="UTF-8 or GB18030"):
         _ = _text(blob)
+    report = detect_snapshot_blobs((blob,))
+    assert not report.symbols
+    assert report.source_issues[0].issue == "unreadable_text_encoding"
 
 
 def test_large_test_file_splits_cases_below_capsule_string_budget() -> None:

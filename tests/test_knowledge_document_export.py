@@ -218,6 +218,45 @@ def test_docs_export_preserves_and_detects_gb18030_sql(
     assert main(["knowledge", "replay", str(target)]) == 0
 
 
+def test_docs_export_records_legacy_and_damaged_source_coverage_without_rewriting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _repository(tmp_path / "legacy", {"README.md": "legacy project\n"})
+    legacy = "// 中文注释\npublic class LegacyEmployee {}\n".encode("gb18030")
+    repaired = b"public class RepairedEmployee {}\r\n// copyright: \x80 2006\r\n"
+    unreadable = b"\x81\x30\x81\x00"
+    (repo / "LegacyEmployee.cs").write_bytes(legacy)
+    (repo / "RepairedEmployee.cs").write_bytes(repaired)
+    (repo / "Unreadable.cs").write_bytes(unreadable)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "add legacy encoded sources")
+    monkeypatch.chdir(repo)
+    target = tmp_path / "baseline"
+
+    assert main(["knowledge", "export", "--format", "docs", "--output", str(target)]) == 0
+
+    detailed = (target / "legacy-详细设计.md").read_text(encoding="utf-8")
+    capsule = (target / ".loreloop-export.json").read_text(encoding="utf-8")
+    coverage = capsys.readouterr().err
+    assert "LegacyEmployee" in detailed
+    assert "RepairedEmployee" in detailed
+    assert "## 源码解析覆盖缺口" in detailed
+    assert "RepairedEmployee.cs" in detailed and "轻微 UTF-8 损坏" in detailed
+    assert "Unreadable.cs" in detailed and "无法安全解码" in detailed
+    assert "gb18030=1" in coverage
+    assert "utf-8-repaired=1" in coverage
+    assert "source decode gaps: 1" in coverage
+    assert "source_issues=2" in coverage
+    for raw in (legacy, repaired, unreadable):
+        assert hashlib.sha256(raw).hexdigest() in capsule
+    assert (repo / "LegacyEmployee.cs").read_bytes() == legacy
+    assert (repo / "RepairedEmployee.cs").read_bytes() == repaired
+    assert (repo / "Unreadable.cs").read_bytes() == unreadable
+    assert main(["knowledge", "replay", str(target)]) == 0
+
+
 def test_cli_package_export_supports_a_non_git_aggregate_project_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

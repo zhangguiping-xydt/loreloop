@@ -266,6 +266,23 @@ def build_semantic_records(
                 "unique": item.unique,
             },
         )
+    for item in report.source_issues:
+        _add(
+            context,
+            records,
+            evidence,
+            "DOCSRC",
+            DocumentRowKind.ANNOTATION,
+            "source_decode_gap",
+            item.source,
+            {
+                "path": item.path,
+                "issue": item.issue,
+                "selected_encoding": item.selected_encoding,
+                "replacement_count": item.replacement_count,
+                "dropped_fact_count": item.dropped_fact_count,
+            },
+        )
     unique_records: list[SemanticRecord] = []
     seen_record_ids: set[str] = set()
     for record in records:

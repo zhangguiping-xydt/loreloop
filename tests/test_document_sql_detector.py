@@ -64,6 +64,25 @@ def test_sql_detector_treats_mysql_inline_keys_as_indexes_not_columns() -> None:
     )
 
 
+def test_sql_detector_accepts_legacy_unquoted_unicode_column_names() -> None:
+    sql = """
+    CREATE TABLE CRT_ATM_KQ_DAY_SALARY_STATIC (
+        员工编号 VARCHAR2(32) NOT NULL,
+        事假小时 NUMBER(10,2) DEFAULT 0,
+        PRIMARY KEY (员工编号)
+    );
+    """
+
+    report = detect_sql_source(sql, ".", "legacy.sql")
+
+    assert report.tables[0].name == "CRT_ATM_KQ_DAY_SALARY_STATIC"
+    assert tuple(column.name for column in report.tables[0].columns) == (
+        "员工编号",
+        "事假小时",
+    )
+    assert report.tables[0].primary_key == ("员工编号",)
+
+
 def test_sql_detector_rejects_unclosed_explicit_schema() -> None:
     # Given: source claims to create a table but the schema is incomplete.
     # When / Then: applicability fails closed instead of silently omitting the table.

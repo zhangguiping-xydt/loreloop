@@ -148,4 +148,15 @@ def normalize_detection_report(report: DetectionReport) -> DetectionReport:
                 item.unique,
             ),
         ),
+        source_issues=_unique(
+            report.source_issues,
+            lambda item: (
+                item.source.repository_alias,
+                item.path,
+                item.issue,
+                item.selected_encoding,
+                item.replacement_count,
+                item.dropped_fact_count,
+            ),
+        ),
     )

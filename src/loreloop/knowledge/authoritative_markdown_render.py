@@ -121,6 +121,10 @@ _COLUMN_LABELS = {
     "external_id": "外部 ID",
     "actions": "操作",
     "expression": "表达式",
+    "issue": "解析状态",
+    "selected_encoding": "采用解码",
+    "replacement_count": "替换字符数",
+    "dropped_fact_count": "丢弃候选事实数",
 }
 
 
@@ -1132,7 +1136,51 @@ def _render_detailed_design(
 ) -> list[str]:
     modules = _kind_rows(document, "ModuleRow")
     lines = _module_summary(modules, evidence)
-    facts = _kind_rows(document, "ImplementationFactRow", "StateRow", "ErrorRow", "AnnotationRow")
+    annotations = _kind_rows(document, "AnnotationRow")
+    source_issues = tuple(
+        row
+        for row in annotations
+        if _values(row).get("issue") in {"lossy_utf8_recovery", "unreadable_text_encoding"}
+    )
+    if source_issues:
+        lines.extend(
+            [
+                "## 源码解析覆盖缺口",
+                "",
+                "以下文件的原始字节仍由 Source Snapshot 和 Capsule 绑定；LoreLoop 没有改写源码。"
+                "受控恢复仅用于可安全识别的文本，包含替换字符的候选事实不会进入知识基线。",
+                "",
+                "| 仓库 | 文件 | 状态 | 采用解码 | 替换字符 | 丢弃候选事实 | 证据 |",
+                "|---|---|---|---|---:|---:|---|",
+            ]
+        )
+        for row in source_issues:
+            values = _values(row)
+            issue = values.get("issue")
+            status = (
+                "轻微 UTF-8 损坏，受控恢复"
+                if issue == "lossy_utf8_recovery"
+                else "无法安全解码，跳过语义解析"
+            )
+            lines.append(
+                f"| `{_cell(_repository(row, evidence))}` | `{_cell(str(values.get('path') or '-'))}` | "
+                f"{status} | {_cell(str(values.get('selected_encoding') or '-'))} | "
+                f"{int(values.get('replacement_count') or 0)} | "
+                f"{int(values.get('dropped_fact_count') or 0)} | "
+                f"{_source(_location(row, evidence))} |"
+            )
+        lines.append("")
+    facts = tuple(
+        row
+        for row in _kind_rows(
+            document,
+            "ImplementationFactRow",
+            "StateRow",
+            "ErrorRow",
+            "AnnotationRow",
+        )
+        if row not in source_issues
+    )
     if facts:
         groups: dict[tuple[str, str, str], list[MarkdownRow]] = defaultdict(list)
         for row in facts:
@@ -1471,6 +1519,17 @@ def _gap_lines(document: MarkdownDocument) -> list[str]:
     if document.family == "detailed_design":
         if not kinds & {"StateRow", "ErrorRow", "ImplementationFactRow"}:
             gaps.append("缺少状态机、错误路径和核心流程证据；符号清单不等同于完整详细设计。")
+        source_issue_count = sum(
+            _values(row).get("issue") in {"lossy_utf8_recovery", "unreadable_text_encoding"}
+            for section in document.sections
+            for row in section.rows
+            if row.kind == "AnnotationRow"
+        )
+        if source_issue_count:
+            gaps.append(
+                f"有 {source_issue_count} 个源码文件存在编码损坏或无法安全解码；"
+                "原始字节已绑定，但相关覆盖范围必须人工核对。"
+            )
     if document.family == "user_guide":
         if not kinds & {"UiSurfaceRow", "CommandRow", "WebBehaviorRow"}:
             gaps.append("缺少 UI/CLI 操作入口与运行时页面证据；无法形成可执行用户操作手册。")

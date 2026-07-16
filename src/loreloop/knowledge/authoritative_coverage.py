@@ -8,6 +8,7 @@ from pathlib import PurePosixPath
 from .authoritative_records import DetectionReport
 from .authoritative_source import (
     SnapshotBlob,
+    _semantic_path_candidate,
     detector_profile,
     excluded_semantic_source,
     source_text_encoding,
@@ -24,11 +25,22 @@ def render_coverage_summary(
 ) -> str:
     """Explain repository/file coverage and facts without implying unsupported semantics."""
     by_repository = Counter(blob.repository_alias for blob in blobs)
+    decode_gaps = tuple(
+        blob
+        for blob in blobs
+        if blob.data is not None
+        and _semantic_path_candidate(blob.path)
+        and not excluded_semantic_source(blob.path)
+        and source_text_encoding(blob) is None
+    )
+    decode_gap_keys = {(blob.repository_alias, blob.path) for blob in decode_gaps}
     profiles = Counter(profile for blob in blobs if (profile := detector_profile(blob)) is not None)
     unsupported = Counter(
         PurePosixPath(blob.path).suffix.lower() or "[no extension]"
         for blob in blobs
-        if detector_profile(blob) is None and not excluded_semantic_source(blob.path)
+        if detector_profile(blob) is None
+        and not excluded_semantic_source(blob.path)
+        and (blob.repository_alias, blob.path) not in decode_gap_keys
     )
     excluded = sum(
         excluded_semantic_source(blob.path) and not is_supported_test_evidence_path(blob.path)
@@ -59,6 +71,13 @@ def render_coverage_summary(
             + ", ".join(f"{name}={count}" for name, count in sorted(encodings.items()))
             + " (original blob bytes preserved)"
         )
+    if decode_gaps:
+        examples = ", ".join(f"{blob.repository_alias}:{blob.path}" for blob in decode_gaps[:5])
+        suffix = "" if len(decode_gaps) <= 5 else f", ... +{len(decode_gaps) - 5}"
+        lines.append(
+            f"  source decode gaps: {len(decode_gaps)} "
+            f"(original bytes preserved; semantic parsing skipped): {examples}{suffix}"
+        )
     lines.append(
         "  facts: "
         + ", ".join(
@@ -75,6 +94,7 @@ def render_coverage_summary(
                 f"dependencies={len(report.dependencies)}",
                 f"tables={len(report.tables)}",
                 f"indexes={len(report.indexes)}",
+                f"source_issues={len(report.source_issues)}",
             )
         )
     )

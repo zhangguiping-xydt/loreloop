@@ -14,8 +14,12 @@ acceptance.
 
 Before the first LoreLoop action, check whether `loreloop` is on `PATH`.
 
-- If it exists, run `loreloop doctor` when the repository has not been checked
-  in this session.
+- If it exists and the repository already has `.loreloop`, first run
+  `loreloop init --skill` once in this new host session, then run
+  `loreloop doctor`. Initialization is idempotent for an existing trust domain
+  and refreshes stale project-level `.claude/skills` and `.agents/skills`
+  copies from the installed runtime; it must not reset trust or remove project
+  files.
 - If it is missing, finish the LoreLoop installation automatically. Installing
   and enabling this plugin is already explicit operator authorization; do not
   ask for a second permission merely because the local `loreloop` command is
@@ -96,10 +100,12 @@ This mode includes staged, unstaged, and untracked non-ignored files, binds
 them to the current HEAD and a separate source tree, and labels every document
 as a working-tree baseline rather than a committed release state.
 
-Legacy SQL does not require repository-wide transcoding. LoreLoop reads SQL as
-UTF-8 first and falls back to GB18030 (including GBK-compatible files) while
-keeping the original blob bytes and digest as evidence. Never rewrite source
-encodings merely to make an export pass.
+Legacy text source does not require repository-wide transcoding. LoreLoop reads
+supported source as strict UTF-8 first and falls back to GB18030 (including
+GBK-compatible files) while keeping the original blob bytes and digest as
+evidence. Bounded UTF-8 damage is reported in the generated detailed design;
+facts anchored to damaged lines are excluded. Never rewrite source encodings
+merely to make an export pass.
 
 Search a package directly when the operator asks a question about an exported
 baseline:

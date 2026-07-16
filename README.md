@@ -135,6 +135,13 @@ cd your-project
 loreloop init --skill
 ```
 
+The same command is also the upgrade path for project-level companion Skills.
+It is idempotent: rerunning it keeps the trust domain and project files intact
+while refreshing managed `.claude/skills` and `.agents/skills` copies from the
+currently installed LoreLoop runtime. Host integrations do this once at the
+first LoreLoop action in each new session, so older projects do not retain an
+obsolete export workflow.
+
 Build the first knowledge baseline from code:
 
 ```bash
@@ -251,10 +258,13 @@ clearly labeled in every generated document; it does not claim to be a
 committed release state. A strict-mode error lists the files that made the
 repository dirty and points to this option.
 
-Legacy `.sql` files are decoded as UTF-8 first, with a deterministic GB18030
-fallback that also covers GBK-compatible files. LoreLoop preserves and hashes
-the original repository bytes; exporting a baseline never requires bulk source
-transcoding.
+Supported text sources are decoded as strict UTF-8 first, with a deterministic
+GB18030 fallback that also covers GBK-compatible files. Predominantly UTF-8
+legacy files with bounded byte damage may use an explicit repaired projection;
+facts anchored to damaged lines are discarded and the human detailed design
+records the coverage gap. Files that cannot be recovered safely are bound as
+source gaps rather than inferred from. LoreLoop always preserves and hashes the
+original repository bytes, so baseline export never requires bulk transcoding.
 
 Expansion changes ranking only. It is never added to the baseline, rendered as
 project knowledge, or allowed to raise the trust of a result. Codex, Claude

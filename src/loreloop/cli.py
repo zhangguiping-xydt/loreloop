@@ -244,13 +244,19 @@ def cmd_init(args: argparse.Namespace) -> int:
         )
 
     hosts = [name for name in _AGENT_CHOICES if shutil.which(name)]
-    if not hosts:
+    if not hosts and args.skill is not True:
         print(
             "no supported coding agent (claude/codex/opencode/co-mind) found on PATH; "
             "skill installation skipped"
         )
         return 0
-    print(f"detected coding agent(s): {', '.join(hosts)}")
+    if hosts:
+        print(f"detected coding agent(s): {', '.join(hosts)}")
+    else:
+        print(
+            "no supported coding-agent CLI found on PATH; "
+            "installing shared project skills because --skill was explicit"
+        )
 
     if args.skill is None:
         answer = input(f"install the loreloop companion skill for {', '.join(hosts)}? [Y/n] ")
@@ -258,22 +264,35 @@ def cmd_init(args: argparse.Namespace) -> int:
     else:
         wanted = args.skill
     if wanted:
+        from .companion import AGENT_SKILL_RELPATH, CLAUDE_SKILL_RELPATH
+
+        refresh_existing = args.skill is True
         claude_hosts = [name for name in ("claude", "co-mind") if name in hosts]
-        if claude_hosts:
+        install_claude = bool(claude_hosts) or (
+            refresh_existing and ((workdir / CLAUDE_SKILL_RELPATH).exists() or not hosts)
+        )
+        if install_claude:
             from .companion import install_claude_skill
 
+            existed = (workdir / CLAUDE_SKILL_RELPATH).exists()
             path = install_claude_skill(workdir)
             labels = {"claude": "Claude", "co-mind": "co-mind"}
-            detected = "/".join(labels[name] for name in claude_hosts)
-            print(f"installed companion skill for {detected}: {path.relative_to(workdir)}")
+            detected = "/".join(labels[name] for name in claude_hosts) or "Claude-compatible hosts"
+            action = "refreshed" if existed else "installed"
+            print(f"{action} companion skill for {detected}: {path.relative_to(workdir)}")
         agent_hosts = [name for name in ("codex", "opencode") if name in hosts]
-        if agent_hosts:
+        install_agents = bool(agent_hosts) or (
+            refresh_existing and ((workdir / AGENT_SKILL_RELPATH).exists() or not hosts)
+        )
+        if install_agents:
             from .companion import install_codex_skill
 
+            existed = (workdir / AGENT_SKILL_RELPATH).exists()
             path = install_codex_skill(workdir)
             labels = {"codex": "Codex", "opencode": "OpenCode"}
-            detected = "/".join(labels[name] for name in agent_hosts)
-            print(f"installed companion skill for {detected}: {path.relative_to(workdir)}")
+            detected = "/".join(labels[name] for name in agent_hosts) or "Codex-compatible hosts"
+            action = "refreshed" if existed else "installed"
+            print(f"{action} companion skill for {detected}: {path.relative_to(workdir)}")
         if "opencode" in hosts:
             from .companion import install_opencode_command
 
@@ -3184,7 +3203,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="skill",
         action="store_true",
         default=None,
-        help="install the companion skill without asking",
+        help="install or refresh the companion skill without asking",
     )
     skill_group.add_argument(
         "--no-skill", dest="skill", action="store_false", help="skip companion skill installation"
