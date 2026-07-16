@@ -16,7 +16,7 @@ from .authoritative_archive import (
 from .authoritative_ast import AstViolation, DocumentRowKind, DocumentSet, ProjectedValue
 from .authoritative_ast_render import render_document_ast
 from .authoritative_bindings import BindingEntry, SourceBinding, SourceTransform
-from .authoritative_capsule import CAPSULE_FILENAME, JsonValue
+from .authoritative_capsule import CAPSULE_FILENAME, JsonValue, document_ast_sha256
 from .authoritative_capsule_io import (
     CapsuleIoError,
     parse_capsule,
@@ -73,6 +73,7 @@ _SEMANTIC_KEYS = {
     "source_snapshot_sha256",
     "trust_domain_id",
 }
+_WORKTREE_SEMANTIC_KEYS = _SEMANTIC_KEYS | {"source_snapshot_kind"}
 _LEGACY_SEMANTIC_KEY_SETS = {
     frozenset(_SEMANTIC_KEYS - {"evidence"}),
     frozenset(_SEMANTIC_KEYS - {"project_name"}),
@@ -357,7 +358,9 @@ def _validate_core(root: Mapping[str, JsonValue]) -> SemanticCore:
         raise CapsuleReplayError(
             "legacy capsule lacks deterministic SemanticCore generation inputs; regenerate it"
         )
-    _keys(semantic, _SEMANTIC_KEYS, "semantic core")
+    semantic_keys = set(semantic)
+    if semantic_keys != _SEMANTIC_KEYS and semantic_keys != _WORKTREE_SEMANTIC_KEYS:
+        raise CapsuleReplayError("semantic core has unexpected fields")
     core_digest = _sha256(root.get("semantic_core_sha256"), "semantic core digest")
     if semantic_core_sha256(semantic) != core_digest:
         raise CapsuleReplayError("semantic core digest mismatch")
@@ -372,10 +375,25 @@ def _validate_core(root: Mapping[str, JsonValue]) -> SemanticCore:
         semantic.get("repository_config_digest"), "repository configuration digest"
     )
     snapshot = _sha256(semantic.get("source_snapshot_sha256"), "source snapshot digest")
+    raw_snapshot_kind = semantic.get("source_snapshot_kind", "commit")
+    if raw_snapshot_kind == "commit":
+        snapshot_kind = "commit"
+    elif raw_snapshot_kind == "working_tree":
+        snapshot_kind = "working_tree"
+    else:
+        raise CapsuleReplayError("semantic core source snapshot kind is invalid")
     evidence = _semantic_evidence(semantic.get("evidence"))
     records = _semantic_records(semantic.get("records"), evidence, trust, repository)
     core = SemanticCore(
-        project, trust, repository, snapshot, records, evidence, core_digest, package
+        project,
+        trust,
+        repository,
+        snapshot,
+        records,
+        evidence,
+        core_digest,
+        package,
+        snapshot_kind,
     )
     if semantic_core_payload(core) != semantic:
         raise CapsuleReplayError("semantic core is not in deterministic portable form")
@@ -452,8 +470,7 @@ def _validate_documents(
     for document, filename, expected_document in zip(
         documents, filenames, expected_set.documents, strict=True
     ):
-        expected_ast = asdict(expected_document)
-        expected_ast_digest = hashlib.sha256(canon_v4(expected_ast)).hexdigest()
+        expected_ast_digest = document_ast_sha256(expected_document)
         stored_ast_digest = _sha256(document.get("ast_sha256"), f"AST digest for {filename}")
         document_id = _text(document.get("document_id"), f"document id for {filename}")
         if document_id in document_ids:
@@ -468,6 +485,7 @@ def _validate_documents(
         if expected_document.optional_family is not None:
             optional.add(expected_document.optional_family.value)
         if schema_version == 2:
+            expected_ast = asdict(expected_document)
             ast = _mapping(document.get("ast"), f"document AST for {filename}")
             _keys(ast, _AST_KEYS, f"document AST for {filename}")
             if hashlib.sha256(canon_v4(ast)).hexdigest() != stored_ast_digest:

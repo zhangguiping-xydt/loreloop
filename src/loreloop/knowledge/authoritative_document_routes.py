@@ -25,6 +25,7 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.UI_SURFACE,
                 DocumentRowKind.REQUIREMENT,
                 DocumentRowKind.PERMISSION,
+                DocumentRowKind.MODULE,
                 DocumentRowKind.WEB_INTERFACE,
                 DocumentRowKind.WEB_BEHAVIOR,
             }
@@ -53,6 +54,7 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.CONFIGURATION,
                 DocumentRowKind.DEPLOYMENT,
                 DocumentRowKind.MODULE_REPORT,
+                DocumentRowKind.MODULE,
                 DocumentRowKind.APPLICABILITY,
                 DocumentRowKind.WEB_ARCHITECTURE,
                 DocumentRowKind.WEB_CONSTRAINT,

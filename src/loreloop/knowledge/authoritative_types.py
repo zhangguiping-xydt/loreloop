@@ -106,6 +106,9 @@ class RepositorySnapshot:
     index_sha256: str
     entries: tuple[SnapshotEntry, ...]
     repository_identity_sha256: str | None = None
+    snapshot_kind: Literal["commit", "working_tree"] = "commit"
+    worktree_state_sha256: str | None = None
+    excluded_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require(bool(self.alias), "empty repository alias")
@@ -114,6 +117,20 @@ class RepositorySnapshot:
             self.repository_identity_sha256 is None
             or SHA256_RE.fullmatch(self.repository_identity_sha256) is not None,
             "invalid repository identity",
+        )
+        _require(
+            (self.snapshot_kind == "commit" and self.worktree_state_sha256 is None)
+            or (
+                self.snapshot_kind == "working_tree"
+                and self.worktree_state_sha256 is not None
+                and SHA256_RE.fullmatch(self.worktree_state_sha256) is not None
+            ),
+            "invalid worktree snapshot state",
+        )
+        _require(
+            len(self.excluded_paths) == len(set(self.excluded_paths))
+            and all(_valid_relative_path(path) for path in self.excluded_paths),
+            "invalid snapshot exclusions",
         )
         paths = tuple(entry.path for entry in self.entries)
         _require(len(paths) == len(set(paths)), "duplicate snapshot path")
@@ -141,8 +158,7 @@ class SourceSnapshot:
             "root snapshot alias is invalid",
         )
         _require(
-            bool(roots)
-            or any(repository.role == "peer" for repository in self.repositories),
+            bool(roots) or any(repository.role == "peer" for repository in self.repositories),
             "aggregate snapshot requires a declared peer repository",
         )
 

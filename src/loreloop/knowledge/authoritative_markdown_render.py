@@ -50,11 +50,36 @@ _PURPOSES = {
     "capability_catalog": "按仓库和入口域概括源码能够直接证明的系统能力。",
     "requirements": "收录已提交需求材料，以及源码明确表达的权限、状态、错误和配置约束；各类事实不会互相替代。",
     "architecture": "展示多仓库边界、技术依赖、配置和部署证据，不把 import 清单冒充组件设计。",
-    "detailed_design": "按仓库与源文件组织实现模块，完整符号事实位于本文的完整知识索引。",
+    "detailed_design": "按模块解释职责边界、实现分层、关键文件和入口符号；完整事实保留在文末证据附录。",
     "user_guide": "仅收录源码或需求材料明确表达的用户界面、命令入口、角色和操作约束。",
     "acceptance": "仅收录已提交验收条款和测试证据，不用接口存在性冒充业务验收。",
     "interface_contract": "列出源码确认的接口，以及能够明确提取的参数、返回类型、权限和错误契约。",
     "database_design": "列出源码确认的表、字段、索引和外键关系。",
+}
+
+_DOCUMENT_NAVIGATION = {
+    "capability_catalog": ("项目概览", "源码能力域", "代码模块能力", "覆盖缺口与未确认事项"),
+    "requirements": ("需求材料状态", "功能与业务规则", "约束与异常", "覆盖缺口与未确认事项"),
+    "architecture": ("系统上下文", "仓库与职责", "模块与仓库边界", "配置与运行边界"),
+    "detailed_design": ("设计摘要", "模块详细设计", "模块协作视图", "核心流程与异常"),
+    "user_guide": ("使用边界", "用户界面与操作入口", "已确认操作与行为", "覆盖缺口与未确认事项"),
+    "acceptance": ("验收准则", "测试证据", "可交付性判断", "覆盖缺口与未确认事项"),
+    "interface_contract": ("接口域索引", "HTTP 接口", "覆盖缺口与未确认事项"),
+    "database_design": ("数据实体总览", "ER 关系图", "表结构详情", "覆盖缺口与未确认事项"),
+}
+
+_GENERIC_DOMAINS = {
+    "common",
+    "config",
+    "dto",
+    "entity",
+    "model",
+    "param",
+    "po",
+    "shared-or-unclassified",
+    "util",
+    "utils",
+    "vo",
 }
 
 _FULLY_RENDERED_ROW_KINDS = {
@@ -295,68 +320,213 @@ def _implementation_layer(path: str) -> str:
     return "shared"
 
 
-def _module_summary(
+def _normalized_domain(path: str) -> str:
+    domain = _implementation_domain(path)
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", domain).lower()
+
+
+def _module_inventory(
     rows: tuple[MarkdownRow, ...], evidence: dict[str, EvidenceLocation]
-) -> list[str]:
-    repositories: dict[str, dict[str, set[str]]] = defaultdict(
-        lambda: {"domains": set(), "layers": set(), "files": set(), "symbols": set()}
-    )
-    domains: dict[str, dict[str, set[str]]] = defaultdict(
-        lambda: {"repositories": set(), "layers": set(), "files": set(), "symbols": set()}
+) -> dict[str, dict[str, object]]:
+    domains: dict[str, dict[str, object]] = defaultdict(
+        lambda: {
+            "repositories": set(),
+            "layers": set(),
+            "files": Counter(),
+            "symbols": [],
+        }
     )
     for row in rows:
         location = _location(row, evidence)
         values = _values(row)
         name = values.get("qualified_name") or values.get("signature")
-        if location is not None and isinstance(name, str):
-            domain = _implementation_domain(location.path)
-            normalized_domain = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", domain).lower()
-            layer = _implementation_layer(location.path)
-            repository = repositories[location.repository]
-            repository["domains"].add(normalized_domain)
-            repository["layers"].add(layer)
-            repository["files"].add(location.path)
-            repository["symbols"].add(name)
-            domain_group = domains[normalized_domain]
-            domain_group["repositories"].add(location.repository)
-            domain_group["layers"].add(layer)
-            domain_group["files"].add(f"{location.repository}:{location.path}")
-            domain_group["symbols"].add(name)
-    if not repositories:
-        return ["没有可由当前证据确认的实现模块。", ""]
-    lines = [
-        "以下内容按仓库、技术域和实现层归纳；完整文件与符号清单位于本文的完整知识索引。",
-        "",
-        "### 仓库分层概览",
-        "",
-        "| 仓库 | 技术域数 | 实现层 | 源文件数 | 符号数 |",
-        "|---|---:|---|---:|---:|",
-    ]
-    for repository, items in sorted(repositories.items()):
-        lines.append(
-            f"| `{_cell(repository)}` | {len(items['domains'])} | "
-            f"{_cell(', '.join(sorted(items['layers'])))} | {len(items['files'])} | "
-            f"{len(items['symbols'])} |"
+        if location is None or not isinstance(name, str):
+            continue
+        domain = _normalized_domain(location.path)
+        group = domains[domain]
+        repositories = group["repositories"]
+        layers = group["layers"]
+        files = group["files"]
+        symbols = group["symbols"]
+        if isinstance(repositories, set):
+            repositories.add(location.repository)
+        if isinstance(layers, set):
+            layers.add(_implementation_layer(location.path))
+        if isinstance(files, Counter):
+            files[f"{location.repository}:{location.path}"] += 1
+        if isinstance(symbols, list):
+            symbols.append((name, str(values.get("signature") or name), location.line))
+    return dict(domains)
+
+
+def _ranked_domains(inventory: dict[str, dict[str, object]], *, limit: int) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            inventory,
+            key=lambda domain: (
+                domain in _GENERIC_DOMAINS,
+                -len(inventory[domain]["symbols"])
+                if isinstance(inventory[domain]["symbols"], list)
+                else 0,
+                domain,
+            ),
+        )[:limit]
+    )
+
+
+def _representative_symbols(items: list[tuple[str, str, int]], limit: int = 8) -> list[str]:
+    suffix_order = (
+        "controller",
+        "service",
+        "core",
+        "repository",
+        "rep",
+        "handler",
+        "manager",
+    )
+
+    def rank(item: tuple[str, str, int]) -> tuple[int, int, str]:
+        name = item[0]
+        lowered = name.lower()
+        priority = next(
+            (index for index, suffix in enumerate(suffix_order) if lowered.endswith(suffix)),
+            len(suffix_order),
         )
+        return priority, len(name), name
+
+    return [item[0] for item in sorted(dict.fromkeys(items), key=rank)[:limit]]
+
+
+def _module_summary(
+    rows: tuple[MarkdownRow, ...], evidence: dict[str, EvidenceLocation]
+) -> list[str]:
+    inventory = _module_inventory(rows, evidence)
+    if not inventory:
+        return ["## 设计摘要", "", "没有可由当前证据确认的实现模块。", ""]
+    selected = _ranked_domains(inventory, limit=12)
+    repository_names = sorted(
+        {
+            repository
+            for group in inventory.values()
+            for repository in (
+                group["repositories"] if isinstance(group["repositories"], set) else set()
+            )
+        }
+    )
+    total_files = {
+        path
+        for group in inventory.values()
+        for path in (group["files"] if isinstance(group["files"], Counter) else Counter())
+    }
+    total_symbols = sum(
+        len(group["symbols"]) if isinstance(group["symbols"], list) else 0
+        for group in inventory.values()
+    )
+    lines = [
+        "## 设计摘要",
+        "",
+        "本文先展示最具实现规模的模块，再给出分层视图和完整证据附录。模块名称来自源码目录，职责描述只陈述结构事实。",
+        "",
+        "| 仓库 | 实现模块 | 源文件 | 类/函数符号 | 重点展开模块 |",
+        "|---:|---:|---:|---:|---:|",
+        f"| {len(repository_names)} | {len(inventory)} | {len(total_files)} | {total_symbols} | {len(selected)} |",
+        "",
+        "### 模块总览",
+        "",
+        "| 模块 | 涉及仓库 | 实现层 | 文件数 | 符号数 | 关键实现 |",
+        "|---|---|---|---:|---:|---|",
+    ]
+    for domain in selected:
+        group = inventory[domain]
+        repositories = group["repositories"] if isinstance(group["repositories"], set) else set()
+        layers = group["layers"] if isinstance(group["layers"], set) else set()
+        files = group["files"] if isinstance(group["files"], Counter) else Counter()
+        symbols = group["symbols"] if isinstance(group["symbols"], list) else []
+        lines.append(
+            f"| `{_cell(domain)}` | {_cell(', '.join(sorted(repositories)))} | "
+            f"{_cell(', '.join(sorted(layers)))} | {len(files)} | {len(symbols)} | "
+            f"{_cell(', '.join(_representative_symbols(symbols, 6)))} |"
+        )
+    lines.extend(["", "## 模块详细设计", ""])
+    for index, domain in enumerate(selected, 1):
+        group = inventory[domain]
+        repositories = group["repositories"] if isinstance(group["repositories"], set) else set()
+        layers = group["layers"] if isinstance(group["layers"], set) else set()
+        files = group["files"] if isinstance(group["files"], Counter) else Counter()
+        symbols = group["symbols"] if isinstance(group["symbols"], list) else []
+        key_files = [path for path, _ in files.most_common(6)]
+        signatures = [signature for _, signature, _ in symbols[:6]]
+        lines.extend(
+            [
+                f"### {index}. `{_cell(domain)}`",
+                "",
+                "| 设计项 | 当前实现证据 |",
+                "|---|---|",
+                f"| 职责边界 | 该模块由 {_cell(', '.join(sorted(layers)))} 层的 {len(files)} 个源文件组成；业务目标需结合需求材料确认。 |",
+                f"| 所属仓库 | {_cell(', '.join(sorted(repositories)))} |",
+                f"| 关键文件 | {_cell('；'.join(key_files))} |",
+                f"| 关键类/函数 | {_cell('；'.join(_representative_symbols(symbols)))} |",
+                f"| 输入输出线索 | {_cell('；'.join(signatures) or '当前签名未提供明确输入输出')} |",
+                "| 未确认事项 | 缺少确定调用图时，不把目录分层解释为真实运行时调用顺序。 |",
+                "",
+            ]
+        )
+    remaining = tuple(domain for domain in inventory if domain not in selected)
+    if remaining:
+        lines.extend(
+            [
+                "<details>",
+                f"<summary>其余 {len(remaining)} 个实现模块</summary>",
+                "",
+                "| 模块 | 仓库 | 文件数 | 符号数 |",
+                "|---|---|---:|---:|",
+            ]
+        )
+        for domain in sorted(remaining):
+            group = inventory[domain]
+            repositories = (
+                group["repositories"] if isinstance(group["repositories"], set) else set()
+            )
+            files = group["files"] if isinstance(group["files"], Counter) else Counter()
+            symbols = group["symbols"] if isinstance(group["symbols"], list) else []
+            lines.append(
+                f"| `{_cell(domain)}` | {_cell(', '.join(sorted(repositories)))} | "
+                f"{len(files)} | {len(symbols)} |"
+            )
+        lines.extend(["", "</details>", ""])
+    layer_labels = {
+        "presentation": "界面层",
+        "interface": "接口层",
+        "application": "应用层",
+        "domain": "领域层",
+        "infrastructure": "基础设施层",
+        "shared": "共享实现",
+    }
+    layer_order = tuple(layer_labels)
     lines.extend(
         [
+            "## 模块协作视图",
             "",
-            "### 跨仓库技术域",
+            "下图仅表达目录和符号所证明的模块内分层，不代表已确认的运行时调用链。",
             "",
-            "同名技术域跨仓库合并展示，便于识别接口层、应用层、领域层和基础设施层的协作边界。",
-            "",
-            "| 技术域 | 涉及仓库 | 实现层 | 源文件数 | 符号数 | 代表符号 |",
-            "|---|---|---|---:|---:|---|",
+            "```mermaid",
+            "flowchart LR",
         ]
     )
-    for domain, items in sorted(domains.items()):
-        representatives = ", ".join(sorted(items["symbols"])[:6])
-        lines.append(
-            f"| {_cell(domain)} | {_cell(', '.join(sorted(items['repositories'])))} | "
-            f"{_cell(', '.join(sorted(items['layers'])))} | {len(items['files'])} | "
-            f"{len(items['symbols'])} | {_cell(representatives)} |"
-        )
-    return [*lines, ""]
+    for index, domain in enumerate(selected[:8], 1):
+        layers = inventory[domain]["layers"]
+        available = [layer for layer in layer_order if isinstance(layers, set) and layer in layers]
+        if not available:
+            continue
+        nodes = []
+        for layer_index, layer in enumerate(available, 1):
+            node = f"M{index:02d}L{layer_index:02d}"
+            nodes.append(node)
+            lines.append(f'    {node}["{_cell(domain)}\\n{_cell(layer_labels[layer])}"]')
+        if len(nodes) > 1:
+            lines.append("    " + " --> ".join(nodes))
+    lines.extend(["```", ""])
+    return lines
 
 
 def _all_rows(document: MarkdownDocument) -> tuple[MarkdownRow, ...]:
@@ -425,6 +595,56 @@ def _reference_group(
     return repository
 
 
+def _compact_fact(row: MarkdownRow, location: EvidenceLocation | None) -> str:
+    values = _values(row)
+    line = f"L{location.line}" if location is not None else "L?"
+    if row.kind == "ModuleRow":
+        name = str(values.get("qualified_name") or "-")
+        signature = str(values.get("signature") or name)
+        return f"{name} — {signature} · {line}"
+    if row.kind == "DependencyRow":
+        name = str(values.get("name") or "-")
+        requirement = str(values.get("requirement") or "-")
+        scope = str(values.get("scope") or "-")
+        return f"{name} {requirement} [{scope}] · {line}"
+    facts = "；".join(
+        f"{_COLUMN_LABELS.get(key, key)}={_value(value)}" for key, value in row.values
+    )
+    return f"{facts} · {line}"
+
+
+def _compact_rows_by_file(
+    rows: list[MarkdownRow], evidence: dict[str, EvidenceLocation]
+) -> list[str]:
+    by_file: dict[tuple[str, str], list[MarkdownRow]] = defaultdict(list)
+    without_source: list[MarkdownRow] = []
+    for row in rows:
+        location = _location(row, evidence)
+        if location is None:
+            without_source.append(row)
+        else:
+            by_file[(location.repository, location.path)].append(row)
+    lines = [
+        "| 源文件 | 本行记录 | 可检索事实（名称、签名、版本与源码行） |",
+        "|---|---:|---|",
+    ]
+    for (repository, path), items in sorted(by_file.items()):
+        ordered = sorted(items, key=lambda row: _location(row, evidence).line)  # type: ignore[union-attr]
+        for offset in range(0, len(ordered), 16):
+            chunk = ordered[offset : offset + 16]
+            facts = "<br>".join(
+                _cell(_compact_fact(row, _location(row, evidence))) for row in chunk
+            )
+            source = f"`{_cell(repository)}:{_cell(path)}`" if offset == 0 else "↳ 同上"
+            lines.append(f"| {source} | {len(chunk)} | {facts} |")
+    if without_source:
+        for offset in range(0, len(without_source), 16):
+            chunk = without_source[offset : offset + 16]
+            facts = "<br>".join(_cell(_compact_fact(row, None)) for row in chunk)
+            lines.append(f"| - | {len(chunk)} | {facts} |")
+    return lines
+
+
 def _render_complete_knowledge_index(
     document: MarkdownDocument,
     evidence: dict[str, EvidenceLocation],
@@ -452,20 +672,27 @@ def _render_complete_knowledge_index(
     if not sections:
         return []
     lines = [
-        "## 完整知识索引",
+        "## 证据附录：完整可召回事实",
         "",
-        f"本节完整列出本文档负责的 {total} 条可召回知识。Agent 检索与这里使用同一份内容；折叠只影响阅读，不隐藏知识。",
+        f"本附录保留本文档负责的 {total} 条可召回知识。正文用于评审，附录用于精确检索和逐项核对；两者来自同一份 SemanticCore。",
         "",
     ]
     for section_title, groups in sections:
         lines.extend([f"### {_cell(section_title)}", ""])
         for group, rows in sorted(groups.items()):
+            compact = len(rows) >= 24 and all(
+                row.kind in {"ModuleRow", "DependencyRow"} for row in rows
+            )
             lines.extend(
                 [
                     "<details>",
                     f"<summary>{_cell(group)}（{len(rows)} 条）</summary>",
                     "",
-                    *_complete_table(rows, evidence),
+                    *(
+                        _compact_rows_by_file(rows, evidence)
+                        if compact
+                        else _complete_table(rows, evidence)
+                    ),
                     "",
                     "</details>",
                     "",
@@ -495,6 +722,24 @@ def _render_project_overview(
         f"- 覆盖仓库：{len(repositories)}（{_cell('、'.join(repositories) or '无')}）",
         f"- 本文档归纳：{_cell('，'.join(facts) or '当前没有可归纳记录')}。",
         "- 完整可召回事实位于对应人类文档；记录 ID 和逐项证明保存在 `.loreloop-export.json`。",
+        "",
+    ]
+
+
+def _heading_anchor(title: str) -> str:
+    normalized = re.sub(r"[^0-9A-Za-z一-鿿\s-]", "", title).strip().lower()
+    return re.sub(r"\s+", "-", normalized)
+
+
+def _render_document_navigation(family: str, *, has_appendix: bool) -> list[str]:
+    headings = _DOCUMENT_NAVIGATION.get(family, ())
+    if has_appendix:
+        headings = (*headings, "证据附录：完整可召回事实")
+    headings = (*headings, "证据覆盖", "版本与完整性")
+    return [
+        "## 本文导航",
+        "",
+        *(f"- [{title}](#{_heading_anchor(title)})" for title in headings),
         "",
     ]
 
@@ -632,6 +877,32 @@ def _render_capability_catalog(
                 f"- **{_cell(repository)}**：识别 {len(pages)} 个页面/组件入口；"
                 f"代表项：{_cell(', '.join(str(item) for item in pages[:12]))}。"
             )
+    module_inventory = _module_inventory(_kind_rows(document, "ModuleRow"), evidence)
+    if module_inventory:
+        lines.extend(
+            [
+                "",
+                "### 代码模块能力",
+                "",
+                "没有业务需求材料时，本节只把源码目录和入口符号归纳为技术能力，不替代产品功能定义。",
+                "",
+                "| 模块 | 仓库 | 实现层 | 文件数 | 代表入口 |",
+                "|---|---|---|---:|---|",
+            ]
+        )
+        for domain in _ranked_domains(module_inventory, limit=16):
+            group = module_inventory[domain]
+            repositories = (
+                group["repositories"] if isinstance(group["repositories"], set) else set()
+            )
+            layers = group["layers"] if isinstance(group["layers"], set) else set()
+            files = group["files"] if isinstance(group["files"], Counter) else Counter()
+            symbols = group["symbols"] if isinstance(group["symbols"], list) else []
+            lines.append(
+                f"| `{_cell(domain)}` | {_cell(', '.join(sorted(repositories)))} | "
+                f"{_cell(', '.join(sorted(layers)))} | {len(files)} | "
+                f"{_cell(', '.join(_representative_symbols(symbols, 6)))} |"
+            )
     return [*lines, ""]
 
 
@@ -680,11 +951,16 @@ def _render_requirements(
 
 def _architecture_role(scopes: set[str], dependencies: set[str]) -> str:
     lowered = " ".join((*scopes, *dependencies)).lower()
-    if any(token in lowered for token in ("vue", "react", "frontend", "typescript")):
+    if any(
+        token in lowered for token in ("vue", "react", "frontend", "typescript", "presentation")
+    ):
         return "客户端/前端"
-    if any(token in lowered for token in ("jvm", "spring", "java")):
+    if any(
+        token in lowered
+        for token in ("jvm", "spring", "java", "interface", "application", "domain")
+    ):
         return "服务端应用"
-    if any(token in lowered for token in ("database", "sql", "prisma")):
+    if any(token in lowered for token in ("database", "sql", "prisma", "infrastructure")):
         return "数据服务"
     return "共享或基础组件"
 
@@ -694,8 +970,15 @@ def _render_architecture(
 ) -> list[str]:
     dependencies = _kind_rows(document, "DependencyRow")
     configurations = _kind_rows(document, "ConfigurationRow")
+    modules = _kind_rows(document, "ModuleRow")
     repositories: dict[str, dict[str, set[str]]] = defaultdict(
-        lambda: {"scopes": set(), "dependencies": set(), "configs": set()}
+        lambda: {
+            "scopes": set(),
+            "dependencies": set(),
+            "configs": set(),
+            "domains": set(),
+            "layers": set(),
+        }
     )
     for row in dependencies:
         values = _values(row)
@@ -705,6 +988,19 @@ def _render_architecture(
     for row in configurations:
         values = _values(row)
         repositories[_repository(row, evidence)]["configs"].add(str(values.get("key") or "-"))
+    domain_repositories: dict[str, set[str]] = defaultdict(set)
+    for row in modules:
+        location = _location(row, evidence)
+        if location is None:
+            continue
+        domain = _normalized_domain(location.path)
+        item = repositories[location.repository]
+        item["domains"].add(domain)
+        item["layers"].add(_implementation_layer(location.path))
+        domain_repositories[domain].add(location.repository)
+    repository_nodes = {
+        repository: f"R{index:03d}" for index, repository in enumerate(sorted(repositories), 1)
+    }
     lines = [
         "## 系统上下文",
         "",
@@ -713,26 +1009,54 @@ def _render_architecture(
         "```mermaid",
         "flowchart LR",
     ]
-    for index, (repository, facts) in enumerate(sorted(repositories.items()), 1):
-        alias = f"R{index:03d}"
-        role = _architecture_role(facts["scopes"], facts["dependencies"])
+    for repository, facts in sorted(repositories.items()):
+        alias = repository_nodes[repository]
+        role = _architecture_role(facts["scopes"] | facts["layers"], facts["dependencies"])
         lines.append(f'    {alias}["{_cell(repository)}\\n{_cell(role)}"]')
+    shared_domains = tuple(
+        sorted(
+            (domain for domain, names in domain_repositories.items() if len(names) > 1),
+            key=lambda domain: (-len(domain_repositories[domain]), domain),
+        )[:12]
+    )
+    for index, domain in enumerate(shared_domains, 1):
+        domain_node = f"D{index:03d}"
+        lines.append(f'    {domain_node}["共享模块\\n{_cell(domain)}"]')
+        for repository in sorted(domain_repositories[domain]):
+            lines.append(f"    {repository_nodes[repository]} --> {domain_node}")
     if not repositories:
         lines.append('    R001["没有可确认的架构组件"]')
     lines.extend(["```", "", "## 仓库与职责", ""])
     lines.extend(
         [
-            "| 仓库 | 证据化职责 | 依赖范围 | 依赖数 | 配置数 | 代表技术 |",
-            "|---|---|---|---:|---:|---|",
+            "| 仓库 | 证据化职责 | 实现层 | 模块数 | 依赖数 | 配置数 | 代表模块/技术 |",
+            "|---|---|---|---:|---:|---:|---|",
         ]
     )
     for repository, facts in sorted(repositories.items()):
-        role = _architecture_role(facts["scopes"], facts["dependencies"])
-        examples = ", ".join(sorted(facts["dependencies"])[:10])
+        role = _architecture_role(facts["scopes"] | facts["layers"], facts["dependencies"])
+        examples = [*sorted(facts["domains"])[:6], *sorted(facts["dependencies"])[:6]]
         lines.append(
-            f"| `{_cell(repository)}` | {_cell(role)} | {_cell(', '.join(sorted(facts['scopes'])))} | "
-            f"{len(facts['dependencies'])} | {len(facts['configs'])} | {_cell(examples)} |"
+            f"| `{_cell(repository)}` | {_cell(role)} | {_cell(', '.join(sorted(facts['layers'])) or '-')} | "
+            f"{len(facts['domains'])} | {len(facts['dependencies'])} | {len(facts['configs'])} | "
+            f"{_cell(', '.join(examples))} |"
         )
+    lines.extend(["", "## 模块与仓库边界", ""])
+    if domain_repositories:
+        lines.extend(
+            [
+                "| 模块 | 涉及仓库 | 边界性质 |",
+                "|---|---|---|",
+            ]
+        )
+        for domain, names in sorted(
+            domain_repositories.items(), key=lambda item: (-len(item[1]), item[0])
+        )[:30]:
+            boundary = "跨仓库共享边界" if len(names) > 1 else "仓库内部模块"
+            lines.append(f"| `{_cell(domain)}` | {_cell(', '.join(sorted(names)))} | {boundary} |")
+        lines.append("")
+    else:
+        lines.extend(["当前没有可确认的实现模块边界。", ""])
     lines.extend(["", "## 配置与运行边界", ""])
     if configurations:
         by_repo: dict[str, list[str]] = defaultdict(list)
@@ -807,7 +1131,7 @@ def _render_detailed_design(
     document: MarkdownDocument, evidence: dict[str, EvidenceLocation]
 ) -> list[str]:
     modules = _kind_rows(document, "ModuleRow")
-    lines = ["## 实现结构", "", *_module_summary(modules, evidence)]
+    lines = _module_summary(modules, evidence)
     facts = _kind_rows(document, "ImplementationFactRow", "StateRow", "ErrorRow", "AnnotationRow")
     if facts:
         groups: dict[tuple[str, str, str], list[MarkdownRow]] = defaultdict(list)
@@ -1006,9 +1330,30 @@ def _render_database(
         table = _values(row).get("table")
         if isinstance(table, str):
             by_table[table].append(row)
-    lines: list[str] = []
+    lines: list[str] = [
+        "## 数据实体总览",
+        "",
+        "| 表/实体 | 字段数 | 索引数 | 主键 | 证据 |",
+        "|---|---:|---:|---|---|",
+    ]
     for table, items in sorted(by_table.items()):
-        lines.extend([f"## 表：`{_cell(table)}`", ""])
+        table_row = next(
+            (item for item in items if _values(item).get("record_type") == "table"), None
+        )
+        columns = [item for item in items if _values(item).get("record_type") == "column"]
+        indexes = [item for item in items if _values(item).get("record_type") == "index"]
+        primary = _values(table_row).get("primary_key") if table_row is not None else "-"
+        lines.append(
+            f"| `{_cell(table)}` | {len(columns)} | {len(indexes)} | "
+            f"{_cell(str(primary or '-'))} | {_source(_location(table_row, evidence) if table_row else None)} |"
+        )
+    if not by_table:
+        lines.append("| - | 0 | 0 | - | 当前没有可确认的表结构 |")
+    lines.append("")
+    lines.extend(_relationship_graph(document.sections))
+    lines.extend(["## 表结构详情", ""])
+    for table, items in sorted(by_table.items()):
+        lines.extend([f"### 表：`{_cell(table)}`", ""])
         table_row = next(
             (item for item in items if _values(item).get("record_type") == "table"), None
         )
@@ -1020,7 +1365,7 @@ def _render_database(
         if columns:
             lines.extend(
                 [
-                    "### 字段",
+                    "#### 字段",
                     "",
                     "| 字段 | 类型 | 可空 | 主键 | 默认值 |",
                     "|---|---|---|---|---|",
@@ -1038,7 +1383,7 @@ def _render_database(
             lines.append("")
         indexes = [item for item in items if _values(item).get("record_type") == "index"]
         if indexes:
-            lines.extend(["### 索引", "", "| 索引 | 字段 | 唯一 |", "|---|---|---|"])
+            lines.extend(["#### 索引", "", "| 索引 | 字段 | 唯一 |", "|---|---|---|"])
             for row in indexes:
                 values = _values(row)
                 lines.append(
@@ -1047,8 +1392,6 @@ def _render_database(
                     f"{_cell(_value(values.get('unique')))} |"
                 )
             lines.append("")
-    if not by_table:
-        lines.extend(["## 数据模型", "", "当前没有可确认的表结构。", ""])
     return lines
 
 
@@ -1160,19 +1503,28 @@ def _gap_lines(document: MarkdownDocument) -> list[str]:
         gaps.append("未发现显式外键关系；ER 图只展示表节点。")
     if not gaps:
         gaps.append("未在提交态需求材料或源码中明确表达的业务结论不会被补写。")
-    return ["## 证据缺口", "", *(f"- {item}" for item in gaps), ""]
+    return ["## 覆盖缺口与未确认事项", "", *(f"- {item}" for item in gaps), ""]
 
 
 def render_markdown(document: MarkdownDocument, paths: tuple[str, ...]) -> str:
     """Render one normalized document model into deterministic Markdown."""
     evidence = _locations(document)
+    appendix = _render_complete_knowledge_index(document, evidence)
     document_records = len({row.record_id for section in document.sections for row in section.rows})
+    snapshot_label = (
+        "可验证工作树快照" if "working_tree" in document.authority else "干净 Git 提交快照"
+    )
     lines = [f"# {_cell(document.title)}", ""]
     lines.extend(
         [
-            f"> 权威来源：`{document.authority}` · 本文负责 {document_records} 条证据记录；可召回事实位于正文或完整知识索引，证明位于 Capsule。",
+            f"> 反构边界：{snapshot_label} · 证据记录：{document_records} · 完整性证明：Capsule。",
+            (
+                "> 阅读方式：正文用于理解和评审；文末证据附录保留补充可召回事实，未确认内容不会补写。"
+                if appendix
+                else "> 阅读方式：全部可召回事实已经进入正文；未确认内容不会补写。"
+            ),
             "",
-            "## 文档导航",
+            "## 文档集导航",
             "",
             " · ".join(f"[{path[:-3]}]({path})" for path in paths),
             "",
@@ -1182,7 +1534,15 @@ def render_markdown(document: MarkdownDocument, paths: tuple[str, ...]) -> str:
             "",
         ]
     )
-    lines.extend(_gap_lines(document))
+    lines.extend(_render_document_navigation(document.family, has_appendix=bool(appendix)))
+    if "working_tree" in document.authority:
+        lines.extend(
+            [
+                "> 快照状态：`working_tree`（可验证工作树快照）· 内容绑定当前 HEAD 及 staged、unstaged、"
+                "untracked（未忽略）文件的实际字节；它不是已提交发布态。",
+                "",
+            ]
+        )
     if document.family == "capability_catalog":
         lines.extend(_render_capability_catalog(document, evidence))
     elif document.family == "requirements":
@@ -1236,13 +1596,13 @@ def render_markdown(document: MarkdownDocument, paths: tuple[str, ...]) -> str:
             )
         )
     elif document.family == "database_design":
-        lines.extend(_relationship_graph(document.sections))
         lines.extend(_render_database(document, evidence))
     else:
         for section in document.sections:
             lines.extend([f"## {_cell(section.title)}", ""])
             lines.extend(_generic_table(section.rows, evidence))
-    lines.extend(_render_complete_knowledge_index(document, evidence))
+    lines.extend(_gap_lines(document))
+    lines.extend(appendix)
     lines.extend(_evidence_summary(document))
     lines.extend(
         [

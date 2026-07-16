@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import subprocess
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
 
 from loreloop.knowledge.authoritative_ast_render import render_document_set
-from loreloop.knowledge.authoritative_capsule import CapsuleError, build_capsule, verify_capsule
+from loreloop.knowledge.authoritative_capsule import (
+    CapsuleError,
+    build_capsule,
+    document_ast_canonical_bytes,
+    verify_capsule,
+)
 from loreloop.knowledge.authoritative_document_ast import build_document_ast_set
 from loreloop.knowledge.authoritative_git import capture_source_snapshot
+from loreloop.knowledge.authoritative_ids import canon_v4
 from loreloop.knowledge.authoritative_semantic import build_semantic_core
 from loreloop.knowledge.authoritative_source import detect_source_snapshot, read_snapshot_blobs
 
@@ -44,6 +50,10 @@ def test_capsule_binds_core_full_ast_and_markdown_without_raw_git_or_secrets(
     )
     document_set = build_document_ast_set(core)
     documents = render_document_set(document_set)
+
+    assert document_ast_canonical_bytes(document_set.documents[0]) == canon_v4(
+        asdict(document_set.documents[0])
+    )
 
     # When: Capsule creation and independent recomputation run.
     capsule = build_capsule(core, document_set, documents)

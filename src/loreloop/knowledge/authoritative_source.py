@@ -43,6 +43,7 @@ _AUXILIARY_FILE = re.compile(
     + r".*(?:[._-]generated)\.[^.]+$|.*_test\.go$|conftest\.py$)",
     re.IGNORECASE,
 )
+_LEGACY_SOURCE_ENCODINGS = {".sql": ("gb18030",)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,14 +103,10 @@ def read_snapshot_blobs(
             for entry in entries
             if (repository.alias, entry.path) in requirement_keys
             or (
-                (
-                    not excluded_semantic_source(entry.path)
-                    and _semantic_path_candidate(entry.path)
-                )
+                (not excluded_semantic_source(entry.path) and _semantic_path_candidate(entry.path))
                 or is_supported_test_evidence_path(entry.path)
             )
-            if entry.byte_length is not None
-            and entry.byte_length <= MAX_SEMANTIC_BLOB_BYTES
+            if entry.byte_length is not None and entry.byte_length <= MAX_SEMANTIC_BLOB_BYTES
         )
         oversized_requirements = tuple(
             entry.path
@@ -127,10 +124,7 @@ def read_snapshot_blobs(
             entry
             for entry in entries
             if (
-                (
-                    not excluded_semantic_source(entry.path)
-                    and _semantic_path_candidate(entry.path)
-                )
+                (not excluded_semantic_source(entry.path) and _semantic_path_candidate(entry.path))
                 or is_supported_test_evidence_path(entry.path)
             )
             and entry.byte_length is not None
@@ -175,32 +169,51 @@ def read_snapshot_blobs(
     return tuple(blobs)
 
 
+def source_text_encoding(blob: SnapshotBlob) -> str | None:
+    """Return the deterministic text codec selected for one loaded source blob."""
+    if blob.data is None:
+        return None
+    try:
+        _ = blob.data.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        pass
+    suffix = Path(blob.path).suffix.lower()
+    for encoding in _LEGACY_SOURCE_ENCODINGS.get(suffix, ()):
+        try:
+            text = blob.data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        if "\x00" not in text:
+            return encoding
+    return None
+
+
 def _text(blob: SnapshotBlob) -> str:
     if blob.data is None:
         raise DetectionError(
-            f"supported source exceeds semantic loading limits: "
-            f"{blob.repository_alias}:{blob.path}"
+            f"supported source exceeds semantic loading limits: {blob.repository_alias}:{blob.path}"
         )
-    try:
-        return blob.data.decode("utf-8")
-    except UnicodeDecodeError as exc:
+    encoding = source_text_encoding(blob)
+    if encoding is None:
+        suffix = Path(blob.path).suffix.lower()
+        accepted = ("utf-8", *_LEGACY_SOURCE_ENCODINGS.get(suffix, ()))
         raise DetectionError(
-            f"supported source is not UTF-8: {blob.repository_alias}:{blob.path}"
-        ) from exc
+            "supported source is not valid "
+            + " or ".join(encoding.upper() for encoding in accepted)
+            + f": {blob.repository_alias}:{blob.path}"
+        )
+    return blob.data.decode(encoding)
 
 
 def _test_text(blob: SnapshotBlob) -> str:
-    """Decode test syntax deterministically while preserving strict product-source UTF-8."""
+    """Decode test syntax with its separately governed compatibility profile."""
     if blob.data is None:
         raise DetectionError(
             f"supported test source exceeds semantic loading limits: "
             f"{blob.repository_alias}:{blob.path}"
         )
-    encodings = (
-        ("utf-8",)
-        if is_web_scenario_path(blob.path)
-        else ("utf-8", "gb18030", "latin-1")
-    )
+    encodings = ("utf-8",) if is_web_scenario_path(blob.path) else ("utf-8", "gb18030", "latin-1")
     for encoding in encodings:
         try:
             return blob.data.decode(encoding)
@@ -225,9 +238,7 @@ def _is_config(path: str) -> bool:
 
 
 def _is_openapi_contract(path: str, text: str) -> bool:
-    return path.lower().endswith((".json", ".yaml", ".yml")) and has_supported_openapi_root(
-        text
-    )
+    return path.lower().endswith((".json", ".yaml", ".yml")) and has_supported_openapi_root(text)
 
 
 def excluded_semantic_source(path: str) -> bool:
@@ -314,18 +325,14 @@ def detect_snapshot_blobs(
         if blob.data is None:
             continue
         if is_supported_test_evidence_path(blob.path):
-            reports.append(
-                detect_test_source(_test_text(blob), blob.repository_alias, blob.path)
-            )
+            reports.append(detect_test_source(_test_text(blob), blob.repository_alias, blob.path))
             continue
         if excluded_semantic_source(blob.path):
             continue
         try:
             report = _detect_snapshot_blob(blob)
         except DetectionError as exc:
-            raise DetectionError(
-                f"{blob.repository_alias}:{blob.path}: {exc}"
-            ) from exc
+            raise DetectionError(f"{blob.repository_alias}:{blob.path}: {exc}") from exc
         if report is not None:
             reports.append(report)
     if requirements:

@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import stat
 import subprocess
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,19 +38,25 @@ class _RepositoryInput:
 
 def git_environment() -> dict[str, str]:
     """Return an environment where caller-controlled Git repository redirects are inert."""
-    environment = {
-        name: value for name, value in os.environ.items() if not name.startswith("GIT_")
-    }
+    environment = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
     environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     environment["GIT_TERMINAL_PROMPT"] = "0"
     return environment
 
 
-def _git(repo: Path, *args: str, input_data: bytes | None = None) -> bytes:
+def _git(
+    repo: Path,
+    *args: str,
+    input_data: bytes | None = None,
+    extra_environment: Mapping[str, str] | None = None,
+) -> bytes:
+    environment = git_environment()
+    if extra_environment:
+        environment.update(extra_environment)
     completed = subprocess.run(
         ["git", *args],
         cwd=repo,
-        env=git_environment(),
+        env=environment,
         input=input_data,
         check=False,
         capture_output=True,
@@ -143,27 +151,18 @@ def read_blob_batch(
         retain_bytes=True,
         max_total_bytes=max_total_bytes,
     )
-    return {
-        object_id: data
-        for object_id, (_, _, data) in results.items()
-        if data is not None
-    }
+    return {object_id: data for object_id, (_, _, data) in results.items() if data is not None}
 
 
-def blob_metadata_batch(
-    repo: Path, object_ids: tuple[str, ...]
-) -> dict[str, tuple[int, str]]:
+def blob_metadata_batch(repo: Path, object_ids: tuple[str, ...]) -> dict[str, tuple[int, str]]:
     """Hash arbitrary-size committed blobs without retaining their bytes."""
     results = _stream_blob_batch(repo, object_ids, retain_bytes=False)
-    return {
-        object_id: (size, digest)
-        for object_id, (size, digest, _) in results.items()
-    }
+    return {object_id: (size, digest) for object_id, (size, digest, _) in results.items()}
 
 
-def tree_shape(repo: Path) -> tuple[tuple[str, str, str], ...]:
-    """Return the committed tree shape without honoring caller repository redirects."""
-    raw = _git(repo, "ls-tree", "-r", "-z", "--full-tree", "HEAD")
+def tree_shape(repo: Path, treeish: str = "HEAD") -> tuple[tuple[str, str, str], ...]:
+    """Return one captured tree shape without honoring caller repository redirects."""
+    raw = _git(repo, "ls-tree", "-r", "-z", "--full-tree", treeish)
     shape: list[tuple[str, str, str]] = []
     for record in raw.split(b"\0"):
         if not record:
@@ -178,8 +177,8 @@ def tree_shape(repo: Path) -> tuple[tuple[str, str, str], ...]:
     return tuple(shape)
 
 
-def snapshot_entries(repo: Path) -> tuple[SnapshotEntry, ...]:
-    shape = tree_shape(repo)
+def snapshot_entries(repo: Path, treeish: str = "HEAD") -> tuple[SnapshotEntry, ...]:
+    shape = tree_shape(repo, treeish)
     blob_ids = tuple(object_id for _, mode, object_id in shape if mode != "160000")
     metadata = blob_metadata_batch(repo, blob_ids)
     entries: list[SnapshotEntry] = []
@@ -196,9 +195,7 @@ def snapshot_entries(repo: Path) -> tuple[SnapshotEntry, ...]:
             typed_mode = "100755"
         else:
             typed_mode = "120000"
-        entries.append(
-            SnapshotEntry(path, typed_mode, oid, byte_length, blob_sha256)
-        )
+        entries.append(SnapshotEntry(path, typed_mode, oid, byte_length, blob_sha256))
     return tuple(entries)
 
 
@@ -249,14 +246,72 @@ def _root_if_repository(path: Path, alias: str) -> Path | None:
     return resolved
 
 
-def _clean(repo: Path, alias: str) -> None:
-    changed = (
-        _git(repo, "diff", "--name-only", "-z"),
-        _git(repo, "diff", "--cached", "--name-only", "-z"),
-        _git(repo, "ls-files", "--others", "--exclude-standard", "-z"),
+def _excluded(path: str, excluded_paths: tuple[str, ...]) -> bool:
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in excluded_paths)
+
+
+def _safe_filter_overrides(repo: Path) -> tuple[str, ...]:
+    """Disable repository-local content filters while inspecting mutable files."""
+    keys = tuple(
+        os.fsdecode(item)
+        for item in _git(repo, "config", "--local", "--name-only", "--null", "--list").split(b"\0")
+        if item
     )
-    if any(_source_paths(output) for output in changed):
-        raise GitSnapshotError(f"repository {alias!r} has uncommitted source changes")
+    drivers = {
+        match.group(1)
+        for key in keys
+        if (match := re.fullmatch(r"filter\.(.+)\.(?:clean|process|required)", key))
+    }
+    return tuple(
+        argument
+        for driver in sorted(drivers)
+        for argument in (
+            "-c",
+            f"filter.{driver}.clean=",
+            "-c",
+            f"filter.{driver}.process=",
+            "-c",
+            f"filter.{driver}.required=false",
+        )
+    )
+
+
+def _changes(repo: Path, excluded_paths: tuple[str, ...] = ()) -> tuple[tuple[str, str], ...]:
+    safe_filters = _safe_filter_overrides(repo)
+    commands = (
+        ("unstaged", (*safe_filters, "diff", "--name-only", "-z")),
+        ("staged", (*safe_filters, "diff", "--cached", "--name-only", "-z")),
+        ("untracked", ("ls-files", "--others", "--exclude-standard", "-z")),
+    )
+    return tuple(
+        (state, path)
+        for state, command in commands
+        for path in _source_paths(_git(repo, *command))
+        if not _excluded(path, excluded_paths)
+    )
+
+
+def _worktree_state_sha256(changes: tuple[tuple[str, str], ...]) -> str:
+    return hashlib.sha256(
+        b"loreloop-worktree-state-v1\0"
+        + canon_v4([{"state": state, "path": path} for state, path in changes])
+    ).hexdigest()
+
+
+def _render_changes(changes: tuple[tuple[str, str], ...], *, limit: int = 20) -> str:
+    visible = changes[:limit]
+    detail = ", ".join(f"{state}:{path}" for state, path in visible)
+    if len(changes) > limit:
+        detail += f", ... (+{len(changes) - limit} more)"
+    return detail
+
+
+def _clean(repo: Path, alias: str, excluded_paths: tuple[str, ...] = ()) -> None:
+    changes = _changes(repo, excluded_paths)
+    if changes:
+        raise GitSnapshotError(
+            f"repository {alias!r} has uncommitted source changes: {_render_changes(changes)}"
+        )
 
 
 def _is_source_path(path: str) -> bool:
@@ -282,14 +337,129 @@ def _source_index(raw: bytes) -> bytes:
     return b"\0".join(records) + (b"\0" if records else b"")
 
 
-def _snapshot(repository: _RepositoryInput, *, require_clean: bool) -> RepositorySnapshot:
+def _working_tree_material(
+    repo: Path,
+    excluded_paths: tuple[str, ...],
+) -> tuple[str, bytes, tuple[SnapshotEntry, ...], str]:
+    changes_before = _changes(repo, excluded_paths)
+    paths = tuple(
+        dict.fromkeys(
+            path
+            for path in _source_paths(
+                _git(repo, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+            )
+            if not _excluded(path, excluded_paths)
+        )
+    )
+    index_records: list[bytes] = []
+    regular_paths: list[str] = []
+    regular_modes: dict[str, str] = {}
+    for path in paths:
+        source = repo / path
+        try:
+            metadata = source.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(metadata.st_mode):
+            regular_paths.append(path)
+            regular_modes[path] = "100755" if metadata.st_mode & 0o111 else "100644"
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            object_id = (
+                _git(
+                    repo,
+                    "hash-object",
+                    "-w",
+                    "--stdin",
+                    input_data=os.fsencode(os.readlink(source)),
+                )
+                .decode()
+                .strip()
+            )
+            index_records.append(
+                b"120000 " + object_id.encode() + b"\t" + os.fsencode(path) + b"\0"
+            )
+            continue
+        if stat.S_ISDIR(metadata.st_mode):
+            object_id = _git(source, "rev-parse", "HEAD").decode().strip()
+            index_records.append(
+                b"160000 " + object_id.encode() + b"\t" + os.fsencode(path) + b"\0"
+            )
+            continue
+        raise GitSnapshotError(f"unsupported working-tree file type: {path}")
+    for offset in range(0, len(regular_paths), 200):
+        batch = regular_paths[offset : offset + 200]
+        object_ids = (
+            _git(
+                repo,
+                "hash-object",
+                "-w",
+                "--no-filters",
+                "--",
+                *batch,
+            )
+            .decode()
+            .splitlines()
+        )
+        if len(object_ids) != len(batch):
+            raise GitSnapshotError("Git returned an incomplete working-tree blob set")
+        index_records.extend(
+            regular_modes[path].encode()
+            + b" "
+            + object_id.encode()
+            + b"\t"
+            + os.fsencode(path)
+            + b"\0"
+            for path, object_id in zip(batch, object_ids, strict=True)
+        )
+    with tempfile.TemporaryDirectory(prefix="loreloop-index-") as temporary:
+        index_path = Path(temporary) / "index"
+        environment = {"GIT_INDEX_FILE": str(index_path)}
+        _git(repo, "read-tree", "--empty", extra_environment=environment)
+        if index_records:
+            _git(
+                repo,
+                "update-index",
+                "-z",
+                "--index-info",
+                input_data=b"".join(index_records),
+                extra_environment=environment,
+            )
+        tree = _git(repo, "write-tree", extra_environment=environment).decode().strip()
+        index = _source_index(
+            _git(repo, "ls-files", "--stage", "-z", extra_environment=environment)
+        )
+    changes_after = _changes(repo, excluded_paths)
+    if changes_after != changes_before:
+        raise GitSnapshotError("repository changed during working-tree snapshot capture")
+    return (
+        tree,
+        index,
+        snapshot_entries(repo, tree),
+        _worktree_state_sha256(changes_before),
+    )
+
+
+def _snapshot(
+    repository: _RepositoryInput,
+    *,
+    require_clean: bool,
+    working_tree: bool,
+    excluded_paths: tuple[str, ...],
+) -> RepositorySnapshot:
     repo = _root(repository.path, repository.alias)
-    if require_clean:
-        _clean(repo, repository.alias)
+    if require_clean and not working_tree:
+        _clean(repo, repository.alias, excluded_paths)
     head = _git(repo, "rev-parse", "HEAD").decode().strip()
     if repository.expected_commit is not None and head != repository.expected_commit:
         raise GitSnapshotError(f"submodule {repository.alias!r} does not match its gitlink commit")
-    tree = _git(repo, "rev-parse", "HEAD^{tree}").decode().strip()
+    if working_tree:
+        tree, index, entries, worktree_state = _working_tree_material(repo, excluded_paths)
+    else:
+        tree = _git(repo, "rev-parse", "HEAD^{tree}").decode().strip()
+        index = _source_index(_git(repo, "ls-files", "--stage", "-z"))
+        entries = snapshot_entries(repo)
+        worktree_state = None
     roots = tuple(
         sorted(
             root
@@ -302,8 +472,6 @@ def _snapshot(repository: _RepositoryInput, *, require_clean: bool) -> Repositor
     repository_identity = hashlib.sha256(
         b"loreloop-git-roots-v1\0" + b"\0".join(root.encode("ascii") for root in roots)
     ).hexdigest()
-    index = _source_index(_git(repo, "ls-files", "--stage", "-z"))
-    entries = snapshot_entries(repo)
     snapshot = RepositorySnapshot(
         alias=repository.alias,
         role=repository.role,
@@ -312,9 +480,12 @@ def _snapshot(repository: _RepositoryInput, *, require_clean: bool) -> Repositor
         index_sha256=hashlib.sha256(index).hexdigest(),
         entries=entries,
         repository_identity_sha256=repository_identity,
+        snapshot_kind="working_tree" if working_tree else "commit",
+        worktree_state_sha256=worktree_state,
+        excluded_paths=excluded_paths,
     )
-    if require_clean:
-        _clean(repo, repository.alias)
+    if require_clean and not working_tree:
+        _clean(repo, repository.alias, excluded_paths)
     if _git(repo, "rev-parse", "HEAD").decode().strip() != head:
         raise GitSnapshotError(f"repository {repository.alias!r} changed during snapshot capture")
     return snapshot
@@ -345,9 +516,14 @@ def capture_source_snapshot(
     peers: Mapping[str, Path] | None = None,
     *,
     require_clean: bool = True,
+    working_tree: bool = False,
+    excluded_paths: Mapping[str, tuple[str, ...]] | None = None,
 ) -> SourceSnapshot:
     """Capture a Git root or a declared aggregate workspace, plus submodules."""
+    if working_tree and not require_clean:
+        raise GitSnapshotError("working-tree capture cannot disable stability checks")
     peer_items = sorted((peers or {}).items())
+    exclusions = excluded_paths or {}
     root_repository = _root_if_repository(root, ".")
     inputs: list[_RepositoryInput] = []
     if root_repository is not None:
@@ -372,6 +548,8 @@ def capture_source_snapshot(
         current = _snapshot(
             _RepositoryInput(item.alias, item.role, resolved, item.expected_commit),
             require_clean=require_clean,
+            working_tree=working_tree,
+            excluded_paths=tuple(sorted(exclusions.get(item.alias, ()))),
         )
         snapshots.append(current)
         inputs.extend(_submodules(item, current))
@@ -383,7 +561,7 @@ def capture_source_snapshot(
 
 
 def _repository_snapshot_payload(repository: RepositorySnapshot) -> CanonicalInput:
-    return {
+    payload: dict[str, CanonicalInput] = {
         "alias": repository.alias,
         "role": repository.role,
         "identity": repository.repository_identity_sha256,
@@ -401,12 +579,14 @@ def _repository_snapshot_payload(repository: RepositorySnapshot) -> CanonicalInp
             for entry in repository.entries
         ],
     }
+    if repository.snapshot_kind == "working_tree":
+        payload["snapshot_kind"] = repository.snapshot_kind
+        payload["worktree_state"] = repository.worktree_state_sha256
+    return payload
 
 
 def _snapshot_payload(snapshot: SourceSnapshot) -> CanonicalInput:
-    return [
-        _repository_snapshot_payload(repository) for repository in snapshot.repositories
-    ]
+    return [_repository_snapshot_payload(repository) for repository in snapshot.repositories]
 
 
 def repository_snapshot_sha256(repository: RepositorySnapshot) -> str:
@@ -430,7 +610,20 @@ def verify_source_snapshot(
     peers: Mapping[str, Path] | None = None,
 ) -> None:
     """Fail when any repository differs from a previously captured snapshot."""
-    current = capture_source_snapshot(root, peers)
+    kinds = {repository.snapshot_kind for repository in expected.repositories}
+    if len(kinds) != 1:
+        raise GitSnapshotError("source snapshot mixes committed and working-tree repositories")
+    exclusions = {
+        repository.alias: repository.excluded_paths
+        for repository in expected.repositories
+        if repository.excluded_paths
+    }
+    current = capture_source_snapshot(
+        root,
+        peers,
+        working_tree=kinds == {"working_tree"},
+        excluded_paths=exclusions,
+    )
     if current != expected:
         raise GitSnapshotError("project source changed after snapshot capture")
 
@@ -447,6 +640,24 @@ def verify_source_snapshot_metadata(
     peers: Mapping[str, Path] | None = None,
 ) -> None:
     """Verify mutable Git state without re-reading every immutable blob."""
+    kinds = {repository.snapshot_kind for repository in expected.repositories}
+    if kinds == {"working_tree"}:
+        exclusions = {
+            repository.alias: repository.excluded_paths
+            for repository in expected.repositories
+            if repository.excluded_paths
+        }
+        current = capture_source_snapshot(
+            root,
+            peers,
+            working_tree=True,
+            excluded_paths=exclusions,
+        )
+        if current != expected:
+            raise GitSnapshotError("project working tree changed after snapshot capture")
+        return
+    if kinds != {"commit"}:
+        raise GitSnapshotError("source snapshot mixes committed and working-tree repositories")
     has_root = any(repository.alias == "." for repository in expected.repositories)
     current_root = _root_if_repository(root, ".")
     if has_root != (current_root is not None):
@@ -460,14 +671,19 @@ def verify_source_snapshot_metadata(
         repo = paths.get(repository.alias)
         if repo is None:
             raise GitSnapshotError(f"snapshot repository {repository.alias!r} has no source path")
-        _clean(repo, repository.alias)
+        _clean(repo, repository.alias, repository.excluded_paths)
         if _git(repo, "rev-parse", "HEAD").decode().strip() != repository.commit_id.git_sha1_hex():
             raise GitSnapshotError("project source changed after snapshot capture")
-        if _git(repo, "rev-parse", "HEAD^{tree}").decode().strip() != repository.tree_id.git_sha1_hex():
+        if (
+            _git(repo, "rev-parse", "HEAD^{tree}").decode().strip()
+            != repository.tree_id.git_sha1_hex()
+        ):
             raise GitSnapshotError("project source changed after snapshot capture")
         index = _source_index(_git(repo, "ls-files", "--stage", "-z"))
         actual_shape = tree_shape(repo)
-        if hashlib.sha256(index).hexdigest() != repository.index_sha256 or actual_shape != _expected_shape(repository):
+        if hashlib.sha256(
+            index
+        ).hexdigest() != repository.index_sha256 or actual_shape != _expected_shape(repository):
             raise GitSnapshotError("project source changed after snapshot capture")
         prefix = "" if repository.alias == "." else f"{repository.alias}/"
         for entry in repository.entries:

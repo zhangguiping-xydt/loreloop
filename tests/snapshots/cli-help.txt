@@ -552,8 +552,8 @@ usage: loreloop knowledge export [-h] [--stale]
                                  [--format {audit,package,docs}]
                                  [--output OUTPUT]
                                  [--project-name PROJECT_NAME]
-                                 [--requirements PATH] [--force] [--attest]
-                                 [--include-web]
+                                 [--requirements PATH] [--force]
+                                 [--working-tree] [--attest] [--include-web]
 
 options:
   -h, --help            show this help message and exit
@@ -570,6 +570,9 @@ options:
                         for a peer repository
   --force               replace an existing ZIP or update source docs in a
                         non-empty directory
+  --working-tree        snapshot staged, unstaged, and untracked non-ignored
+                        files without committing; the documents are marked as
+                        a working-tree baseline
   --attest              append an optional local trust-chain attestation for
                         the exported package
   --include-web         include current Web entries that are both operator-

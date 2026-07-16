@@ -37,9 +37,7 @@ def test_trusted_export_binds_package_to_chain_and_checkout_location(tmp_path: P
     chain = EvidenceChain.for_workdir(root, key_dir=tmp_path / "keys")
     _ = attest_export(chain, root, snapshot, capsule, "2" * 64, {"peer": peer})
 
-    verified = verify_trusted_export(
-        chain.verify(), root, capsule, "2" * 64, {"peer": peer}
-    )
+    verified = verify_trusted_export(chain.verify(), root, capsule, "2" * 64, {"peer": peer})
 
     assert verified.event == "authoritative_export_attested"
 
@@ -55,9 +53,7 @@ def test_trusted_export_rejects_same_history_clone_substituted_for_alias(tmp_pat
     _ = attest_export(chain, root, snapshot, capsule, "2" * 64, {"peer": peer})
 
     with pytest.raises(ExportTrustError, match="identity or checkout location"):
-        _ = verify_trusted_export(
-            chain.verify(), root, capsule, "2" * 64, {"peer": replacement}
-        )
+        _ = verify_trusted_export(chain.verify(), root, capsule, "2" * 64, {"peer": replacement})
 
 
 def test_trusted_export_rejects_same_history_clone_recreated_at_original_path(
@@ -74,9 +70,7 @@ def test_trusted_export_rejects_same_history_clone_recreated_at_original_path(
     subprocess.run(["git", "clone", str(original), str(peer)], check=True, capture_output=True)
 
     with pytest.raises(ExportTrustError, match="checkout instance changed"):
-        _ = verify_trusted_export(
-            chain.verify(), root, capsule, "2" * 64, {"peer": peer}
-        )
+        _ = verify_trusted_export(chain.verify(), root, capsule, "2" * 64, {"peer": peer})
 
 
 def test_trusted_export_rejects_different_head_in_same_checkout(tmp_path: Path) -> None:
@@ -171,6 +165,28 @@ def test_trusted_export_allows_untracked_export_artifact(tmp_path: Path) -> None
     assert verified.event == "authoritative_export_attested"
 
 
+def test_trusted_working_tree_export_excludes_its_managed_output(tmp_path: Path) -> None:
+    root = _repository(tmp_path / "root")
+    (root / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    exclusions = {".": ("baseline.zip",)}
+    snapshot = capture_source_snapshot(
+        root,
+        working_tree=True,
+        excluded_paths=exclusions,
+    )
+    capsule = CapsuleArtifact(".loreloop-export.json", "{}\n", "1" * 64)
+    chain = EvidenceChain.for_workdir(root, key_dir=tmp_path / "keys")
+    _ = attest_export(chain, root, snapshot, capsule, "2" * 64)
+    (root / "baseline.zip").write_bytes(b"managed export")
+
+    verified = verify_trusted_export(chain.verify(), root, capsule, "2" * 64)
+
+    assert verified.event == "authoritative_export_attested"
+    (root / "app.py").write_text("VALUE = 3\n", encoding="utf-8")
+    with pytest.raises(ExportTrustError, match="source snapshot changed"):
+        _ = verify_trusted_export(chain.verify(), root, capsule, "2" * 64)
+
+
 def test_trusted_export_rejects_unattested_capsule(tmp_path: Path) -> None:
     root = _repository(tmp_path / "root")
     capsule = CapsuleArtifact(".loreloop-export.json", "{}\n", "1" * 64)
@@ -190,9 +206,7 @@ def test_trusted_export_supports_non_git_aggregate_project_root(tmp_path: Path) 
     chain = EvidenceChain.for_workdir(workspace, key_dir=tmp_path / "keys")
     _ = attest_export(chain, workspace, snapshot, capsule, "2" * 64, peers)
 
-    verified = verify_trusted_export(
-        chain.verify(), workspace, capsule, "2" * 64, peers
-    )
+    verified = verify_trusted_export(chain.verify(), workspace, capsule, "2" * 64, peers)
 
     assert set(verified.payload["repositories"]) == {"backend"}
 

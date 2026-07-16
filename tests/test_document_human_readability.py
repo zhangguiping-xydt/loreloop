@@ -81,10 +81,16 @@ def test_large_fact_inventory_renders_as_human_views_and_remains_searchable(
     acceptance = (output / "readable-验收规格.md").read_text(encoding="utf-8")
     capsule = (output / ".loreloop-export.json").read_text(encoding="utf-8")
 
-    detailed_overview = detailed.partition("## 完整知识索引")[0]
-    user_guide_overview = user_guide.partition("## 完整知识索引")[0]
-    acceptance_overview = acceptance.partition("## 完整知识索引")[0]
-    assert len(detailed_overview.splitlines()) < 100
+    appendix_heading = "## 证据附录：完整可召回事实"
+    detailed_overview = detailed.partition(appendix_heading)[0]
+    user_guide_overview = user_guide.partition(appendix_heading)[0]
+    acceptance_overview = acceptance.partition(appendix_heading)[0]
+    assert len(detailed_overview.splitlines()) < 500
+    assert "## 本文导航" in detailed
+    assert "## 设计摘要" in detailed
+    assert "## 模块详细设计" in detailed
+    assert "模块协作视图" in detailed
+    assert appendix_heading in detailed
     assert "zz_deep_symbol_079" in detailed
     assert "record_id" not in "\n".join(
         path.read_text(encoding="utf-8") for path in output.glob("*.md")
@@ -93,9 +99,9 @@ def test_large_fact_inventory_renders_as_human_views_and_remains_searchable(
     assert "VUE_APP_I18N_LOCALE" not in requirements
     assert "VUE_APP_I18N_LOCALE" in architecture
     assert "功能区域" in user_guide
-    assert len(user_guide_overview.splitlines()) < 100
+    assert len(user_guide_overview.splitlines()) < 200
     assert "代表测试套件与用例" in acceptance
-    assert len(acceptance_overview.splitlines()) < 100
+    assert len(acceptance_overview.splitlines()) < 200
     assert "## 接口域索引" in interface
     assert "### . · /srv/salary" in interface
     assert interface.count("/srv/salary/item-") == 40

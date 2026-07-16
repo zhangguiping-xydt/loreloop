@@ -211,6 +211,11 @@ so every hit points to the same filename and section a reviewer can open:
 loreloop knowledge search "fund ratio" --package baseline
 ```
 
+The transient BM25 index groups visible paragraphs, lists, and table blocks
+within their Markdown sections instead of treating every line as an isolated
+fact. Snippets select the matching visible fact, Mermaid syntax is excluded,
+and the default path needs no model, vector store, or database.
+
 When the question and the project use different wording, pass bounded
 retrieval-only synonyms, translations, abbreviations, or likely identifiers:
 
@@ -220,12 +225,36 @@ loreloop knowledge search "fund ratio" \
   --expand "housing provident fund contribution ratio HPF hpfRatioConfig"
 ```
 
+Expansion remains a lower-weight candidate hint. When every result depends on
+it, the CLI labels the result set as low confidence so the host agent knows to
+verify the matched document or source rather than treating the expansion as
+project knowledge.
+
 Create a compressed handoff artifact only when one is needed:
 
 ```bash
 loreloop knowledge export --format package --output baseline.zip
 loreloop knowledge replay baseline.zip
 ```
+
+By default, project documents come from clean commits. During active
+development, export the exact current files without committing or changing the
+real Git index:
+
+```bash
+loreloop knowledge export --format docs --output baseline --working-tree
+```
+
+The working-tree baseline includes staged, unstaged, and untracked non-ignored
+files. It is bound to the current HEAD plus a separate source tree and is
+clearly labeled in every generated document; it does not claim to be a
+committed release state. A strict-mode error lists the files that made the
+repository dirty and points to this option.
+
+Legacy `.sql` files are decoded as UTF-8 first, with a deterministic GB18030
+fallback that also covers GBK-compatible files. LoreLoop preserves and hashes
+the original repository bytes; exporting a baseline never requires bulk source
+transcoding.
 
 Expansion changes ranking only. It is never added to the baseline, rendered as
 project knowledge, or allowed to raise the trust of a result. Codex, Claude

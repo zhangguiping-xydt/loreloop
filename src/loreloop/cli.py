@@ -236,6 +236,12 @@ def cmd_init(args: argparse.Namespace) -> int:
                     fh.write("\n")
                 fh.write(f"{ignore_entry}\n")
             print(f"added {ignore_entry} to .gitignore (evidence may embed page content)")
+        print(
+            "Git note: project-local integration files remain ordinary project files; "
+            "LoreLoop never commits them automatically. Use "
+            "`loreloop knowledge export --format docs --output baseline --working-tree` "
+            "to export the current state without cleaning Git."
+        )
 
     hosts = [name for name in _AGENT_CHOICES if shutil.which(name)]
     if not hosts:
@@ -1286,10 +1292,7 @@ def cmd_web(args: argparse.Namespace) -> int:
                 f"{len(scenario.assertions)} assertions)"
             )
         for _, scenario in approved:
-            print(
-                f"approved   {scenario.scenario_id}  [{scenario.risk}]  "
-                f"{scenario.title}"
-            )
+            print(f"approved   {scenario.scenario_id}  [{scenario.risk}]  {scenario.title}")
         if not candidates and not approved:
             print("no Web scenarios found")
         return 0
@@ -1629,9 +1632,7 @@ def cmd_begin(args: argparse.Namespace) -> int:
         current_policies,
     )
     payload["mode"] = "session"
-    payload["requirement_materials"] = [
-        item.evidence_payload() for item in requirement_materials
-    ]
+    payload["requirement_materials"] = [item.evidence_payload() for item in requirement_materials]
     chain.append("delegation_prepared", payload)
     _print_context_pack_notes(prepared.pack, endorsed)
     print("# LoreLoop current-session run")
@@ -1944,6 +1945,12 @@ def cmd_harvest(args: argparse.Namespace) -> int:
 
 def cmd_knowledge(args: argparse.Namespace) -> int:
     workdir = _workdir()
+    if args.action == "export" and args.format == "audit" and args.working_tree:
+        raise CLIError(
+            "--working-tree requires project documents",
+            "the audit export reads governed knowledge entries rather than a source snapshot",
+            "use `--format docs` or `--format package`, or remove `--working-tree`",
+        )
     if args.action == "export" and args.format == "audit" and args.include_web:
         raise CLIError(
             "--include-web requires a project package",
@@ -2009,6 +2016,12 @@ def _search_baseline_package(args: argparse.Namespace) -> int:
         print(f"       {hit.snippet}")
     if not hits:
         print("no matching baseline records")
+    elif all(hit.expanded_only for hit in hits):
+        print(
+            "[LoreLoop] note: these low-confidence matches depend on --expand; "
+            "the expansion changed candidate selection but is not project knowledge",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -2575,6 +2588,44 @@ def _governed_web_entries(workdir: Path) -> tuple[Entry, ...]:
     return selected
 
 
+def _export_output_exclusions(
+    output: Path,
+    workdir: Path,
+    peers: dict[str, Path],
+) -> dict[str, tuple[str, ...]]:
+    """Keep the managed export target outside its own source proof boundary."""
+    if output.exists():
+        if output.is_dir():
+            managed_output = (output / ".loreloop-export.json").is_file()
+        else:
+            from .knowledge.authoritative_archive import (
+                ExportArchiveError,
+                read_export_archive_with_capsule,
+            )
+
+            try:
+                _ = read_export_archive_with_capsule(output)
+                managed_output = True
+            except ExportArchiveError:
+                managed_output = False
+        if not managed_output:
+            return {}
+    target = output.resolve()
+    repositories = {
+        ".": workdir.resolve(),
+        **{name: path.resolve() for name, path in peers.items()},
+    }
+    excluded: dict[str, tuple[str, ...]] = {}
+    for alias, repository in repositories.items():
+        try:
+            relative = target.relative_to(repository)
+        except ValueError:
+            continue
+        if relative.parts:
+            excluded[alias] = (relative.as_posix(),)
+    return excluded
+
+
 def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
     from .knowledge.authoritative_archive import (
         ExportArchiveError,
@@ -2611,7 +2662,7 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
     if args.stale:
         raise CLIError(
             "source document export does not accept --stale",
-            "the source snapshot is rebuilt from the current clean Git commits",
+            "the source snapshot is rebuilt from Git commits or an explicit working tree",
             "remove --stale and retry, or use --format audit for knowledge-entry drift",
         )
     default_output = "baseline.zip" if args.format == "package" else "baseline"
@@ -2624,16 +2675,21 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
         else:
             output_existed = ensure_source_output_ready(output, force=args.force)
         peers = load_repos(workdir)
-        print("capturing clean Git source snapshot...", file=sys.stderr)
-        snapshot = capture_source_snapshot(workdir, peers)
+        excluded_paths = _export_output_exclusions(output, workdir, peers)
+        mode = "verifiable Git working-tree" if args.working_tree else "clean Git"
+        print(f"capturing {mode} source snapshot...", file=sys.stderr)
+        snapshot = capture_source_snapshot(
+            workdir,
+            peers,
+            working_tree=args.working_tree,
+            excluded_paths=excluded_paths,
+        )
         print(
             f"detecting source contracts across {len(snapshot.repositories)} repositories...",
             file=sys.stderr,
         )
         requirements = tuple(args.requirements)
-        blobs = read_snapshot_blobs(
-            snapshot, workdir, peers, requirements=requirements
-        )
+        blobs = read_snapshot_blobs(snapshot, workdir, peers, requirements=requirements)
         report = detect_snapshot_blobs(blobs, requirements=requirements)
         semantic_blobs = blobs
         if args.include_web:
@@ -2642,9 +2698,7 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
             web_test_report, web_test_blobs = build_governed_web_test_results(
                 EvidenceChain.for_workdir(workdir).verify()
             )
-            report = normalize_detection_report(
-                merge_reports(report, web_report, web_test_report)
-            )
+            report = normalize_detection_report(merge_reports(report, web_report, web_test_report))
             semantic_blobs = (*blobs, *web_blobs, *web_test_blobs)
             print(
                 f"included {len(web_entries)} approved and verified Web knowledge entries",
@@ -2696,10 +2750,17 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
         IdentityContractError,
         RepoConfigError,
     ) as exc:
+        if "uncommitted source changes" in str(exc) and not args.working_tree:
+            next_action = (
+                "commit, stash, or restore the listed files; or retry with `--working-tree` "
+                "to export their exact current bytes without changing commits or the real index"
+            )
+        else:
+            next_action = "fix the reported source state, then retry"
         raise CLIError(
             "source document export failed",
             str(exc),
-            "commit or restore every project repository, fix the reported source, then retry",
+            next_action,
         ) from exc
     destination = "ZIP package" if archive_output else "directory"
     print(f"exported {len(documents)} reverse-engineered documents to {destination} {output}")
@@ -3225,9 +3286,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_web_test_record.add_argument("url", metavar="URL")
     p_web_test_record.add_argument("--title")
-    p_web_test_record.add_argument(
-        "--risk", choices=("read-only", "writes"), default="read-only"
-    )
+    p_web_test_record.add_argument("--risk", choices=("read-only", "writes"), default="read-only")
     p_web_test_record.add_argument("--allow-writes", action="store_true")
     p_web_test_record.set_defaults(func=cmd_web)
     p_web_test_run = web_test_sub.add_parser(
@@ -3241,9 +3300,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_web_test_export = web_test_sub.add_parser(
         "export", help="export approved scenarios as deterministic Playwright tests"
     )
-    p_web_test_export.add_argument(
-        "--format", choices=("playwright",), default="playwright"
-    )
+    p_web_test_export.add_argument("--format", choices=("playwright",), default="playwright")
     p_web_test_export.add_argument("--output", required=True, metavar="DIRECTORY")
     p_web_test_export.add_argument("--force", action="store_true")
     p_web_test_export.set_defaults(func=cmd_web)
@@ -3431,6 +3488,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="replace an existing ZIP or update source docs in a non-empty directory",
+    )
+    p_knowledge_export.add_argument(
+        "--working-tree",
+        action="store_true",
+        help=(
+            "snapshot staged, unstaged, and untracked non-ignored files without committing; "
+            "the documents are marked as a working-tree baseline"
+        ),
     )
     p_knowledge_export.add_argument(
         "--attest",

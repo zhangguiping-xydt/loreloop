@@ -33,8 +33,9 @@ def _line_spans(data: bytes) -> tuple[tuple[int, int], ...]:
 
 
 def _snapshot_payload(snapshot: SourceSnapshot) -> CanonicalInput:
-    return [
-        {
+    payloads: list[CanonicalInput] = []
+    for repository in snapshot.repositories:
+        payload: dict[str, CanonicalInput] = {
             "alias": repository.alias,
             "role": repository.role,
             "identity": repository.repository_identity_sha256,
@@ -52,8 +53,11 @@ def _snapshot_payload(snapshot: SourceSnapshot) -> CanonicalInput:
                 for entry in repository.entries
             ],
         }
-        for repository in snapshot.repositories
-    ]
+        if repository.snapshot_kind == "working_tree":
+            payload["snapshot_kind"] = repository.snapshot_kind
+            payload["worktree_state"] = repository.worktree_state_sha256
+        payloads.append(payload)
+    return payloads
 
 
 def _identities(snapshot: SourceSnapshot) -> tuple[str, str, str]:
@@ -81,15 +85,15 @@ def build_semantic_core(
     project_name: str,
 ) -> SemanticCore:
     """Bind every detected fact to exact committed bytes and stable semantic IDs."""
+    snapshot_kinds = {repository.snapshot_kind for repository in snapshot.repositories}
+    if len(snapshot_kinds) != 1:
+        raise DetectionError("source snapshot mixes committed and working-tree repositories")
+    snapshot_kind = next(iter(snapshot_kinds))
     trust, config, snapshot_digest = _identities(snapshot)
     context = SemanticContext(
         trust,
         config,
-        {
-            (blob.repository_alias, blob.path): blob
-            for blob in blobs
-            if blob.data is not None
-        },
+        {(blob.repository_alias, blob.path): blob for blob in blobs if blob.data is not None},
         {
             (blob.repository_alias, blob.path): _line_spans(blob.data)
             for blob in blobs
@@ -100,7 +104,15 @@ def build_semantic_core(
     require_unique_ids(tuple(record.record_id for record in records))
     project = normalize_project_name(project_name)
     provisional = SemanticCore(
-        project, trust, config, snapshot_digest, records, evidence, "0" * 64, "0" * 64
+        project,
+        trust,
+        config,
+        snapshot_digest,
+        records,
+        evidence,
+        "0" * 64,
+        "0" * 64,
+        snapshot_kind,
     )
     payload = semantic_core_payload(provisional)
     core_digest = semantic_core_sha256(payload)
@@ -113,6 +125,7 @@ def build_semantic_core(
         evidence,
         core_digest,
         package_id(core_digest),
+        snapshot_kind,
     )
 
 
@@ -142,7 +155,7 @@ def semantic_core_payload(core: SemanticCore) -> CanonicalInput:
         }
         for evidence in core.evidence
     ]
-    return {
+    payload: dict[str, CanonicalInput] = {
         "project_name": core.project_name,
         "trust_domain_id": core.trust_domain_id,
         "repository_config_digest": core.repository_config_digest,
@@ -150,3 +163,6 @@ def semantic_core_payload(core: SemanticCore) -> CanonicalInput:
         "records": canonical_records,
         "evidence": canonical_evidence,
     }
+    if core.source_snapshot_kind == "working_tree":
+        payload["source_snapshot_kind"] = core.source_snapshot_kind
+    return payload

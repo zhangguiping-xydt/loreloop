@@ -73,6 +73,23 @@ existing output. Verify a produced package with:
 
     loreloop knowledge replay baseline
 
+Committed snapshots remain the default. If export reports uncommitted source
+changes, show the listed files to the operator. Do not commit, stash, delete,
+or ignore them automatically. If the request is to export the current project
+baseline (rather than specifically a committed-release baseline), retry
+directly without asking for a Git commit:
+
+    loreloop knowledge export --format docs --output baseline --working-tree
+
+This mode includes staged, unstaged, and untracked non-ignored files, binds
+them to the current HEAD and a separate source tree, and labels every document
+as a working-tree baseline rather than a committed release state.
+
+Legacy SQL does not require repository-wide transcoding. LoreLoop reads SQL as
+UTF-8 first and falls back to GB18030 (including GBK-compatible files) while
+keeping the original blob bytes and digest as evidence. Never rewrite source
+encodings merely to make an export pass.
+
 Search the replay-verified package without extracting it:
 
     loreloop knowledge search "<query>" --package baseline

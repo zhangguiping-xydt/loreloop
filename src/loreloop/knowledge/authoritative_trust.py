@@ -53,10 +53,10 @@ def repository_bindings(
     snapshot: SourceSnapshot,
     root: Path,
     peers: Mapping[str, Path] | None = None,
-) -> dict[str, dict[str, str | int]]:
+) -> dict[str, dict[str, object]]:
     """Bind each alias to both Git lineage and this reviewed checkout location."""
     paths = _repository_paths(snapshot, root, peers)
-    bindings: dict[str, dict[str, str | int]] = {}
+    bindings: dict[str, dict[str, object]] = {}
     for repository in snapshot.repositories:
         identity = repository.repository_identity_sha256
         if identity is None:
@@ -76,6 +76,13 @@ def repository_bindings(
             "index_sha256": repository.index_sha256,
             "source_snapshot_sha256": repository_snapshot_sha256(repository),
         }
+        if repository.snapshot_kind == "working_tree":
+            bindings[repository.alias]["snapshot_kind"] = repository.snapshot_kind
+            bindings[repository.alias]["worktree_state_sha256"] = str(
+                repository.worktree_state_sha256
+            )
+        if repository.excluded_paths:
+            bindings[repository.alias]["excluded_paths"] = list(repository.excluded_paths)
     return bindings
 
 
@@ -129,8 +136,32 @@ def verify_trusted_export(
     stored_snapshot = record.payload.get("source_snapshot_sha256")
     if not isinstance(stored_snapshot, str):
         raise ExportTrustError("trusted source snapshot binding is invalid; attest a fresh export")
+    snapshot_kinds = {
+        str(binding.get("snapshot_kind", "commit"))
+        for binding in stored.values()
+        if isinstance(binding, dict)
+    }
+    if len(snapshot_kinds) != 1 or not snapshot_kinds <= {"commit", "working_tree"}:
+        raise ExportTrustError("trusted repository snapshot modes are invalid")
+    exclusions: dict[str, tuple[str, ...]] = {}
+    for alias, binding in stored.items():
+        if not isinstance(alias, str) or not isinstance(binding, dict):
+            raise ExportTrustError("trusted repository bindings are invalid")
+        raw_exclusions = binding.get("excluded_paths", [])
+        if not isinstance(raw_exclusions, list) or not all(
+            isinstance(path, str) for path in raw_exclusions
+        ):
+            raise ExportTrustError("trusted repository snapshot exclusions are invalid")
+        if raw_exclusions:
+            exclusions[alias] = tuple(raw_exclusions)
     try:
-        current_snapshot = capture_source_snapshot(workdir, peers, require_clean=False)
+        current_snapshot = capture_source_snapshot(
+            workdir,
+            peers,
+            require_clean=snapshot_kinds == {"working_tree"},
+            working_tree=snapshot_kinds == {"working_tree"},
+            excluded_paths=exclusions,
+        )
     except GitSnapshotError as exc:
         raise ExportTrustError(f"cannot verify trusted source snapshot: {exc}") from exc
     current_snapshot_digest = source_snapshot_sha256(current_snapshot)

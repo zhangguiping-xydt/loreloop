@@ -146,6 +146,22 @@ loreloop knowledge export \
   --requirements docs/requirements.md
 ```
 
+默认仍使用干净提交态。正在开发、初始化刚生成了 `.agents/`、`.claude/`、`.opencode/` 或项目本身
+还有未提交源码时，不需要为了导出而让 Agent 自动提交；可以直接固化当前工作树：
+
+```bash
+loreloop knowledge export --format docs --output baseline --working-tree
+```
+
+工作树基线包含 staged、unstaged 和未被忽略的 untracked 文件，绑定当前 HEAD、独立 Source Tree、
+文件摘要和状态摘要，不修改真实暂存区，也不会运行仓库自定义的 clean filter。生成的每份文档都会
+明确标记“可验证工作树快照”，不会冒充已经提交的发布态。严格模式报错会直接列出脏文件并提示该
+命令；Codex、Claude Code、OpenCode 和 co-mind 的 LoreLoop Skill 也会在用户要求“当前项目基线”
+时直接采用该模式，而不是要求用户先提交。
+
+历史 `.sql` 文件会优先按 UTF‑8 解码，失败后受控回退到 GB18030（同时覆盖兼容 GBK 的文件）。
+LoreLoop 始终保留并摘要绑定仓库中的原始字节，生成基线不需要批量修改或转码历史源码。
+
 ZIP 包内结构如下：
 
 这些是便于评审、Git diff 和编码代理直接读取的 Markdown，不会生成 Word/DOCX；机器重放使用
@@ -184,6 +200,10 @@ loreloop knowledge replay baseline.zip
 loreloop knowledge search "公积金比例" --package baseline.zip
 ```
 
+检索只索引 Capsule 已验证的人类可见 Markdown，并按章节内的段落、列表和表格块建立临时
+BM25 索引，而不是把每一行拆成孤立知识。结果仍定位到原 Markdown 文件和章节，摘要优先显示
+真正命中的可见事实；Mermaid 图形语法不会污染召回。默认路径不需要模型、向量库或数据库。
+
 当提问与项目术语不同，可以显式提供有界的同义词、翻译、缩写和可能的代码标识符：
 
 ```bash
@@ -194,6 +214,7 @@ loreloop knowledge search "公积金比例" \
 
 扩展词只影响检索排序，不会写入基线、不会作为项目知识展示，也不能提升结果的信任等级。Codex、
 Claude Code、OpenCode 和 co-mind 可以在当前宿主会话中生成这些词；包检索不会再启动一个 Agent。
+如果结果完全依赖扩展词，CLI 会明确标记为低置信度候选，提醒 Agent 回到命中文档和源码核对。
 
 Web 探索结果默认仍留在可持续更新的知识库中。需要把运行时页面事实写回交付基线时，只有同时经过
 人工批准和浏览器验证的当前 Web 条目会被纳入：

@@ -110,13 +110,9 @@ def test_governed_web_selection_requires_approval_and_verification() -> None:
         "entry_verified",
         {"entry_id": entry.id, "entry_digest": digest},
     )
-    assert _select_governed_web_entries(
-        [entry], [approved, incomplete_verified]
-    ) == ()
+    assert _select_governed_web_entries([entry], [approved, incomplete_verified]) == ()
     contradicted = _record(2, "entry_contradicted", {"entry_id": entry.id})
-    assert _select_governed_web_entries(
-        [entry], [approved, verified, contradicted]
-    ) == ()
+    assert _select_governed_web_entries([entry], [approved, verified, contradicted]) == ()
 
 
 def test_governed_web_selection_does_not_reuse_verification_after_rejection() -> None:
@@ -236,17 +232,20 @@ def test_package_includes_governed_web_and_can_be_searched_without_a_store(
         "loreloop.cli._governed_web_entries", lambda _workdir: _web_entries_all_kinds()
     )
 
-    assert main(
-        [
-            "knowledge",
-            "export",
-            "--format",
-            "package",
-            "--output",
-            str(package),
-            "--include-web",
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "knowledge",
+                "export",
+                "--format",
+                "package",
+                "--output",
+                str(package),
+                "--include-web",
+            ]
+        )
+        == 0
+    )
     assert main(["knowledge", "replay", str(package)]) == 0
     with zipfile.ZipFile(package) as archive:
         markdown = {
@@ -265,58 +264,72 @@ def test_package_includes_governed_web_and_can_be_searched_without_a_store(
     isolated = tmp_path / "isolated"
     isolated.mkdir()
     monkeypatch.chdir(isolated)
-    assert main(
-        [
-            "knowledge",
-            "search",
-            "behavior",
-            "--package",
-            str(package),
-            "--limit",
-            "3",
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "knowledge",
+                "search",
+                "behavior",
+                "--package",
+                str(package),
+                "--limit",
+                "3",
+            ]
+        )
+        == 0
+    )
 
     output = capsys.readouterr().out
     assert "用户手册.md#Web 页面与行为观察" in output
     assert "Observed behavior statement" in output
     assert not (isolated / ".loreloop").exists()
 
-    assert main(
-        [
-            "knowledge",
-            "search",
-            "办结反馈",
-            "--package",
-            str(package),
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "knowledge",
+                "search",
+                "办结反馈",
+                "--package",
+                str(package),
+            ]
+        )
+        == 0
+    )
     assert "no matching baseline records" in capsys.readouterr().out
-    assert main(
-        [
-            "knowledge",
-            "search",
-            "办结反馈",
-            "--package",
-            str(package),
-            "--expand",
-            "Observed behavior statement",
-        ]
-    ) == 0
-    expanded_output = capsys.readouterr().out
+    assert (
+        main(
+            [
+                "knowledge",
+                "search",
+                "办结反馈",
+                "--package",
+                str(package),
+                "--expand",
+                "Observed behavior statement",
+            ]
+        )
+        == 0
+    )
+    expanded_capture = capsys.readouterr()
+    expanded_output = expanded_capture.out
     assert "用户手册.md#Web 页面与行为观察" in expanded_output
     assert "Observed behavior statement" in expanded_output
-    assert main(
-        [
-            "knowledge",
-            "search",
-            "behavior",
-            "--package",
-            str(package),
-            "--expand",
-            "x" * (MAX_SEARCH_EXPANSION_CHARS + 1),
-        ]
-    ) == 2
+    assert "low-confidence matches depend on --expand" in expanded_capture.err
+    assert (
+        main(
+            [
+                "knowledge",
+                "search",
+                "behavior",
+                "--package",
+                str(package),
+                "--expand",
+                "x" * (MAX_SEARCH_EXPANSION_CHARS + 1),
+            ]
+        )
+        == 2
+    )
     assert "search expansion must be at most" in capsys.readouterr().err
 
     tampered = tmp_path / "tampered.zip"
@@ -326,7 +339,5 @@ def test_package_includes_governed_web_and_can_be_searched_without_a_store(
             if info.filename.endswith("用户手册.md"):
                 data += b"\nchanged\n"
             target.writestr(info, data)
-    assert main(
-        ["knowledge", "search", "behavior", "--package", str(tampered)]
-    ) == 2
+    assert main(["knowledge", "search", "behavior", "--package", str(tampered)]) == 2
     assert "baseline search failed" in capsys.readouterr().err

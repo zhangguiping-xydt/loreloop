@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 from typing import TypeAlias
 
 from .authoritative_ast import DocumentAst, DocumentSet
@@ -36,6 +36,28 @@ def _ast_payload(document: DocumentAst) -> CanonicalInput:
     return AST_ASDICT(document)
 
 
+def _document_ast_json_default(value: object) -> dict[str, object]:
+    if is_dataclass(value) and not isinstance(value, type):
+        return {field.name: getattr(value, field.name) for field in fields(value)}
+    raise TypeError(f"document AST contains a non-JSON value: {type(value).__name__}")
+
+
+def document_ast_canonical_bytes(document: DocumentAst) -> bytes:
+    """Encode a validated in-memory AST without recursively copying it first."""
+    return json.dumps(
+        document,
+        default=_document_ast_json_default,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        allow_nan=False,
+    ).encode()
+
+
+def document_ast_sha256(document: DocumentAst) -> str:
+    return hashlib.sha256(document_ast_canonical_bytes(document)).hexdigest()
+
+
 def _document_payloads(
     document_set: DocumentSet,
     documents: tuple[SourceDocument, ...],
@@ -50,14 +72,15 @@ def _document_payloads(
         rendered = markdown.get(document.path)
         if rendered is None:
             raise CapsuleError(f"Markdown is missing for AST: {document.path}")
-        ast = _ast_payload(document)
         payload: dict[str, CanonicalInput] = {
             "document_id": document.document_id,
             "filename": document.path,
-            "ast_sha256": hashlib.sha256(canon_v4(ast)).hexdigest(),
+            "ast_sha256": document_ast_sha256(document),
             "markdown_sha256": hashlib.sha256(rendered.content.encode()).hexdigest(),
         }
         if schema_version == 2:
+            ast = _ast_payload(document)
+            payload["ast_sha256"] = hashlib.sha256(canon_v4(ast)).hexdigest()
             payload["ast"] = ast
         payloads.append(payload)
     if len(payloads) != len(documents):

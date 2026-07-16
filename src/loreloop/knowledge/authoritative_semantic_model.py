@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 from .authoritative_ast import DocumentRowKind, ProjectedValue
 from .authoritative_bindings import BindingEntry, BindingSet, SourceBinding, SourceTransform
@@ -52,6 +52,7 @@ class SemanticCore:
     evidence: tuple[SemanticEvidence, ...]
     semantic_core_sha256: str
     package_id: str
+    source_snapshot_kind: Literal["commit", "working_tree"] = "commit"
 
 
 @dataclass(frozen=True, slots=True)

@@ -27,6 +27,7 @@ CanonicalInput: TypeAlias = (
 MAX_SAFE_INTEGER: Final = 9_007_199_254_740_991
 SHA256_RE: Final = re.compile(r"[0-9a-f]{64}")
 ID_RE: Final = re.compile(r"([A-Z]+)-[0-9a-f]{64}")
+SURROGATE_RE: Final = re.compile(r"[\uD800-\uDFFF]")
 PREFIX_ORDINALS: Final = {
     "EVD": 10,
     "ATM": 20,
@@ -70,31 +71,32 @@ class CanonicalValueError(IdentityContractError):
     """A value is outside the closed canon-v4 domain."""
 
 
-def _canonical_string(value: str) -> bytes:
-    if unicodedata.normalize("NFC", value) != value:
+def _validate_string(value: str) -> None:
+    if not unicodedata.is_normalized("NFC", value):
         raise CanonicalValueError("string is not NFC")
-    if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+    if SURROGATE_RE.search(value) is not None:
         raise CanonicalValueError("string contains a surrogate")
+
+
+def _canonical_string(value: str) -> bytes:
+    _validate_string(value)
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
 
 
-def canon_v4(value: CanonicalInput) -> bytes:
-    """Serialize the exact closed canon-v4 value domain."""
+def _validate_canonical(value: CanonicalInput) -> None:
+    """Validate the closed value domain before one native JSON encoding pass."""
     match value:
-        case None:
-            return b"null"
-        case bool() as boolean:
-            return b"true" if boolean else b"false"
+        case None | bool():
+            return
         case int() as integer:
             if not -MAX_SAFE_INTEGER <= integer <= MAX_SAFE_INTEGER:
                 raise CanonicalValueError("integer is outside the safe range")
-            return str(integer).encode("ascii")
         case str() as string:
-            return _canonical_string(string)
+            _validate_string(string)
         case list() | tuple() as array:
-            return b"[" + b",".join(canon_v4(item) for item in array) + b"]"
+            for item in array:
+                _validate_canonical(item)
         case Mapping() as mapping:
-            encoded: list[tuple[bytes, bytes]] = []
             normalized_keys: set[str] = set()
             for key, item in mapping.items():
                 if not isinstance(key, str):
@@ -103,14 +105,29 @@ def canon_v4(value: CanonicalInput) -> bytes:
                 if normalized in normalized_keys:
                     raise CanonicalValueError("duplicate normalized map key")
                 normalized_keys.add(normalized)
-                key_bytes = _canonical_string(key)
-                encoded.append((key.encode(), key_bytes + b":" + canon_v4(item)))
-            encoded.sort(key=lambda entry: entry[0])
-            return b"{" + b",".join(entry[1] for entry in encoded) + b"}"
+                _validate_string(key)
+                _validate_canonical(item)
         case float() | bytes() | Set() | Sequence():
             raise CanonicalValueError("value is outside canon-v4")
         case _:
             assert_never(value)
+
+
+def canon_v4(value: CanonicalInput) -> bytes:
+    """Serialize the exact closed canon-v4 value domain.
+
+    Validation remains explicit and fail-closed. Encoding is intentionally one
+    native JSON pass: recursively encoding every scalar separately made replay
+    time grow prohibitively on large document ASTs while producing identical
+    canonical bytes.
+    """
+    _validate_canonical(value)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
 
 
 def _sha256(domain: bytes, payload: bytes) -> str:

@@ -2522,6 +2522,7 @@ def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys)
     assert main(["init", "--skill"]) == 0
     out = capsys.readouterr().out
     assert "initialized .loreloop/" in out
+    assert "--working-tree" in out
     assert (workdir / ".loreloop/knowledge.db").exists()
     assert ".loreloop/" in (workdir / ".gitignore").read_text()
 
@@ -2535,6 +2536,7 @@ def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys)
     assert "specific, explicit instruction" in text
     assert "name: loreloop" in text
     assert "knowledge export --format docs --output baseline" in text
+    assert "--working-tree" in text
     assert "never issue a shell tool call with its command omitted" in text
 
     # idempotent: second run must not duplicate the gitignore line

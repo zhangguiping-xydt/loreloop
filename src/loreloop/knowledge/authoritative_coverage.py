@@ -6,7 +6,12 @@ from collections import Counter
 from pathlib import PurePosixPath
 
 from .authoritative_records import DetectionReport
-from .authoritative_source import SnapshotBlob, detector_profile, excluded_semantic_source
+from .authoritative_source import (
+    SnapshotBlob,
+    detector_profile,
+    excluded_semantic_source,
+    source_text_encoding,
+)
 from .authoritative_detector_tests import is_supported_test_evidence_path
 from .authoritative_types import SourceSnapshot
 
@@ -19,18 +24,21 @@ def render_coverage_summary(
 ) -> str:
     """Explain repository/file coverage and facts without implying unsupported semantics."""
     by_repository = Counter(blob.repository_alias for blob in blobs)
-    profiles = Counter(
-        profile for blob in blobs if (profile := detector_profile(blob)) is not None
-    )
+    profiles = Counter(profile for blob in blobs if (profile := detector_profile(blob)) is not None)
     unsupported = Counter(
         PurePosixPath(blob.path).suffix.lower() or "[no extension]"
         for blob in blobs
         if detector_profile(blob) is None and not excluded_semantic_source(blob.path)
     )
     excluded = sum(
-        excluded_semantic_source(blob.path)
-        and not is_supported_test_evidence_path(blob.path)
+        excluded_semantic_source(blob.path) and not is_supported_test_evidence_path(blob.path)
         for blob in blobs
+    )
+    encodings = Counter(
+        encoding
+        for blob in blobs
+        if detector_profile(blob) is not None
+        and (encoding := source_text_encoding(blob)) is not None
     )
     lines = [
         "authoritative export coverage:",
@@ -44,6 +52,12 @@ def render_coverage_summary(
         lines.append(
             "  detector profiles: "
             + ", ".join(f"{name}={count}" for name, count in sorted(profiles.items()))
+        )
+    if encodings:
+        lines.append(
+            "  source encodings: "
+            + ", ".join(f"{name}={count}" for name, count in sorted(encodings.items()))
+            + " (original blob bytes preserved)"
         )
     lines.append(
         "  facts: "
@@ -66,8 +80,6 @@ def render_coverage_summary(
     )
     lines.append(f"  documents: {document_count} (6 core + evidence-backed optional)")
     if unsupported:
-        summary = ", ".join(
-            f"{suffix}={count}" for suffix, count in unsupported.most_common(8)
-        )
+        summary = ", ".join(f"{suffix}={count}" for suffix, count in unsupported.most_common(8))
         lines.append(f"  not semantically parsed (top suffixes): {summary}")
     return "\n".join(lines)

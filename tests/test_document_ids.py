@@ -18,6 +18,22 @@ def test_canon_v4_emits_exact_sorted_minimal_bytes() -> None:
     assert encoded == b'{"z":-7,"\xc3\xa9":[true,null,"\\u0001"]}'
 
 
+def test_canon_v4_preserves_nested_tuple_and_utf8_key_order_contract() -> None:
+    value = {
+        "界面": ({"é": "已确认", "z": 2},),
+        "array": [False, {"路径": "src/app.py", "line": 7}],
+    }
+
+    encoded = authoritative_ids.canon_v4(value)
+
+    assert (
+        encoded
+        == (
+            '{"array":[false,{"line":7,"路径":"src/app.py"}],"界面":[{"z":2,"é":"已确认"}]}'
+        ).encode()
+    )
+
+
 @pytest.mark.parametrize(
     "invalid",
     [

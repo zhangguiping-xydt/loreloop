@@ -27,17 +27,25 @@ def navigation(paths: tuple[str, ...]) -> list[str]:
 
 
 def repository_section(snapshot: SourceSnapshot) -> list[str]:
+    working_tree = any(item.snapshot_kind == "working_tree" for item in snapshot.repositories)
+    boundary = (
+        "本文档来自绑定当前 HEAD 的可验证工作树快照；它包含未提交文件的实际字节，"
+        "但不代表已经提交的发布状态。"
+        if working_tree
+        else "本文档仅陈述下列干净 Git 提交快照中能够由源码直接证明的事实。"
+    )
     lines = [
         "## 源码证据边界",
         "",
-        "本文档仅陈述下列 Git 快照中能够由源码直接证明的事实。",
+        boundary,
         "",
-        "| 仓库 | 角色 | Commit | Tree | 文件数 |",
-        "|---|---|---|---|---:|",
+        "| 仓库 | 角色 | 快照 | HEAD Commit | Source Tree | 文件数 |",
+        "|---|---|---|---|---|---:|",
     ]
     lines.extend(
-        f"| `{item.alias}` | {item.role} | `{item.commit_id.hex}` | "
-        + f"`{item.tree_id.hex}` | {len(item.entries)} |"
+        f"| `{item.alias}` | {item.role} | "
+        + ("工作树" if item.snapshot_kind == "working_tree" else "提交态")
+        + f" | `{item.commit_id.hex}` | `{item.tree_id.hex}` | {len(item.entries)} |"
         for item in snapshot.repositories
     )
     return [*lines, ""]

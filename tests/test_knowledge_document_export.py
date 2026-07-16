@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from pathlib import Path
 
@@ -122,7 +123,9 @@ def create_user(name: str) -> dict[str, str]:
     assert "## HTTP 接口" not in user_guide
     assert requirements != user_guide
     assert "UsersPage" in user_guide and "click:createUser" in user_guide
-    assert interface.index("## 证据缺口") < interface.index("## HTTP 接口")
+    assert interface.index("## HTTP 接口") < interface.index("## 覆盖缺口与未确认事项")
+    assert "## 证据附录：完整可召回事实" not in interface
+    assert "全部可召回事实已经进入正文" in interface
     assert "未发现结构化错误码或异常响应契约" in interface
     acceptance = (target / "demo-验收规格.md").read_text(encoding="utf-8")
     assert "创建成功后返回用户标识" in acceptance
@@ -188,6 +191,33 @@ def test_cli_docs_export_emits_only_six_documents_without_optional_evidence(
     assert len({requirements, user_guide, acceptance}) == 3
 
 
+def test_docs_export_preserves_and_detects_gb18030_sql(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _repository(tmp_path / "legacy", {"README.md": "legacy project\n"})
+    raw_sql = (
+        "-- 历史用户表\n"
+        "CREATE TABLE legacy_users (id INTEGER PRIMARY KEY, name VARCHAR(64) NOT NULL);\n"
+    ).encode("gb18030")
+    (repo / "schema.sql").write_bytes(raw_sql)
+    _git(repo, "add", "schema.sql")
+    _git(repo, "commit", "-m", "add legacy schema")
+    monkeypatch.chdir(repo)
+    target = tmp_path / "baseline"
+
+    assert main(["knowledge", "export", "--format", "docs", "--output", str(target)]) == 0
+
+    database = (target / "legacy-数据库设计.md").read_text(encoding="utf-8")
+    capsule = (target / ".loreloop-export.json").read_text(encoding="utf-8")
+    assert "legacy_users" in database
+    assert hashlib.sha256(raw_sql).hexdigest() in capsule
+    assert "gb18030=1" in capsys.readouterr().err
+    assert (repo / "schema.sql").read_bytes() == raw_sql
+    assert main(["knowledge", "replay", str(target)]) == 0
+
+
 def test_cli_package_export_supports_a_non_git_aggregate_project_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -249,9 +279,7 @@ def test_package_export_replays_when_test_cases_require_multiple_suite_parts(
     )
     package = tmp_path / "baseline.zip"
 
-    assert main(
-        ["knowledge", "export", "--format", "package", "--output", str(package)]
-    ) == 0
+    assert main(["knowledge", "export", "--format", "package", "--output", str(package)]) == 0
     assert main(["knowledge", "replay", str(package)]) == 0
 
 
@@ -298,7 +326,154 @@ def test_cli_docs_export_reports_dirty_source_without_traceback(
         "capturing clean Git source snapshot...\nerror: source document export failed"
     )
     assert "uncommitted source changes" in error
+    assert "unstaged:app.py" in error
+    assert "--working-tree" in error
     assert "Traceback" not in error
+
+
+def test_cli_docs_export_can_capture_exact_working_tree_without_changing_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _repository(
+        tmp_path / "demo",
+        {"app.py": "def original(): return 'committed'\n"},
+    )
+    _ = (repo / "app.py").write_text("def staged(): return 'staged'\n", encoding="utf-8")
+    _git(repo, "add", "app.py")
+    _ = (repo / "app.py").write_text("def working(): return 'working'\n", encoding="utf-8")
+    _ = (repo / "extra.py").write_text("def extra(): return 'untracked'\n", encoding="utf-8")
+    status_before = subprocess.run(
+        ["git", "status", "--porcelain=v1"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    index_before = subprocess.run(
+        ["git", "ls-files", "--stage"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    monkeypatch.chdir(repo)
+    target = tmp_path / "working-baseline"
+
+    result = main(
+        [
+            "knowledge",
+            "export",
+            "--format",
+            "docs",
+            "--output",
+            str(target),
+            "--working-tree",
+        ]
+    )
+
+    assert result == 0
+    assert "capturing verifiable Git working-tree source snapshot" in capsys.readouterr().err
+    detailed = (target / "demo-详细设计.md").read_text(encoding="utf-8")
+    assert "可验证工作树快照" in detailed
+    assert "工作树" in detailed
+    assert "| working | working() |" in detailed
+    assert "| extra | extra() |" in detailed
+    assert "| original | original() |" not in detailed
+    assert "| staged | staged() |" not in detailed
+    assert main(["knowledge", "replay", str(target)]) == 0
+    status_after = subprocess.run(
+        ["git", "status", "--porcelain=v1"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    index_after = subprocess.run(
+        ["git", "ls-files", "--stage"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert status_after == status_before
+    assert index_after == index_before
+
+
+def test_working_tree_export_excludes_its_default_baseline_on_regeneration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _repository(tmp_path / "demo", {"app.py": "def committed(): return 1\n"})
+    _ = (repo / "app.py").write_text("def first(): return 1\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+
+    assert main(["knowledge", "export", "--format", "docs", "--working-tree"]) == 0
+    assert (repo / "baseline").is_dir()
+    first_capsule = (repo / "baseline/.loreloop-export.json").read_text(encoding="utf-8")
+    assert (
+        main(
+            [
+                "knowledge",
+                "export",
+                "--format",
+                "docs",
+                "--working-tree",
+                "--force",
+            ]
+        )
+        == 0
+    )
+    assert (repo / "baseline/.loreloop-export.json").read_text(encoding="utf-8") == first_capsule
+    _ = (repo / "app.py").write_text("def second(): return 2\n", encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "knowledge",
+                "export",
+                "--format",
+                "docs",
+                "--working-tree",
+                "--force",
+            ]
+        )
+        == 0
+    )
+
+    detailed = (repo / "baseline/demo-详细设计.md").read_text(encoding="utf-8")
+    assert "| second | second() |" in detailed
+    assert "| first | first() |" not in detailed
+    assert main(["knowledge", "replay", "baseline"]) == 0
+
+
+def test_working_tree_package_replays_as_a_portable_zip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _repository(tmp_path / "demo", {"app.py": "def committed(): return 1\n"})
+    _ = (repo / "app.py").write_text("def current(): return 2\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+    package = tmp_path / "baseline.zip"
+
+    assert (
+        main(
+            [
+                "knowledge",
+                "export",
+                "--format",
+                "package",
+                "--output",
+                str(package),
+                "--working-tree",
+            ]
+        )
+        == 0
+    )
+
+    assert package.is_file()
+    assert main(["knowledge", "replay", str(package)]) == 0
 
 
 def test_force_export_removes_stale_optional_docs_and_preserves_operator_files(

@@ -105,6 +105,50 @@ def test_capture_ignores_loreloop_state_but_rejects_untracked_source(tmp_path: P
         _ = capture_source_snapshot(root)
 
 
+def test_working_tree_snapshot_binds_modified_and_untracked_bytes(tmp_path: Path) -> None:
+    root = _repository(tmp_path / "root", {"app.py": "VALUE = 1\n"})
+    _ = (root / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _ = (root / "new.py").write_text("NEW = True\n", encoding="utf-8")
+    status_before = _git(root, "status", "--porcelain=v1")
+    index_before = _git(root, "ls-files", "--stage")
+
+    snapshot = capture_source_snapshot(root, working_tree=True)
+    blobs = read_snapshot_blobs(snapshot, root)
+
+    repository = snapshot.repositories[0]
+    assert repository.snapshot_kind == "working_tree"
+    assert repository.worktree_state_sha256 is not None
+    assert {entry.path for entry in repository.entries} == {"app.py", "new.py"}
+    assert {blob.path: blob.data for blob in blobs} == {
+        "app.py": b"VALUE = 2\n",
+        "new.py": b"NEW = True\n",
+    }
+    assert _git(root, "status", "--porcelain=v1") == status_before
+    assert _git(root, "ls-files", "--stage") == index_before
+    verify_source_snapshot(snapshot, root)
+
+    _ = (root / "new.py").write_text("NEW = False\n", encoding="utf-8")
+    with pytest.raises(GitSnapshotError, match="changed"):
+        verify_source_snapshot(snapshot, root)
+
+
+def test_working_tree_snapshot_does_not_execute_repository_clean_filters(
+    tmp_path: Path,
+) -> None:
+    root = _repository(tmp_path / "root", {"app.py": "VALUE = 1\n"})
+    marker = tmp_path / "filter-ran"
+    _ = _git(root, "config", "filter.hostile.clean", f"sh -c 'touch {marker}; cat'")
+    _ = _git(root, "config", "filter.hostile.smudge", "cat")
+    _ = (root / ".gitattributes").write_text("*.py filter=hostile\n", encoding="utf-8")
+    _ = (root / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    snapshot = capture_source_snapshot(root, working_tree=True)
+    blobs = read_snapshot_blobs(snapshot, root)
+
+    assert not marker.exists()
+    assert {blob.path: blob.data for blob in blobs}["app.py"] == b"VALUE = 2\n"
+
+
 def test_verify_source_snapshot_rejects_drift_after_capture(tmp_path: Path) -> None:
     # Given: a captured clean project snapshot.
     root = _repository(tmp_path / "root", {"app.py": "VALUE = 1\n"})
@@ -140,9 +184,7 @@ def test_capture_rejects_peer_that_is_also_a_discovered_submodule(tmp_path: Path
     _ = _git(root, "commit", "-am", "add submodule")
 
     with pytest.raises(GitSnapshotError, match="same repository"):
-        _ = capture_source_snapshot(
-            root, {"dependency": root / "vendor" / "dependency"}
-        )
+        _ = capture_source_snapshot(root, {"dependency": root / "vendor" / "dependency"})
 
 
 def test_capture_rejects_linked_worktree_as_a_second_repository_alias(tmp_path: Path) -> None:
@@ -222,9 +264,7 @@ def test_snapshot_streams_large_nonsemantic_asset_without_retaining_bytes(
     tmp_path: Path,
 ) -> None:
     repo = _repository(tmp_path / "repo", {"app.py": "VALUE = 1\n"})
-    (repo / "asset.bin").write_bytes(
-        b"x" * (authoritative_source.MAX_SEMANTIC_BLOB_BYTES + 1)
-    )
+    (repo / "asset.bin").write_bytes(b"x" * (authoritative_source.MAX_SEMANTIC_BLOB_BYTES + 1))
     _ = _git(repo, "add", "-A")
     _ = _git(repo, "commit", "-m", "large asset")
 
@@ -241,9 +281,7 @@ def test_snapshot_rejects_oversized_supported_source_instead_of_silently_skippin
     tmp_path: Path,
 ) -> None:
     repo = _repository(tmp_path / "repo", {"app.py": "VALUE = 1\n"})
-    (repo / "large.py").write_bytes(
-        b"#" * (authoritative_source.MAX_SEMANTIC_BLOB_BYTES + 1)
-    )
+    (repo / "large.py").write_bytes(b"#" * (authoritative_source.MAX_SEMANTIC_BLOB_BYTES + 1))
     _ = _git(repo, "add", "-A")
     _ = _git(repo, "commit", "-m", "large supported source")
 
