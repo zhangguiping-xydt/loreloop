@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from loreloop.knowledge.authoritative_search import (
     _best_snippet,
+    _coverage_search_intent,
     _search_entries,
+    _search_value_line,
 )
 
 
@@ -92,3 +94,30 @@ def test_best_snippet_marks_expansion_match_without_copying_expansion() -> None:
     snippet = _best_snippet(content, "附件容量阈值", "upload limit")
 
     assert snippet == content
+
+
+def test_best_snippet_prefers_matching_action_details_over_generic_fact_label() -> None:
+    content = "\n".join(
+        [
+            "事实: EmployeeConfig",
+            "actions: Page_Load btnSave_Click ShowEmployee txtPhone",
+        ]
+    )
+
+    snippet = _best_snippet(content, "EmployeeConfig btnSave_Click txtPhone", "")
+
+    assert snippet.startswith("actions:")
+
+
+def test_coverage_inventory_only_participates_for_coverage_or_file_queries() -> None:
+    assert not _coverage_search_intent("人员配置 保存按钮", "EmployeeConfig btnSave")
+    assert _coverage_search_intent("哪些文件没有解析")
+    assert _coverage_search_intent("coverage blind spots")
+    assert _coverage_search_intent("Web/Employee.aspx")
+    assert _coverage_search_intent("检查 .resx")
+
+
+def test_agent_action_values_remain_one_searchable_line() -> None:
+    assert _search_value_line("actions", "btnSave_Click\nShowEmployee('txtPhone')\n") == (
+        "actions: btnSave_Click | ShowEmployee('txtPhone')"
+    )

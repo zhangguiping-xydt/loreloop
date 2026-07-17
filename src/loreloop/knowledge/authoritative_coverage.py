@@ -34,14 +34,29 @@ def render_coverage_summary(
         and source_text_encoding(blob) is None
     )
     decode_gap_keys = {(blob.repository_alias, blob.path) for blob in decode_gaps}
-    profiles = Counter(profile for blob in blobs if (profile := detector_profile(blob)) is not None)
-    unsupported = Counter(
-        PurePosixPath(blob.path).suffix.lower() or "[no extension]"
-        for blob in blobs
-        if detector_profile(blob) is None
-        and not excluded_semantic_source(blob.path)
-        and (blob.repository_alias, blob.path) not in decode_gap_keys
-    )
+    coverage_statuses = Counter(item.status for item in report.source_coverage)
+    if report.source_coverage:
+        profiles = Counter(
+            item.detector for item in report.source_coverage if item.detector is not None
+        )
+        unsupported = Counter(
+            item.suffix for item in report.source_coverage if item.status == "unsupported"
+        )
+        no_facts = Counter(
+            item.suffix for item in report.source_coverage if item.status == "inspected_no_facts"
+        )
+    else:
+        profiles = Counter(
+            profile for blob in blobs if (profile := detector_profile(blob)) is not None
+        )
+        unsupported = Counter(
+            PurePosixPath(blob.path).suffix.lower() or "[no extension]"
+            for blob in blobs
+            if detector_profile(blob) is None
+            and not excluded_semantic_source(blob.path)
+            and (blob.repository_alias, blob.path) not in decode_gap_keys
+        )
+        no_facts = Counter()
     excluded = sum(
         excluded_semantic_source(blob.path) and not is_supported_test_evidence_path(blob.path)
         for blob in blobs
@@ -57,6 +72,20 @@ def render_coverage_summary(
         f"  repositories: {len(snapshot.repositories)}; committed blobs: {len(blobs)}; "
         f"detector-inspected: {sum(profiles.values())}; fixture/generated excluded: {excluded}",
     ]
+    if report.source_coverage:
+        lines.append(
+            "  semantic file outcomes: "
+            + ", ".join(
+                f"{name}={coverage_statuses[name]}"
+                for name in (
+                    "parsed",
+                    "inspected_no_facts",
+                    "unsupported",
+                    "excluded",
+                    "decode_gap",
+                )
+            )
+        )
     roles = {item.alias: item.role for item in snapshot.repositories}
     for alias in (item.alias for item in snapshot.repositories):
         lines.append(f"  - {alias} ({roles[alias]}): {by_repository[alias]} blobs")
@@ -103,4 +132,7 @@ def render_coverage_summary(
     if unsupported:
         summary = ", ".join(f"{suffix}={count}" for suffix, count in unsupported.most_common(8))
         lines.append(f"  not semantically parsed (top suffixes): {summary}")
+    if no_facts:
+        summary = ", ".join(f"{suffix}={count}" for suffix, count in no_facts.most_common(8))
+        lines.append(f"  inspected without emitted facts (top suffixes): {summary}")
     return "\n".join(lines)

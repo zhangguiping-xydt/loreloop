@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..delegate.context_pack import _terms, rank_entries
+from .authoritative_ast import DocumentRowKind
 from .authoritative_document_ast import build_document_ast_set
 from .authoritative_document_routes import CANONICAL_DOCUMENT_OWNER, SECTION_ROUTES
 from .authoritative_capsule_replay import CapsuleReplayError, load_replayed_capsule_export
@@ -25,6 +26,28 @@ MAX_SEARCH_SNIPPET_CHARS = 240
 _HEADING = re.compile(r"^#{1,6}\s+(?P<title>.+?)\s*$")
 _TABLE_SEPARATOR = re.compile(r"^\|(?:\s*:?-{3,}:?\s*\|)+$")
 _FENCE = re.compile(r"^```(?P<language>[^`]*)$")
+_FILE_QUERY = re.compile(r"(?:[/\\]|\.[A-Za-z0-9]{1,12}(?:\b|$))")
+_COVERAGE_QUERY_TERMS = (
+    "覆盖",
+    "盲区",
+    "未解析",
+    "没有解析",
+    "不支持",
+    "文件类型",
+    "后缀",
+    "解析状态",
+    "源码文件",
+    "coverage",
+    "blind spot",
+    "unparsed",
+    "unsupported",
+    "suffix",
+    "extension",
+    "detector",
+    "file status",
+    "inspected",
+    "blob",
+)
 
 
 class BaselineSearchError(ValueError):
@@ -176,7 +199,21 @@ def _search_entries(files: dict[str, bytes], filenames: tuple[str, ...]) -> list
     return entries
 
 
-def _agent_search_entries(core: SemanticCore) -> list[Entry]:
+def _coverage_search_intent(query: str, expansion: str = "") -> bool:
+    text = f"{query}\n{expansion}".casefold()
+    return _FILE_QUERY.search(text) is not None or any(
+        term in text for term in _COVERAGE_QUERY_TERMS
+    )
+
+
+def _search_value_line(key: str, value: object) -> str:
+    text = str(value)
+    if key == "actions":
+        text = " | ".join(item.strip() for item in text.splitlines() if item.strip())
+    return f"{key}: {text}"
+
+
+def _agent_search_entries(core: SemanticCore, *, include_coverage: bool = True) -> list[Entry]:
     """Build the transient Agent view directly from the replayed SemanticCore."""
     document_set = build_document_ast_set(core)
     family_paths = {
@@ -187,6 +224,8 @@ def _agent_search_entries(core: SemanticCore) -> list[Entry]:
     entries: list[Entry] = []
     total_bytes = 0
     for record in core.records:
+        if record.row_kind is DocumentRowKind.SOURCE_COVERAGE and not include_coverage:
+            continue
         owner = CANONICAL_DOCUMENT_OWNER[record.row_kind]
         filename = family_paths.get(owner)
         if filename is None:
@@ -223,7 +262,7 @@ def _agent_search_entries(core: SemanticCore) -> list[Entry]:
         lines = [
             f"类型: {record.row_kind.value}",
             f"事实: {preferred}",
-            *(f"{key}: {value}" for key, value in values.items()),
+            *(_search_value_line(key, value) for key, value in values.items()),
             (f"源码: {source.source.repository_alias}:{source.source.path}#L{source.source.line}"),
         ]
         content = "\n".join(dict.fromkeys(lines))
@@ -272,7 +311,7 @@ def _best_snippet(content: str, query: str, expansion: str) -> str:
         score = 4.0 * len(line_terms & original_terms)
         score += len(line_terms & expansion_terms)
         if line.startswith("事实:"):
-            score += 10.0
+            score += 3.0
         if query_folded and query_folded in line.casefold():
             score += 100.0
         return score, -len(line)
@@ -319,7 +358,10 @@ def search_baseline(
         bundle = load_replayed_capsule_export(export_path)
     except CapsuleReplayError as exc:
         raise BaselineSearchError(str(exc)) from exc
-    entries = _agent_search_entries(bundle.core)
+    entries = _agent_search_entries(
+        bundle.core,
+        include_coverage=_coverage_search_intent(query, expansion),
+    )
     ranked = rank_entries(
         query,
         entries,

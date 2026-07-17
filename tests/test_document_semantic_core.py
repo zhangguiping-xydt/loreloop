@@ -26,6 +26,12 @@ def test_semantic_core_binds_requirements_and_source_to_stable_records(tmp_path:
     _git(repo, "config", "user.email", "loreloop@example.invalid")
     app = repo / "app.py"
     _ = app.write_text('@app.get("/health")\ndef health(): return True\n', encoding="utf-8")
+    _ = (repo / "Employee.aspx").write_text(
+        """<asp:Button ID="find" OnClick="javascript:ShowEmployee(this.id,'txtPhone');" />
+<asp:Button ID="save" OnClick="btnSave_Click" />
+""",
+        encoding="utf-8",
+    )
     requirements = repo / "requirements.md"
     _ = requirements.write_text(
         "| ID | 需求描述 | 验收标准 |\n|---|---|---|\n"
@@ -56,6 +62,11 @@ def test_semantic_core_binds_requirements_and_source_to_stable_records(tmp_path:
     assert all(record.evidence_id.startswith("EVD-") for record in first.records)
     assert all(record.atom_id.startswith("ATM-") for record in first.records)
     assert all(record.bindings for record in first.records)
+    ui_record = next(record for record in first.records if record.row_kind.value == "UiSurfaceRow")
+    ui_values = {value.pointer: value.value for value in ui_record.values}
+    assert ui_values["/actions"] == (
+        "click:javascript:ShowEmployee(this.id,'txtPhone');\nclick:btnSave_Click\n"
+    )
 
     # When: only source line placement changes in a later clean commit.
     interface_id = next(
@@ -64,13 +75,9 @@ def test_semantic_core_binds_requirements_and_source_to_stable_records(tmp_path:
     _ = app.write_text('\n@app.get("/health")\ndef health(): return True\n', encoding="utf-8")
     _commit(repo, "move source line")
     moved_snapshot = capture_source_snapshot(repo)
-    moved_blobs = read_snapshot_blobs(
-        moved_snapshot, repo, requirements=("requirements.md",)
-    )
+    moved_blobs = read_snapshot_blobs(moved_snapshot, repo, requirements=("requirements.md",))
     moved_report = detect_source_snapshot(moved_snapshot, repo, requirements=("requirements.md",))
-    moved = build_semantic_core(
-        moved_snapshot, moved_blobs, moved_report, project_name="demo"
-    )
+    moved = build_semantic_core(moved_snapshot, moved_blobs, moved_report, project_name="demo")
     moved_interface = next(
         record for record in moved.records if record.row_kind.value == "InterfaceRow"
     )

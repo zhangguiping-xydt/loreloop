@@ -88,6 +88,33 @@ def test_detector_matrix_emits_no_optional_documents_without_evidence(tmp_path: 
     assert {item.qualified_name for item in report.symbols} == {"add"}
 
 
+def test_detector_matrix_accounts_for_every_snapshot_file_and_marks_blind_spots(
+    tmp_path: Path,
+) -> None:
+    root = _repository(
+        tmp_path / "coverage",
+        {
+            "app.js": "function boot() {}\n",
+            "empty.js": "// no explicit semantic contract\n",
+            "page.aspx": '<asp:Button ID="save" OnClick="save_Click" runat="server" />\n',
+            "logo.gif": "not-a-real-image",
+            "tests/fixtures/sample.py": "def fixture(): pass\n",
+        },
+    )
+    snapshot = capture_source_snapshot(root)
+
+    report = detect_source_snapshot(snapshot, root)
+
+    outcomes = {item.path: item.status for item in report.source_coverage}
+    assert outcomes == {
+        "app.js": "parsed",
+        "empty.js": "inspected_no_facts",
+        "logo.gif": "unsupported",
+        "page.aspx": "parsed",
+        "tests/fixtures/sample.py": "excluded",
+    }
+
+
 def test_detector_matrix_rejects_worktree_drift_after_snapshot(tmp_path: Path) -> None:
     # Given: source changes after the authoritative snapshot was captured.
     root = _repository(tmp_path / "backend", {"app.py": "VALUE = 1\n"})
@@ -150,20 +177,20 @@ swagger:
     (
         (
             "config/settings.json",
-            '''{
+            """{
   "service": {
     "swagger": "2.0",
     "enabled": true
   }
 }
-''',
+""",
         ),
         (
             "config/settings.yml",
-            '''service:
+            """service:
   openapi: "3.0.3"
   enabled: true
-''',
+""",
         ),
     ),
 )
@@ -184,7 +211,7 @@ def test_root_openapi_marker_is_detected_when_it_is_not_the_first_json_field(
     root = _repository(
         tmp_path / "backend",
         {
-            "contracts/openapi.json": '''{
+            "contracts/openapi.json": """{
   "info": {"title": "demo", "version": "1"},
   "openapi": "3.0.3",
   "paths": {
@@ -193,7 +220,7 @@ def test_root_openapi_marker_is_detected_when_it_is_not_the_first_json_field(
     }
   }
 }
-'''
+"""
         },
     )
     snapshot = capture_source_snapshot(root)
@@ -203,7 +230,9 @@ def test_root_openapi_marker_is_detected_when_it_is_not_the_first_json_field(
     assert tuple(item.path for item in report.interfaces) == ("/health",)
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="address-space proof uses Linux resource limits")
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="address-space proof uses Linux resource limits"
+)
 def test_openapi_root_probe_skips_wide_business_json_without_materializing_it() -> None:
     code = """
 import resource

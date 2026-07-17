@@ -170,4 +170,15 @@ def normalize_detection_report(report: DetectionReport) -> DetectionReport:
                 item.dropped_fact_count,
             ),
         ),
+        source_coverage=_unique(
+            report.source_coverage,
+            lambda item: (
+                item.source.repository_alias,
+                item.path,
+                item.suffix,
+                item.detector,
+                item.status,
+                item.byte_length,
+            ),
+        ),
     )

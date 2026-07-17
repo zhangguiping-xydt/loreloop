@@ -8,6 +8,13 @@ from typing import Literal, TypeAlias
 WebKnowledgeKind: TypeAlias = Literal[
     "requirement", "interface", "architecture", "behavior", "constraint", "acceptance"
 ]
+SourceCoverageStatus: TypeAlias = Literal[
+    "parsed",
+    "inspected_no_facts",
+    "unsupported",
+    "excluded",
+    "decode_gap",
+]
 
 
 class DetectionError(ValueError):
@@ -190,6 +197,20 @@ class SourceIssueRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceCoverageRecord:
+    path: str
+    suffix: str
+    detector: str | None
+    status: SourceCoverageStatus
+    byte_length: int
+    source: SourceRef
+
+    def __post_init__(self) -> None:
+        if not self.path or self.byte_length < 0:
+            raise DetectionError("invalid source coverage record")
+
+
+@dataclass(frozen=True, slots=True)
 class DetectionReport:
     interfaces: tuple[InterfaceRecord, ...] = ()
     symbols: tuple[SymbolRecord, ...] = ()
@@ -205,6 +226,7 @@ class DetectionReport:
     tables: tuple[DatabaseTable, ...] = ()
     indexes: tuple[DatabaseIndex, ...] = ()
     source_issues: tuple[SourceIssueRecord, ...] = ()
+    source_coverage: tuple[SourceCoverageRecord, ...] = ()
 
     @property
     def interface_document_applicable(self) -> bool:
@@ -234,4 +256,5 @@ def merge_reports(*reports: DetectionReport) -> DetectionReport:
         tables=tuple(item for report in reports for item in report.tables),
         indexes=tuple(item for report in reports for item in report.indexes),
         source_issues=tuple(item for report in reports for item in report.source_issues),
+        source_coverage=tuple(item for report in reports for item in report.source_coverage),
     )

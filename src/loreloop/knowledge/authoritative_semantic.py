@@ -93,7 +93,7 @@ def build_semantic_core(
     context = SemanticContext(
         trust,
         config,
-        {(blob.repository_alias, blob.path): blob for blob in blobs if blob.data is not None},
+        {(blob.repository_alias, blob.path): blob for blob in blobs},
         {
             (blob.repository_alias, blob.path): _line_spans(blob.data)
             for blob in blobs

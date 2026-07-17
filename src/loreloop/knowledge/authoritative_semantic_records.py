@@ -9,6 +9,7 @@ from .authoritative_semantic_model import (
     SemanticContext,
     SemanticEvidence,
     SemanticRecord,
+    make_blob_semantic_record,
     make_semantic_record,
 )
 
@@ -98,7 +99,7 @@ def build_semantic_records(
                 "name": item.name,
                 "surface_type": item.surface_type,
                 "entry": item.entry,
-                "actions": ", ".join(item.actions),
+                "actions": "".join(f"{action}\n" for action in item.actions),
             },
         )
     for item in report.tests:
@@ -299,6 +300,23 @@ def build_semantic_records(
                 "dropped_fact_count": item.dropped_fact_count,
             },
         )
+    for item in report.source_coverage:
+        record, source_evidence = make_blob_semantic_record(
+            context,
+            "COV",
+            DocumentRowKind.SOURCE_COVERAGE,
+            "source_coverage",
+            item.source,
+            {
+                "path": item.path,
+                "suffix": item.suffix,
+                "detector": item.detector,
+                "status": item.status,
+                "byte_length": item.byte_length,
+            },
+        )
+        records.append(record)
+        evidence[source_evidence.evidence_id] = source_evidence
     unique_records: list[SemanticRecord] = []
     seen_record_ids: set[str] = set()
     for record in records:

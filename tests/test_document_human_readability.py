@@ -11,6 +11,7 @@ from loreloop.knowledge.authoritative_markdown_render import (
     MarkdownSection,
     _human_capabilities,
     _human_identifier,
+    _merged_user_entries,
 )
 
 
@@ -204,3 +205,46 @@ def test_legacy_form_names_are_rendered_as_human_capabilities() -> None:
     assert _human_identifier("FrmInputUserInfo") == "人员数据导入"
     assert _human_identifier("frmReportExpDept") == "部门报表导出"
     assert _human_identifier("KQTimer1") == "考勤定时任务"
+
+
+def test_human_user_guide_merges_markup_and_codebehind_for_one_entry() -> None:
+    rows = [
+        MarkdownRow(
+            "UiSurfaceRow",
+            "UI-1",
+            (
+                ("name", "ZTE.ATM.EmployeePage"),
+                ("entry", "Web/Employee.aspx"),
+                (
+                    "actions",
+                    "click:javascript:ShowEmployee(this.id,'txtPhone');\nclick:btnSave_Click",
+                ),
+            ),
+            ("E-1",),
+        ),
+        MarkdownRow(
+            "UiSurfaceRow",
+            "UI-2",
+            (
+                ("name", "EmployeePage"),
+                ("entry", "Web/Employee.aspx"),
+                ("actions", "Page_Load, btnSave_Click"),
+            ),
+            ("E-2",),
+        ),
+    ]
+    evidence = {
+        "E-1": EvidenceLocation(".", "Web/Employee.aspx", 1),
+        "E-2": EvidenceLocation(".", "Web/Employee.aspx.cs", 10),
+    }
+
+    entries = _merged_user_entries(rows, evidence)
+
+    assert len(entries) == 1
+    assert entries[0]["name"] == "EmployeePage"
+    assert entries[0]["actions"] == {
+        "click:javascript:ShowEmployee(this.id,'txtPhone');",
+        "click:btnSave_Click",
+        "Page_Load",
+        "btnSave_Click",
+    }

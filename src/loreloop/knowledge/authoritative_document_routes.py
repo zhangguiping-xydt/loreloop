@@ -63,6 +63,7 @@ DOCUMENT_ROUTES = (
                 DocumentRowKind.IMPLEMENTATION_FACT,
                 DocumentRowKind.CURRENT_DATA,
                 DocumentRowKind.APPLICABILITY,
+                DocumentRowKind.SOURCE_COVERAGE,
                 DocumentRowKind.WEB_ARCHITECTURE,
                 DocumentRowKind.WEB_CONSTRAINT,
             }
@@ -161,6 +162,7 @@ CANONICAL_DOCUMENT_OWNER = {
     DocumentRowKind.DEPLOYMENT: RequiredDocumentFamily.ARCHITECTURE,
     DocumentRowKind.MODULE_REPORT: RequiredDocumentFamily.ARCHITECTURE,
     DocumentRowKind.APPLICABILITY: RequiredDocumentFamily.ARCHITECTURE,
+    DocumentRowKind.SOURCE_COVERAGE: RequiredDocumentFamily.ARCHITECTURE,
     DocumentRowKind.WEB_ARCHITECTURE: RequiredDocumentFamily.ARCHITECTURE,
     DocumentRowKind.ACCEPTANCE: RequiredDocumentFamily.ACCEPTANCE,
     DocumentRowKind.TEST: RequiredDocumentFamily.ACCEPTANCE,
@@ -186,6 +188,7 @@ SECTION_ROUTES = {
     DocumentRowKind.UI_SURFACE: ("ui-surfaces", "用户界面与操作入口"),
     DocumentRowKind.MODULE: ("modules", "模块与符号"),
     DocumentRowKind.MODULE_REPORT: ("module-reports", "模块报告"),
+    DocumentRowKind.SOURCE_COVERAGE: ("source-coverage", "源码覆盖"),
     DocumentRowKind.PERMISSION: ("permissions", "权限规则"),
     DocumentRowKind.CONFIGURATION: ("configuration", "配置契约"),
     DocumentRowKind.DEPENDENCY: ("dependencies", "依赖关系"),

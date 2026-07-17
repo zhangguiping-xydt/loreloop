@@ -46,6 +46,7 @@ PREFIX_ORDINALS: Final = {
     "WEB": 40,
     "DEP": 40,
     "DOCSRC": 40,
+    "COV": 40,
     "MOD": 50,
     "DATA": 70,
     "REQ": 80,

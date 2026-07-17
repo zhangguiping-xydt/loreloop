@@ -14,6 +14,7 @@ from .authoritative_records import (
     DetectionReport,
     InterfaceRecord,
     PermissionRecord,
+    ImplementationFactRecord,
     SourceRef,
     SymbolRecord,
     merge_reports,
@@ -44,6 +45,21 @@ _CLASS: Final = re.compile(
     r"^(?P<export>export\s+)(?:default\s+)?class\s+(?P<name>[A-Za-z_$][\w$]*)",
     re.MULTILINE,
 )
+_LEGACY_FUNCTION: Final = re.compile(
+    r"^(?:(?P<async>async)\s+)?function\s+(?P<name>[A-Za-z_$][\w$]*)\s*"
+    r"\((?P<params>[^)]*)\)",
+    re.MULTILINE,
+)
+_FUNCTION_ASSIGNMENT: Final = re.compile(
+    r"^(?:var|let|const)?\s*(?P<name>[A-Za-z_$][\w$]*)\s*=\s*function\s*"
+    r"\((?P<params>[^)]*)\)",
+    re.MULTILINE,
+)
+_PROTOTYPE_FUNCTION: Final = re.compile(
+    r"^(?P<class>[A-Za-z_$][\w$]*)\.prototype\.(?P<name>[A-Za-z_$][\w$]*)\s*=\s*"
+    r"function\s*\((?P<params>[^)]*)\)",
+    re.MULTILINE,
+)
 _IMPORT: Final = re.compile(
     r"(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*)(['\"])(?P<name>[^'\"]+)\1"
 )
@@ -60,6 +76,29 @@ _PERMISSION_TAIL: Final = re.compile(
 _IDENTIFIER: Final = re.compile(r"[A-Za-z_$][\w$]*")
 _COMMAND: Final = re.compile(r"\b(?:program|cli)\.command\s*\(\s*(['\"])(?P<name>[^'\"]+)\1")
 _SQL_DDL: Final = re.compile(r"\bCREATE\s+(?:TABLE|(?:UNIQUE\s+)?INDEX)\b", re.IGNORECASE)
+_EVENT_ASSIGNMENT: Final = re.compile(
+    r"\.on(?P<event>click|change|submit|load|keydown|keyup)\s*=\s*"
+    r"(?P<handler>[A-Za-z_$][\w$]*)",
+    re.I,
+)
+_ADD_EVENT: Final = re.compile(
+    r"\.addEventListener\s*"
+    r"\(\s*(['\"])(?P<event>[^'\"]+)\1\s*,\s*(?P<handler>[A-Za-z_$][\w$]*)",
+    re.I,
+)
+_AJAX_URL: Final = re.compile(
+    r"\b(?:url\s*:\s*|fetch\s*\(\s*)(['\"])(?P<url>[^'\"\r\n]{1,1024})\1",
+    re.I,
+)
+_XHR_OPEN: Final = re.compile(
+    r"\.open\s*\(\s*(['\"])(?P<method>GET|POST|PUT|PATCH|DELETE)\1\s*,\s*"
+    r"(['\"])(?P<url>[^'\"\r\n]{1,1024})\3",
+    re.I,
+)
+_LOCATION: Final = re.compile(
+    r"\b(?:window\.)?location(?:\.href)?\s*=\s*(['\"])(?P<url>[^'\"\r\n]{1,1024})\1",
+    re.I,
+)
 
 
 def _line(source: str, offset: int) -> int:
@@ -131,6 +170,92 @@ def _symbols(source: str, alias: str, path: str) -> tuple[SymbolRecord, ...]:
         )
         for match in _CLASS.finditer(source)
     )
+    if path.lower().endswith((".js", ".cjs")):
+        records.extend(
+            SymbolRecord(
+                "async_function" if match.group("async") else "function",
+                match.group("name"),
+                f"{match.group('name')}({match.group('params').strip()})",
+                _ref(alias, path, source, match.start()),
+            )
+            for match in _LEGACY_FUNCTION.finditer(source)
+        )
+        records.extend(
+            SymbolRecord(
+                "function",
+                match.group("name"),
+                f"{match.group('name')}({match.group('params').strip()})",
+                _ref(alias, path, source, match.start()),
+            )
+            for match in _FUNCTION_ASSIGNMENT.finditer(source)
+        )
+        records.extend(
+            SymbolRecord(
+                "function",
+                f"{match.group('class')}.{match.group('name')}",
+                f"{match.group('name')}({match.group('params').strip()})",
+                _ref(alias, path, source, match.start()),
+            )
+            for match in _PROTOTYPE_FUNCTION.finditer(source)
+        )
+    return tuple(records)
+
+
+def _implementation_facts(
+    source: str, alias: str, path: str
+) -> tuple[ImplementationFactRecord, ...]:
+    subject = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    records: list[ImplementationFactRecord] = []
+    for match in _EVENT_ASSIGNMENT.finditer(source):
+        records.append(
+            ImplementationFactRecord(
+                subject,
+                "controls",
+                f"{match.group('event').lower()}:{match.group('handler')}",
+                "DOM event assignment",
+                _ref(alias, path, source, match.start()),
+            )
+        )
+    for match in _ADD_EVENT.finditer(source):
+        records.append(
+            ImplementationFactRecord(
+                subject,
+                "controls",
+                f"{match.group('event')}:{match.group('handler')}",
+                "DOM addEventListener",
+                _ref(alias, path, source, match.start()),
+            )
+        )
+    for match in _AJAX_URL.finditer(source):
+        records.append(
+            ImplementationFactRecord(
+                subject,
+                "calls",
+                match.group("url"),
+                "JavaScript request",
+                _ref(alias, path, source, match.start()),
+            )
+        )
+    for match in _XHR_OPEN.finditer(source):
+        records.append(
+            ImplementationFactRecord(
+                subject,
+                "calls",
+                match.group("url"),
+                f"XMLHttpRequest {match.group('method').upper()}",
+                _ref(alias, path, source, match.start()),
+            )
+        )
+    for match in _LOCATION.finditer(source):
+        records.append(
+            ImplementationFactRecord(
+                subject,
+                "calls",
+                match.group("url"),
+                "browser navigation",
+                _ref(alias, path, source, match.start()),
+            )
+        )
     return tuple(records)
 
 
@@ -233,6 +358,7 @@ def detect_typescript_source(source: str, repository_alias: str, path: str) -> D
         ui_surfaces=detect_typescript_ui_surfaces(source, repository_alias, path),
         configurations=configurations,
         dependencies=dependencies,
+        implementation_facts=_implementation_facts(source, repository_alias, path),
     )
     sql_reports = tuple(
         detect_sql_source(

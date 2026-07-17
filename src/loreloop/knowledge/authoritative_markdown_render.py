@@ -60,7 +60,13 @@ _PURPOSES = {
 _DOCUMENT_NAVIGATION = {
     "capability_catalog": ("项目概览", "源码能力域", "代码模块能力", "覆盖缺口与未确认事项"),
     "requirements": ("需求材料状态", "功能与业务规则", "约束与异常", "覆盖缺口与未确认事项"),
-    "architecture": ("系统上下文", "仓库与职责", "模块与仓库边界", "配置与运行边界"),
+    "architecture": (
+        "源码覆盖与盲区",
+        "系统上下文",
+        "仓库与职责",
+        "模块与仓库边界",
+        "配置与运行边界",
+    ),
     "detailed_design": ("设计摘要", "模块详细设计", "模块协作视图", "核心流程与异常"),
     "user_guide": ("使用边界", "用户界面与操作入口", "已确认操作与行为", "覆盖缺口与未确认事项"),
     "acceptance": ("验收准则", "测试证据", "可交付性判断", "覆盖缺口与未确认事项"),
@@ -81,6 +87,7 @@ _HUMAN_V2_NAVIGATION = {
         "需求确认边界",
     ),
     "architecture": (
+        "源码覆盖与盲区",
         "系统上下文",
         "技术栈与运行形态",
         "运行与代码单元",
@@ -203,6 +210,12 @@ def _value(value: Scalar) -> str:
 
 def _values(row: MarkdownRow) -> dict[str, Scalar]:
     return dict(row.values)
+
+
+def _action_values(value: object) -> tuple[str, ...]:
+    text = str(value or "")
+    parts = text.splitlines() if "\n" in text else text.split(",")
+    return tuple(item.strip() for item in parts if item.strip())
 
 
 def _locations(document: MarkdownDocument) -> dict[str, EvidenceLocation]:
@@ -1038,6 +1051,95 @@ def _architecture_role(scopes: set[str], dependencies: set[str]) -> str:
     return "共享或基础组件"
 
 
+def _render_source_coverage(
+    document: MarkdownDocument, evidence: dict[str, EvidenceLocation]
+) -> list[str]:
+    rows = _kind_rows(document, "SourceCoverageRow")
+    if not rows:
+        return []
+    statuses: Counter[str] = Counter()
+    repositories: Counter[str] = Counter()
+    unsupported: Counter[str] = Counter()
+    no_facts: Counter[str] = Counter()
+    profiles: Counter[str] = Counter()
+    total_bytes = 0
+    for row in rows:
+        values = _values(row)
+        status = str(values.get("status") or "unknown")
+        suffix = str(values.get("suffix") or "[no extension]")
+        detector = values.get("detector")
+        byte_length = values.get("byte_length")
+        statuses[status] += 1
+        repositories[_repository(row, evidence)] += 1
+        if isinstance(byte_length, int):
+            total_bytes += byte_length
+        if isinstance(detector, str) and detector:
+            profiles[detector] += 1
+        if status == "unsupported":
+            unsupported[suffix] += 1
+        elif status == "inspected_no_facts":
+            no_facts[suffix] += 1
+    total = len(rows)
+    inspected = statuses["parsed"] + statuses["inspected_no_facts"]
+    semantic = statuses["parsed"]
+    lines = [
+        "## 源码覆盖与盲区",
+        "",
+        "每个快照文件都进入以下互斥状态。文件进入可验证快照不等于其业务语义已经被解析。",
+        "",
+        "| 指标 | 文件数 | 占比 |",
+        "|---|---:|---:|",
+        f"| 快照文件 | {total} | 100.0% |",
+        f"| 检测器已检查 | {inspected} | {inspected / total:.1%} |",
+        f"| 已产生可检索事实 | {semantic} | {semantic / total:.1%} |",
+        f"| 已检查但未产生事实 | {statuses['inspected_no_facts']} | {statuses['inspected_no_facts'] / total:.1%} |",
+        f"| 当前不支持语义解析 | {statuses['unsupported']} | {statuses['unsupported'] / total:.1%} |",
+        f"| fixture/generated 排除 | {statuses['excluded']} | {statuses['excluded'] / total:.1%} |",
+        f"| 文本解码缺口 | {statuses['decode_gap']} | {statuses['decode_gap'] / total:.1%} |",
+        f"| 快照字节总量 | {total_bytes} | - |",
+        "",
+        "### 仓库覆盖",
+        "",
+        "| 仓库 | 快照文件 |",
+        "|---|---:|",
+    ]
+    lines.extend(f"| `{_cell(name)}` | {count} |" for name, count in sorted(repositories.items()))
+    if profiles:
+        lines.extend(
+            [
+                "",
+                "### 检测器分布",
+                "",
+                "| 检测器 | 文件数 |",
+                "|---|---:|",
+                *(f"| `{_cell(name)}` | {count} |" for name, count in profiles.most_common()),
+            ]
+        )
+    if unsupported:
+        lines.extend(
+            [
+                "",
+                "### 主要未解析类型",
+                "",
+                "| 后缀 | 文件数 |",
+                "|---|---:|",
+                *(f"| `{_cell(name)}` | {count} |" for name, count in unsupported.most_common(20)),
+            ]
+        )
+    if no_facts:
+        lines.extend(
+            [
+                "",
+                "### 已检查但没有形成事实",
+                "",
+                "| 后缀 | 文件数 |",
+                "|---|---:|",
+                *(f"| `{_cell(name)}` | {count} |" for name, count in no_facts.most_common(20)),
+            ]
+        )
+    return [*lines, ""]
+
+
 def _render_architecture(
     document: MarkdownDocument, evidence: dict[str, EvidenceLocation]
 ) -> list[str]:
@@ -1074,14 +1176,17 @@ def _render_architecture(
     repository_nodes = {
         repository: f"R{index:03d}" for index, repository in enumerate(sorted(repositories), 1)
     }
-    lines = [
-        "## 系统上下文",
-        "",
-        "当前架构视图只陈述提交态仓库、依赖和配置边界；没有显式调用证据时不虚构服务间连线。",
-        "",
-        "```mermaid",
-        "flowchart LR",
-    ]
+    lines = _render_source_coverage(document, evidence)
+    lines.extend(
+        [
+            "## 系统上下文",
+            "",
+            "当前架构视图只陈述提交态仓库、依赖和配置边界；没有显式调用证据时不虚构服务间连线。",
+            "",
+            "```mermaid",
+            "flowchart LR",
+        ]
+    )
     for repository, facts in sorted(repositories.items()):
         alias = repository_nodes[repository]
         role = _architecture_role(facts["scopes"] | facts["layers"], facts["dependencies"])
@@ -1166,7 +1271,7 @@ def _render_user_guide(
         actions = group["actions"]
         raw_actions = str(values.get("actions") or "")
         if isinstance(actions, set):
-            actions.update(item.strip() for item in raw_actions.split(",") if item.strip())
+            actions.update(_action_values(raw_actions))
         if group["source"] is None:
             group["source"] = location
     lines = [
@@ -1851,9 +1956,7 @@ def _human_capabilities(
             group["title"] = _human_identifier(str(values.get("name") or stem))
             actions = group["actions"]
             if isinstance(actions, set):
-                actions.update(
-                    item.strip() for item in str(values.get("actions") or "").split(",") if item.strip()
-                )
+                actions.update(_action_values(values.get("actions")))
             group["score"] = int(group["score"]) + 12
         elif row.kind in {"InterfaceRow", "CommandRow"}:
             interfaces = group["interfaces"]
@@ -2121,9 +2224,7 @@ def _capability_fact_lines(capability: dict[str, object], *, limit: int = 16) ->
         raw,
         key=lambda item: (
             item[3].line
-            if isinstance(item, tuple)
-            and len(item) == 4
-            and isinstance(item[3], EvidenceLocation)
+            if isinstance(item, tuple) and len(item) == 4 and isinstance(item[3], EvidenceLocation)
             else 0
         ),
     )
@@ -2181,7 +2282,9 @@ def _v2_capability_catalog(
             data.append("读 " + ", ".join(sorted(reads)[:5]))
         if writes:
             data.append("写 " + ", ".join(sorted(writes)[:5]))
-        source = capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        source = (
+            capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        )
         lines.append(
             f"| F-{index:02d} | **{_cell(str(capability['title']))}** | "
             f"{_cell(_unit_label(str(capability['unit'])))} | {_cell(_capability_trigger(capability))} | "
@@ -2194,7 +2297,9 @@ def _v2_capability_catalog(
         actions = _capability_set(capability, "actions")
         interfaces = _capability_set(capability, "interfaces")
         symbols = _capability_list(capability, "symbols")
-        source = capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        source = (
+            capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        )
         lines.extend(
             [
                 f"### F-{index:02d} {_cell(str(capability['title']))}",
@@ -2204,16 +2309,11 @@ def _v2_capability_catalog(
                 f"- **使用者/调用方**：{_cell(_capability_actor(capability))}",
                 f"- **触发入口**：{_cell(_capability_trigger(capability))}",
                 "- **前置条件**：",
-                *(
-                    f"  - {_cell(item)}"
-                    for item in _capability_preconditions(capability)
-                ),
+                *(f"  - {_cell(item)}" for item in _capability_preconditions(capability)),
                 "- **已确认处理行为**：",
                 *(
                     f"  {step}. {_cell(item)}"
-                    for step, item in enumerate(
-                        _capability_confirmed_behaviors(capability), 1
-                    )
+                    for step, item in enumerate(_capability_confirmed_behaviors(capability), 1)
                 ),
                 f"- **数据映射**：读 `{_cell(', '.join(sorted(reads)) or '-')}`；写 `{_cell(', '.join(sorted(writes)) or '-')}`",
                 f"- **界面/接口映射**：{_cell(', '.join([*sorted(actions)[:10], *sorted(interfaces)[:10]]) or '无明确界面或接口入口')}",
@@ -2289,7 +2389,9 @@ def _v2_requirements(
     for index, capability in enumerate(capabilities, 1):
         reads = capability["reads"] if isinstance(capability["reads"], set) else set()
         writes = capability["writes"] if isinstance(capability["writes"], set) else set()
-        source = capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        source = (
+            capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        )
         lines.append(
             f"| IMP-{index:02d} | **{_cell(str(capability['title']))}** | "
             f"{_cell(_capability_actor(capability))} | {_cell(_capability_trigger(capability))} | "
@@ -2304,7 +2406,9 @@ def _v2_requirements(
         actions = sorted(_capability_set(capability, "actions"))
         interfaces = sorted(_capability_set(capability, "interfaces"))
         symbols = _capability_list(capability, "symbols")
-        source = capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        source = (
+            capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        )
         behaviors = _capability_confirmed_behaviors(capability)
         boundaries = _capability_boundaries(capability)
         lines.extend(
@@ -2320,24 +2424,18 @@ def _v2_requirements(
                 + "<br>".join(_cell(item) for item in _capability_preconditions(capability))
                 + " |",
                 "| 基本处理行为 | "
-                + "<br>".join(
-                    _cell(f"{step}. {item}") for step, item in enumerate(behaviors, 1)
-                )
+                + "<br>".join(_cell(f"{step}. {item}") for step, item in enumerate(behaviors, 1))
                 + " |",
                 f"| 已确认输入 | {_cell(', '.join(reads) or '未提取到显式表级输入')} |",
                 f"| 已确认输出/副作用 | {_cell(', '.join(writes) or '未提取到显式表级写入')} |",
                 f"| 页面/接口 | {_cell(', '.join([*actions[:12], *interfaces[:12]]) or '无明确页面或接口入口')} |",
                 f"| 关键实现 | {_cell(', '.join(symbols[:16]) or _file_stem(source.path if source else ''))} |",
-                "| 约束与未确认事项 | "
-                + "<br>".join(_cell(item) for item in boundaries)
-                + " |",
+                "| 约束与未确认事项 | " + "<br>".join(_cell(item) for item in boundaries) + " |",
                 f"| 证据 | {_source(source)} |",
                 "",
             ]
         )
-    data_map: dict[str, dict[str, list[str]]] = defaultdict(
-        lambda: {"reads": [], "writes": []}
-    )
+    data_map: dict[str, dict[str, list[str]]] = defaultdict(lambda: {"reads": [], "writes": []})
     for capability in capabilities:
         title = str(capability["title"])
         for item in sorted(_capability_set(capability, "reads")):
@@ -2379,9 +2477,7 @@ def _v2_requirements(
                 or values.get("description")
                 or _example(values)
             )
-            lines.append(
-                f"- `{_cell(str(statement))}`（{_source(_location(row, evidence))}）"
-            )
+            lines.append(f"- `{_cell(str(statement))}`（{_source(_location(row, evidence))}）")
     lines.extend(
         [
             "",
@@ -2423,9 +2519,18 @@ def _v2_architecture(
     document: MarkdownDocument, evidence: dict[str, EvidenceLocation]
 ) -> list[str]:
     units: dict[tuple[str, str], dict[str, object]] = defaultdict(
-        lambda: {"rows": [], "files": set(), "dependencies": set(), "configs": set(), "data": set(), "source": None}
+        lambda: {
+            "rows": [],
+            "files": set(),
+            "dependencies": set(),
+            "configs": set(),
+            "data": set(),
+            "source": None,
+        }
     )
     for row in _all_rows(document):
+        if row.kind == "SourceCoverageRow":
+            continue
         location = _location(row, evidence)
         if location is None:
             continue
@@ -2442,7 +2547,11 @@ def _v2_architecture(
             group["dependencies"].add(str(values.get("name") or "-"))
         if row.kind == "ConfigurationRow" and isinstance(group["configs"], set):
             group["configs"].add(str(values.get("key") or "-"))
-        if row.kind == "ImplementationFactRow" and values.get("predicate") in {"reads", "writes"} and isinstance(group["data"], set):
+        if (
+            row.kind == "ImplementationFactRow"
+            and values.get("predicate") in {"reads", "writes"}
+            and isinstance(group["data"], set)
+        ):
             group["data"].add(str(values.get("object") or "-"))
         if group["source"] is None:
             group["source"] = location
@@ -2487,15 +2596,18 @@ def _v2_architecture(
             )
         )
     )
-    lines = [
-        "## 系统上下文",
-        "",
-        "系统边界按源码中的顶层运行/代码单元划分，不再把整个 Git 仓库误画成单一组件。连线只表示已检测到的持久化交互。",
-        "",
-        "```mermaid",
-        "flowchart LR",
-        '    DATA[("数据库 / 持久化")]',
-    ]
+    lines = _render_source_coverage(document, evidence)
+    lines.extend(
+        [
+            "## 系统上下文",
+            "",
+            "系统边界按源码中的顶层运行/代码单元划分，不再把整个 Git 仓库误画成单一组件。连线只表示已检测到的持久化交互。",
+            "",
+            "```mermaid",
+            "flowchart LR",
+            '    DATA[("数据库 / 持久化")]',
+        ]
+    )
     for index, ((repository, unit), group) in enumerate(ranked, 1):
         node = f"U{index:02d}"
         rows = group["rows"] if isinstance(group["rows"], list) else []
@@ -2555,9 +2667,7 @@ def _v2_architecture(
         configs = group["configs"] if isinstance(group["configs"], set) else set()
         data = group["data"] if isinstance(group["data"], set) else set()
         source = group["source"] if isinstance(group["source"], EvidenceLocation) else None
-        capability_titles = [
-            str(item["title"]) for item in capabilities_by_unit.get(unit, [])[:12]
-        ]
+        capability_titles = [str(item["title"]) for item in capabilities_by_unit.get(unit, [])[:12]]
         responsibility = _unit_role(unit, rows)
         if capability_titles:
             responsibility += "；" + "、".join(capability_titles)
@@ -2574,9 +2684,7 @@ def _v2_architecture(
         configs = group["configs"] if isinstance(group["configs"], set) else set()
         data = group["data"] if isinstance(group["data"], set) else set()
         source = group["source"] if isinstance(group["source"], EvidenceLocation) else None
-        capability_titles = [
-            str(item["title"]) for item in capabilities_by_unit.get(unit, [])[:12]
-        ]
+        capability_titles = [str(item["title"]) for item in capabilities_by_unit.get(unit, [])[:12]]
         lines.extend(
             [
                 f"### {_cell(_unit_label(unit))} (`{_cell(repository)}:{_cell(unit)}`)",
@@ -2616,7 +2724,9 @@ def _v2_detailed_design(
         )
     lines.extend(["", "## 模块详细设计", ""])
     for index, capability in enumerate(capabilities, 1):
-        source = capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        source = (
+            capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        )
         reads = _capability_set(capability, "reads")
         writes = _capability_set(capability, "writes")
         actions = _capability_set(capability, "actions")
@@ -2689,9 +2799,7 @@ def _v2_detailed_design(
         identifiers = {index: f"C{index + 1:02d}" for index in related_indexes}
         lines.extend(["```mermaid", "flowchart LR"])
         for index in related_indexes:
-            lines.append(
-                f'    {identifiers[index]}["{_cell(str(capabilities[index]["title"]))}"]'
-            )
+            lines.append(f'    {identifiers[index]}["{_cell(str(capabilities[index]["title"]))}"]')
         for producer, consumer, shared in relations[:40]:
             lines.append(
                 f'    {identifiers[producer]} -->|"{_cell(", ".join(shared[:3]))}"| '
@@ -2712,9 +2820,7 @@ def _v2_detailed_design(
             )
     else:
         lines.extend(["当前没有提取到跨能力的显式表级写入→读取关系。", ""])
-    impact: dict[str, dict[str, list[str]]] = defaultdict(
-        lambda: {"reads": [], "writes": []}
-    )
+    impact: dict[str, dict[str, list[str]]] = defaultdict(lambda: {"reads": [], "writes": []})
     for capability in capabilities:
         title = str(capability["title"])
         for data in sorted(_capability_set(capability, "reads")):
@@ -2788,9 +2894,43 @@ def _v2_detailed_design(
     return lines
 
 
-def _v2_user_guide(
-    document: MarkdownDocument, evidence: dict[str, EvidenceLocation]
-) -> list[str]:
+def _user_entry_name_rank(value: str) -> tuple[int, int, int, str]:
+    return (
+        0 if any("\u4e00" <= character <= "\u9fff" for character in value) else 1,
+        value.count("."),
+        len(value),
+        value,
+    )
+
+
+def _short_action(value: str, limit: int = 96) -> str:
+    return value if len(value) <= limit else value[: limit - 1].rstrip() + "…"
+
+
+def _merged_user_entries(
+    rows: list[MarkdownRow], evidence: dict[str, EvidenceLocation]
+) -> tuple[dict[str, object], ...]:
+    entries: dict[str, dict[str, object]] = {}
+    for row in rows:
+        values = _values(row)
+        entry = str(values.get("entry") or values.get("path") or values.get("name") or "-")
+        name = str(values.get("name") or entry)
+        location = _location(row, evidence)
+        item = entries.setdefault(
+            entry,
+            {"entry": entry, "name": name, "actions": set(), "source": location},
+        )
+        if _user_entry_name_rank(name) < _user_entry_name_rank(str(item["name"])):
+            item["name"] = name
+        actions = item["actions"]
+        if isinstance(actions, set):
+            actions.update(_action_values(values.get("actions")))
+        if item["source"] is None:
+            item["source"] = location
+    return tuple(entries[key] for key in sorted(entries))
+
+
+def _v2_user_guide(document: MarkdownDocument, evidence: dict[str, EvidenceLocation]) -> list[str]:
     rows = _kind_rows(document, "UiSurfaceRow", "CommandRow")
     groups: dict[tuple[str, str, str], list[MarkdownRow]] = defaultdict(list)
     for row in rows:
@@ -2811,52 +2951,56 @@ def _v2_user_guide(
         "| 功能区域 | 页面/命令数 | 代表入口 | 已确认操作 | 证据 |",
         "|---|---:|---|---|---|",
     ]
-    ranked_groups = sorted(groups.items(), key=lambda item: (-len(item[1]), item[0]))
-    for (_, unit, domain), unit_rows in ranked_groups[:30]:
-        examples = [str(_values(row).get("name") or "-") for row in unit_rows[:6]]
+    merged_groups = {
+        key: _merged_user_entries(unit_rows, evidence) for key, unit_rows in groups.items()
+    }
+    ranked_groups = sorted(merged_groups.items(), key=lambda item: (-len(item[1]), item[0]))
+    for (_, unit, domain), entries in ranked_groups[:30]:
+        examples = [str(entry["name"]) for entry in entries[:6]]
         actions = sorted(
             {
-                action.strip()
-                for row in unit_rows
-                for action in str(_values(row).get("actions") or "").split(",")
-                if action.strip() and action.strip() != "Page_Load"
+                str(action)
+                for entry in entries
+                for action in (entry["actions"] if isinstance(entry["actions"], set) else set())
+                if action != "Page_Load"
             }
         )
-        source = _location(unit_rows[0], evidence)
+        source = (
+            entries[0]["source"] if isinstance(entries[0]["source"], EvidenceLocation) else None
+        )
         area = _AREA_LABELS.get(domain, _human_identifier(domain))
         lines.append(
-            f"| **{_cell(_unit_label(unit))} / {_cell(area)}** | {len(unit_rows)} | "
-            f"{_cell(', '.join(examples))} | {_cell(', '.join(actions[:8]) or '仅识别页面加载')} | {_source(source)} |"
+            f"| **{_cell(_unit_label(unit))} / {_cell(area)}** | {len(entries)} | "
+            f"{_cell(', '.join(examples))} | "
+            f"{_cell(', '.join(_short_action(action, 72) for action in actions[:8]) or '仅识别页面加载')} | {_source(source)} |"
         )
     if not groups:
         lines.append("| - | 当前没有可确认的 UI/CLI 入口 | - | - | - |")
     if groups:
         lines.extend(["", "## 关键入口详情", ""])
-        for (_, unit, domain), unit_rows in ranked_groups[:20]:
+        for (_, unit, domain), entries in ranked_groups[:20]:
             area = _AREA_LABELS.get(domain, _human_identifier(domain))
             lines.extend(
                 [
                     "<details>",
-                    f"<summary><strong>{_cell(_unit_label(unit))} / {_cell(area)}</strong> · {len(unit_rows)} 个入口</summary>",
+                    f"<summary><strong>{_cell(_unit_label(unit))} / {_cell(area)}</strong> · {len(entries)} 个入口</summary>",
                     "",
                     "| 页面/命令 | 已确认操作 | 入口 | 证据 |",
                     "|---|---|---|---|",
                 ]
             )
-            for row in unit_rows[:12]:
-                values = _values(row)
-                entry = values.get("entry") or values.get("path") or values.get("name") or "-"
-                actions = str(values.get("actions") or "-")
+            for entry in entries[:12]:
+                actions = entry["actions"] if isinstance(entry["actions"], set) else set()
                 lines.append(
-                    f"| **{_cell(str(values.get('name') or entry))}** | {_cell(actions)} | "
-                    f"`{_cell(str(entry))}` | {_source(_location(row, evidence))} |"
+                    f"| **{_cell(str(entry['name']))}** | "
+                    f"{_cell(', '.join(_short_action(str(action)) for action in sorted(actions)) or '-')} | "
+                    f"`{_cell(str(entry['entry']))}` | {_source(entry['source'] if isinstance(entry['source'], EvidenceLocation) else None)} |"
                 )
             lines.extend(["", "</details>", ""])
     operation_capabilities = tuple(
         capability
         for capability in _human_capabilities(document, evidence, limit=32)
-        if _capability_set(capability, "actions")
-        or _capability_set(capability, "interfaces")
+        if _capability_set(capability, "actions") or _capability_set(capability, "interfaces")
     )
     lines.extend(
         [
@@ -2869,9 +3013,7 @@ def _v2_user_guide(
     if operation_capabilities:
         for index, capability in enumerate(operation_capabilities[:24], 1):
             source = (
-                capability["source"]
-                if isinstance(capability["source"], EvidenceLocation)
-                else None
+                capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
             )
             actions = sorted(_capability_set(capability, "actions"))
             interfaces = sorted(_capability_set(capability, "interfaces"))
@@ -2902,9 +3044,7 @@ def _v2_user_guide(
     return lines
 
 
-def _v2_acceptance(
-    document: MarkdownDocument, evidence: dict[str, EvidenceLocation]
-) -> list[str]:
+def _v2_acceptance(document: MarkdownDocument, evidence: dict[str, EvidenceLocation]) -> list[str]:
     explicit = _kind_rows(document, "AcceptanceRow")
     capabilities = _human_capabilities(document, evidence, limit=28)
     lines = ["## 正式验收材料", ""]
@@ -2927,12 +3067,16 @@ def _v2_acceptance(
     scenario_index = 0
     for capability in capabilities:
         writes = capability["writes"] if isinstance(capability["writes"], set) else set()
-        interfaces = capability["interfaces"] if isinstance(capability["interfaces"], set) else set()
+        interfaces = (
+            capability["interfaces"] if isinstance(capability["interfaces"], set) else set()
+        )
         actions = capability["actions"] if isinstance(capability["actions"], set) else set()
         if not (writes or interfaces or actions):
             continue
         scenario_index += 1
-        source = capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        source = (
+            capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        )
         preconditions = _capability_preconditions(capability)
         behaviors = _capability_confirmed_behaviors(capability)
         actions_or_interfaces = [
@@ -2994,9 +3138,7 @@ def _v2_acceptance(
     return [*lines, ""]
 
 
-def _v2_interfaces(
-    document: MarkdownDocument, evidence: dict[str, EvidenceLocation]
-) -> list[str]:
+def _v2_interfaces(document: MarkdownDocument, evidence: dict[str, EvidenceLocation]) -> list[str]:
     lines = _render_interfaces(document, evidence)
     interfaces = _kind_rows(document, "InterfaceRow", "CommandRow", "WebInterfaceRow")
     permissions = _kind_rows(document, "PermissionRow")
@@ -3056,9 +3198,7 @@ def _preferred_table_variant(
     return min(variants.values(), key=rank)
 
 
-def _v2_database(
-    document: MarkdownDocument, evidence: dict[str, EvidenceLocation]
-) -> list[str]:
+def _v2_database(document: MarkdownDocument, evidence: dict[str, EvidenceLocation]) -> list[str]:
     data_rows = _kind_rows(document, "CurrentDataRow")
     facts = _kind_rows(document, "ImplementationFactRow")
     by_table: dict[str, list[MarkdownRow]] = defaultdict(list)
@@ -3107,7 +3247,9 @@ def _v2_database(
     for table in core:
         items = by_table[table]
         variant = _preferred_table_variant(items, evidence)
-        table_row = next((row for row in variant if _values(row).get("record_type") == "table"), None)
+        table_row = next(
+            (row for row in variant if _values(row).get("record_type") == "table"), None
+        )
         columns = sum(_values(row).get("record_type") == "column" for row in variant)
         indexes = len(
             {
@@ -3209,7 +3351,9 @@ def _v2_evidence_footer(
 
 def _render_human_v2(document: MarkdownDocument, paths: tuple[str, ...]) -> str:
     evidence = _locations(document)
-    snapshot_label = "可验证工作树快照" if "working_tree" in document.authority else "干净 Git 提交快照"
+    snapshot_label = (
+        "可验证工作树快照" if "working_tree" in document.authority else "干净 Git 提交快照"
+    )
     navigation = list(_HUMAN_V2_NAVIGATION.get(document.family, ()))
     kinds = {row.kind for row in _all_rows(document)}
     web_sections = tuple(

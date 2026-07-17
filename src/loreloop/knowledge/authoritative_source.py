@@ -6,11 +6,12 @@ import hashlib
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .authoritative_detector_config import detect_config_source
 from .authoritative_detector_extended import detect_extended_source, is_extended_source
 from .authoritative_detector_graphql import detect_graphql_source
+from .authoritative_detector_markup import detect_markup_source, is_markup_source
 from .authoritative_detector_openapi import detect_openapi_source, has_supported_openapi_root
 from .authoritative_detector_prisma import detect_prisma_schema
 from .authoritative_detector_proto import detect_proto_source
@@ -31,7 +32,9 @@ from .authoritative_git import (
 from .authoritative_records import (
     DetectionError,
     DetectionReport,
+    SourceCoverageStatus,
     SourceIssueRecord,
+    SourceCoverageRecord,
     SourceRef,
     merge_reports,
 )
@@ -399,6 +402,7 @@ def _semantic_path_candidate(path: str) -> bool:
         )
         or _is_config(path)
         or is_extended_source(path)
+        or is_markup_source(path)
     )
 
 
@@ -438,7 +442,32 @@ def detector_profile(blob: SnapshotBlob) -> str | None:
         return None
     if is_extended_source(blob.path):
         return "extended_language_or_platform"
+    if is_markup_source(blob.path):
+        return "legacy_markup_resource"
     return None
+
+
+def _has_semantic_facts(report: DetectionReport) -> bool:
+    return any(
+        getattr(report, field.name)
+        for field in fields(DetectionReport)
+        if field.name not in {"source_issues", "source_coverage"}
+    )
+
+
+def _coverage_record(
+    blob: SnapshotBlob,
+    status: SourceCoverageStatus,
+    profile: str | None,
+) -> SourceCoverageRecord:
+    return SourceCoverageRecord(
+        blob.path,
+        PurePosixPath(blob.path).suffix.lower() or "[no extension]",
+        profile,
+        status,
+        blob.byte_length if blob.byte_length is not None else len(blob.data or b""),
+        SourceRef(blob.repository_alias, blob.path, 1),
+    )
 
 
 def detect_snapshot_blobs(
@@ -447,15 +476,27 @@ def detect_snapshot_blobs(
 ) -> DetectionReport:
     """Run deterministic detectors over one already verified blob set."""
     reports: list[DetectionReport] = []
+    coverage: list[SourceCoverageRecord] = []
     for blob in blobs:
-        if blob.data is None:
-            continue
         if is_supported_test_evidence_path(blob.path):
-            reports.append(detect_test_source(_test_text(blob), blob.repository_alias, blob.path))
+            report = detect_test_source(_test_text(blob), blob.repository_alias, blob.path)
+            reports.append(report)
+            coverage.append(
+                _coverage_record(
+                    blob,
+                    "parsed" if _has_semantic_facts(report) else "inspected_no_facts",
+                    "test_evidence",
+                )
+            )
             continue
         if excluded_semantic_source(blob.path):
+            coverage.append(_coverage_record(blob, "excluded", None))
             continue
         if not _semantic_path_candidate(blob.path):
+            coverage.append(_coverage_record(blob, "unsupported", None))
+            continue
+        if blob.data is None:
+            coverage.append(_coverage_record(blob, "unsupported", None))
             continue
         decoded = _decode_source_text(blob)
         if decoded is None:
@@ -468,6 +509,7 @@ def detect_snapshot_blobs(
                     dropped_fact_count=0,
                 )
             )
+            coverage.append(_coverage_record(blob, "decode_gap", None))
             continue
         try:
             report = _detect_snapshot_blob(blob, decoded.text)
@@ -490,10 +532,23 @@ def detect_snapshot_blobs(
                     )
                 )
             reports.append(report)
+        profile = detector_profile(blob)
+        coverage.append(
+            _coverage_record(
+                blob,
+                "parsed"
+                if report is not None and _has_semantic_facts(report)
+                else "inspected_no_facts"
+                if profile is not None
+                else "unsupported",
+                profile,
+            )
+        )
     if requirements:
         from .authoritative_requirements_input import detect_requirement_materials
 
         reports.append(detect_requirement_materials(blobs, requirements))
+    reports.append(DetectionReport(source_coverage=tuple(coverage)))
     return normalize_detection_report(merge_reports(*reports))
 
 
@@ -524,6 +579,8 @@ def _detect_snapshot_blob(blob: SnapshotBlob, text: str | None = None) -> Detect
         return None
     if is_extended_source(blob.path):
         return detect_extended_source(source, blob.repository_alias, blob.path)
+    if is_markup_source(blob.path):
+        return detect_markup_source(source, blob.repository_alias, blob.path)
     return None
 
 

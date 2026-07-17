@@ -60,6 +60,7 @@ class DocumentRowKind(StrEnum):
     IMPLEMENTATION_FACT = "ImplementationFactRow"
     MODULE = "ModuleRow"
     MODULE_REPORT = "ModuleReportRow"
+    SOURCE_COVERAGE = "SourceCoverageRow"
     EVIDENCE = "EvidenceRow"
 
 

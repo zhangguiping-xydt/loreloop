@@ -121,3 +121,58 @@ def make_semantic_record(
         SemanticRecord(identifier, atom, atom_kind, row_kind, values, evidence, bindings),
         SemanticEvidence(evidence, source, blob.blob_sha256, start, end),
     )
+
+
+def make_blob_semantic_record(
+    context: SemanticContext,
+    prefix: str,
+    row_kind: DocumentRowKind,
+    atom_kind: str,
+    source: SourceRef,
+    payload: Payload,
+) -> tuple[SemanticRecord, SemanticEvidence]:
+    """Bind an inventory fact to the complete blob, including unloaded binary blobs."""
+    blob = context.blobs.get((source.repository_alias, source.path))
+    if blob is None:
+        raise DetectionError(f"record source is absent from snapshot: {source.path}")
+    start = 0
+    end = blob.byte_length if blob.byte_length is not None else len(blob.data or b"")
+    evidence = evidence_id(
+        EvidenceIdentity(source.repository_alias, source.path, blob.blob_sha256, start, end)
+    )
+    atom = atom_id(
+        AtomIdentity(
+            atom_kind,
+            source.repository_alias,
+            source.path,
+            blob.blob_sha256,
+            start,
+            end,
+            payload,
+        )
+    )
+    identifier = record_id(
+        prefix,
+        RecordIdentity(
+            context.trust_domain_id,
+            context.repository_config_digest,
+            {
+                "alias": source.repository_alias,
+                "path": source.path,
+                "kind": atom_kind,
+                "payload": payload,
+            },
+        ),
+    )
+    values = tuple(ProjectedValue(f"/{key}", value) for key, value in payload.items())
+    bindings = tuple(
+        BindingEntry(
+            f"/{key}",
+            SourceBinding(evidence, atom, f"/payload/{key}", SourceTransform.IDENTITY),
+        )
+        for key in payload
+    )
+    return (
+        SemanticRecord(identifier, atom, atom_kind, row_kind, values, evidence, bindings),
+        SemanticEvidence(evidence, source, blob.blob_sha256, start, end),
+    )
