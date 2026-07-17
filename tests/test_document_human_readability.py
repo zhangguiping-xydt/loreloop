@@ -10,6 +10,7 @@ from loreloop.knowledge.authoritative_markdown_render import (
     MarkdownRow,
     MarkdownSection,
     _human_capabilities,
+    _human_identifier,
 )
 
 
@@ -196,3 +197,10 @@ def test_human_capability_selection_preserves_core_runtime_features() -> None:
         "配置与数据分发",
         "业务数据发送",
     }
+
+
+def test_legacy_form_names_are_rendered_as_human_capabilities() -> None:
+    assert _human_identifier("FrmNetDbConfig") == "网络数据库配置"
+    assert _human_identifier("FrmInputUserInfo") == "人员数据导入"
+    assert _human_identifier("frmReportExpDept") == "部门报表导出"
+    assert _human_identifier("KQTimer1") == "考勤定时任务"

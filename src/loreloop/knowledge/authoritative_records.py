@@ -109,7 +109,16 @@ class DependencyRecord:
 @dataclass(frozen=True, slots=True)
 class ImplementationFactRecord:
     subject: str
-    predicate: Literal["reads", "writes", "hosts", "calls", "uses", "configures"]
+    predicate: Literal[
+        "reads",
+        "writes",
+        "hosts",
+        "calls",
+        "uses",
+        "configures",
+        "reports",
+        "controls",
+    ]
     object: str
     detail: str | None
     source: SourceRef

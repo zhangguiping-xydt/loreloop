@@ -73,7 +73,10 @@ _HUMAN_V2_NAVIGATION = {
     "requirements": (
         "文档性质",
         "明确需求材料",
+        "角色与入口矩阵",
         "源码反构的现状规格",
+        "现状规格详情",
+        "数据与能力映射",
         "实现约束与权限",
         "需求确认边界",
     ),
@@ -83,14 +86,26 @@ _HUMAN_V2_NAVIGATION = {
         "运行与代码单元",
         "关键单元职责",
     ),
-    "detailed_design": ("设计总览", "模块详细设计", "源码解析覆盖缺口"),
+    "detailed_design": (
+        "设计总览",
+        "模块详细设计",
+        "跨能力数据协作",
+        "数据对象影响矩阵",
+        "源码解析覆盖缺口",
+    ),
     "user_guide": (
         "使用边界",
         "用户入口与可执行操作",
         "关键入口详情",
+        "典型操作路径",
         "操作说明的可信边界",
     ),
-    "acceptance": ("正式验收材料", "源码反构的验收候选", "已存在测试证据"),
+    "acceptance": (
+        "正式验收材料",
+        "源码反构的验收候选",
+        "验收覆盖矩阵",
+        "已存在测试证据",
+    ),
     "interface_contract": ("接口域索引", "HTTP 接口"),
     "database_design": ("数据域总览", "核心实体", "核心表字段详情", "全量实体索引"),
 }
@@ -1614,7 +1629,13 @@ _CAPABILITY_NAMES = {
     "frm net db config": "网络数据库配置",
     "frm config modular": "模块配置",
     "frm input user info": "人员数据导入",
+    "frm employee info": "人员信息维护",
+    "frm report exp dept": "部门报表导出",
+    "frm report rest": "调休报表导出",
+    "frm config assistant": "配置助手",
     "kq timer 1": "考勤定时任务",
+    "kqtimer1": "考勤定时任务",
+    "common date time": "日期时间工具",
     "oracle helper": "Oracle 数据访问",
     "apply leave bl": "请假申请服务",
     "apply supplement bl": "补单申请服务",
@@ -1706,6 +1727,9 @@ def _identifier_words(value: str) -> tuple[str, ...]:
 
 def _human_identifier(value: str) -> str:
     words = list(_identifier_words(value))
+    raw_key = " ".join(words)
+    if raw_key in _CAPABILITY_NAMES:
+        return _CAPABILITY_NAMES[raw_key]
     while words and words[0] in {"frm", "form", "uc", "ac", "atm"}:
         words.pop(0)
     while words and words[-1] in {"bll", "dal", "dto", "model", "controller", "service"}:
@@ -1779,8 +1803,12 @@ def _human_capabilities(
             "hosts": set(),
             "calls": set(),
             "configs": set(),
+            "messages": set(),
+            "controls": set(),
             "actions": set(),
             "interfaces": set(),
+            "facts": [],
+            "symbol_evidence": [],
             "source": None,
             "score": 0,
             "priority": False,
@@ -1813,6 +1841,11 @@ def _human_capabilities(
                 symbols = group["symbols"]
                 if isinstance(symbols, list) and name not in symbols:
                     symbols.append(name)
+                symbol_evidence = group["symbol_evidence"]
+                if isinstance(symbol_evidence, list):
+                    item = (name, location)
+                    if item not in symbol_evidence:
+                        symbol_evidence.append(item)
                 group["score"] = int(group["score"]) + 1
         elif row.kind == "UiSurfaceRow":
             group["title"] = _human_identifier(str(values.get("name") or stem))
@@ -1832,6 +1865,11 @@ def _human_capabilities(
         else:
             predicate = str(values.get("predicate") or "")
             target = str(values.get("object") or "-")
+            facts = group["facts"]
+            if isinstance(facts, list):
+                item = (predicate, target, values.get("detail"), location)
+                if item not in facts:
+                    facts.append(item)
             target_set = {
                 "reads": "reads",
                 "writes": "writes",
@@ -1839,6 +1877,8 @@ def _human_capabilities(
                 "calls": "calls",
                 "configures": "configs",
                 "uses": "calls",
+                "reports": "messages",
+                "controls": "controls",
             }.get(predicate)
             if target_set is not None and isinstance(group[target_set], set):
                 group[target_set].add(target)
@@ -1926,12 +1966,16 @@ def _capability_trigger(capability: dict[str, object]) -> str:
     interfaces = capability["interfaces"] if isinstance(capability["interfaces"], set) else set()
     actions = capability["actions"] if isinstance(capability["actions"], set) else set()
     hosts = capability["hosts"] if isinstance(capability["hosts"], set) else set()
+    calls = capability["calls"] if isinstance(capability["calls"], set) else set()
+    configs = capability["configs"] if isinstance(capability["configs"], set) else set()
     if interfaces:
         return ", ".join(sorted(interfaces)[:3])
     if actions:
         return "用户界面事件：" + ", ".join(sorted(actions)[:4])
     if "Windows Service" in hosts:
         return "Windows Service 后台调度（具体周期以配置为准）"
+    if calls and any(str(item).startswith("RunTimeSpan=") for item in configs):
+        return "后台线程入口：" + ", ".join(sorted(str(item) for item in calls)[:3])
     return "内部代码路径调用"
 
 
@@ -1943,6 +1987,158 @@ def _capability_actor(capability: dict[str, object]) -> str:
     if "Windows Service" in capability["hosts"]:
         return "后台服务账户"
     return "内部模块"
+
+
+def _capability_set(capability: dict[str, object], key: str) -> set[str]:
+    value = capability.get(key)
+    return {str(item) for item in value} if isinstance(value, set) else set()
+
+
+def _capability_list(capability: dict[str, object], key: str) -> list[str]:
+    value = capability.get(key)
+    return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def _capability_purpose(capability: dict[str, object]) -> str:
+    title = str(capability["title"])
+    reads = sorted(_capability_set(capability, "reads"))
+    writes = sorted(_capability_set(capability, "writes"))
+    actions = sorted(_capability_set(capability, "actions"))
+    interfaces = sorted(_capability_set(capability, "interfaces"))
+    if reads and writes:
+        return (
+            f"当前实现通过“{title}”读取 {', '.join(reads[:6])}，并对 "
+            f"{', '.join(writes[:6])} 产生写入或更新。"
+        )
+    if writes:
+        return f"当前实现通过“{title}”对 {', '.join(writes[:8])} 产生写入或更新。"
+    if interfaces:
+        return f"当前实现通过 {', '.join(interfaces[:4])} 提供“{title}”入口。"
+    if actions:
+        return f"当前实现通过界面事件 {', '.join(actions[:6])} 提供“{title}”操作入口。"
+    return f"源码中存在“{title}”实现单元；其完整业务目标未在提交态需求材料中明确说明。"
+
+
+def _capability_preconditions(capability: dict[str, object]) -> list[str]:
+    reads = sorted(_capability_set(capability, "reads"))
+    hosts = sorted(_capability_set(capability, "hosts"))
+    interfaces = sorted(_capability_set(capability, "interfaces"))
+    conditions: list[str] = []
+    if hosts:
+        conditions.append(f"运行宿主可用：{', '.join(hosts[:6])}")
+    if reads:
+        conditions.append(f"可访问已识别输入或现有数据：{', '.join(reads[:10])}")
+    if interfaces:
+        conditions.append("调用方按《接口契约》中已提取的参数和返回结构调用对应入口")
+    if not conditions:
+        conditions.append("源码未表达可独立提取的前置条件，需结合调用方或运行配置确认")
+    return conditions
+
+
+def _capability_confirmed_behaviors(capability: dict[str, object]) -> list[str]:
+    reads = sorted(_capability_set(capability, "reads"))
+    writes = sorted(_capability_set(capability, "writes"))
+    actions = sorted(_capability_set(capability, "actions"))
+    interfaces = sorted(_capability_set(capability, "interfaces"))
+    calls = _ordered_fact_targets(capability, "calls") or sorted(
+        _capability_set(capability, "calls")
+    )
+    messages = _ordered_fact_targets(capability, "reports") or sorted(
+        _capability_set(capability, "messages")
+    )
+    controls = _ordered_fact_targets(capability, "controls") or sorted(
+        _capability_set(capability, "controls")
+    )
+    behaviors: list[str] = []
+    if actions:
+        behaviors.append(f"响应界面事件：{', '.join(actions[:12])}")
+    if interfaces:
+        behaviors.append(f"暴露或处理接口入口：{', '.join(interfaces[:10])}")
+    if reads:
+        behaviors.append(f"读取或查询：{', '.join(reads[:16])}")
+    if messages:
+        behaviors.append(f"报告运行阶段或状态：{'；'.join(messages[:12])}")
+    if calls:
+        behaviors.append(f"调用或使用：{', '.join(calls[:12])}")
+    if controls:
+        behaviors.append(f"控制边界：{', '.join(controls[:12])}")
+    if writes:
+        behaviors.append(f"写入或更新：{', '.join(writes[:16])}")
+    if not behaviors:
+        behaviors.append("仅确认实现单元和符号存在，尚未提取到可证明的外部行为")
+    return behaviors
+
+
+def _capability_boundaries(capability: dict[str, object]) -> list[str]:
+    writes = _capability_set(capability, "writes")
+    actions = _capability_set(capability, "actions")
+    interfaces = _capability_set(capability, "interfaces")
+    boundaries = ["源码符号和数据操作证明当前实现存在，不证明业务仍然有效或结果已经验收。"]
+    if len(writes) > 1:
+        boundaries.append("该能力涉及多个写入对象；跨对象事务边界和失败补偿未由当前事实完整证明。")
+    if actions:
+        boundaries.append("界面事件存在不等于已确认完整操作顺序、角色权限和提示文案。")
+    if interfaces:
+        boundaries.append("接口存在不等于已确认调用权限、全部错误码和所有运行时响应。")
+    return boundaries
+
+
+def _ordered_fact_targets(capability: dict[str, object], predicate: str) -> list[str]:
+    raw = capability.get("facts")
+    if not isinstance(raw, list):
+        return []
+    ordered: list[tuple[int, str]] = []
+    for item in raw:
+        if not isinstance(item, tuple) or len(item) != 4 or str(item[0]) != predicate:
+            continue
+        location = item[3]
+        if not isinstance(location, EvidenceLocation):
+            continue
+        ordered.append((location.line, str(item[1])))
+    result: list[str] = []
+    for _, target in sorted(ordered):
+        if target not in result:
+            result.append(target)
+    return result
+
+
+def _capability_fact_lines(capability: dict[str, object], *, limit: int = 16) -> list[str]:
+    raw = capability.get("facts")
+    if not isinstance(raw, list):
+        return []
+    labels = {
+        "reads": "读取",
+        "writes": "写入或更新",
+        "hosts": "运行宿主",
+        "calls": "调用",
+        "uses": "使用",
+        "configures": "配置",
+        "reports": "报告运行状态",
+        "controls": "控制边界",
+    }
+    lines: list[str] = []
+    ordered = sorted(
+        raw,
+        key=lambda item: (
+            item[3].line
+            if isinstance(item, tuple)
+            and len(item) == 4
+            and isinstance(item[3], EvidenceLocation)
+            else 0
+        ),
+    )
+    for item in ordered[:limit]:
+        if not isinstance(item, tuple) or len(item) != 4:
+            continue
+        predicate, target, detail, location = item
+        if not isinstance(location, EvidenceLocation):
+            continue
+        operation = labels.get(str(predicate), str(predicate))
+        detail_text = f"（{detail}）" if detail else ""
+        lines.append(
+            f"{operation} `{_cell(str(target))}`{_cell(detail_text)}（{_source(location)}）"
+        )
+    return lines
 
 
 def _v2_capability_catalog(
@@ -1993,33 +2189,38 @@ def _v2_capability_catalog(
         )
     lines.extend(["", "## 功能详情", ""])
     for index, capability in enumerate(capabilities, 1):
-        reads = capability["reads"] if isinstance(capability["reads"], set) else set()
-        writes = capability["writes"] if isinstance(capability["writes"], set) else set()
-        calls = capability["calls"] if isinstance(capability["calls"], set) else set()
-        configs = capability["configs"] if isinstance(capability["configs"], set) else set()
-        hosts = capability["hosts"] if isinstance(capability["hosts"], set) else set()
-        actions = capability["actions"] if isinstance(capability["actions"], set) else set()
-        interfaces = (
-            capability["interfaces"] if isinstance(capability["interfaces"], set) else set()
-        )
-        symbols = capability["symbols"] if isinstance(capability["symbols"], list) else []
+        reads = _capability_set(capability, "reads")
+        writes = _capability_set(capability, "writes")
+        actions = _capability_set(capability, "actions")
+        interfaces = _capability_set(capability, "interfaces")
+        symbols = _capability_list(capability, "symbols")
         source = capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
-        integrations = [*sorted(hosts), *sorted(calls), *sorted(interfaces)]
         lines.extend(
             [
                 f"### F-{index:02d} {_cell(str(capability['title']))}",
                 "",
+                f"- **功能目标（现状）**：{_cell(_capability_purpose(capability))}",
                 f"- **所属单元**：{_cell(_unit_label(str(capability['unit'])))}",
                 f"- **使用者/调用方**：{_cell(_capability_actor(capability))}",
                 f"- **触发入口**：{_cell(_capability_trigger(capability))}",
-                f"- **已确认输入/读取**：{_cell(', '.join(sorted(reads)) or '未提取到显式表级读取')}",
-                f"- **已确认输出/写入**：{_cell(', '.join(sorted(writes)) or '未提取到显式表级写入')}",
-                f"- **界面操作**：{_cell(', '.join(sorted(actions)[:12]) or '无明确界面事件')}",
-                f"- **运行与集成**：{_cell(', '.join(integrations[:12]) or '未提取到明确宿主、外部调用或接口')}",
-                f"- **相关配置**：{_cell(', '.join(sorted(configs)[:12]) or '当前文件未提取到直接配置键')}",
-                f"- **关键实现**：{_cell(', '.join(symbols[:12]) or _file_stem(source.path if source else ''))}",
+                "- **前置条件**：",
+                *(
+                    f"  - {_cell(item)}"
+                    for item in _capability_preconditions(capability)
+                ),
+                "- **已确认处理行为**：",
+                *(
+                    f"  {step}. {_cell(item)}"
+                    for step, item in enumerate(
+                        _capability_confirmed_behaviors(capability), 1
+                    )
+                ),
+                f"- **数据映射**：读 `{_cell(', '.join(sorted(reads)) or '-')}`；写 `{_cell(', '.join(sorted(writes)) or '-')}`",
+                f"- **界面/接口映射**：{_cell(', '.join([*sorted(actions)[:10], *sorted(interfaces)[:10]]) or '无明确界面或接口入口')}",
+                f"- **关键实现符号**：{_cell(', '.join(symbols[:16]) or _file_stem(source.path if source else ''))}",
                 f"- **源码证据**：{_source(source)}",
-                "- **确认边界**：以上只描述当前实现能够证明的入口、数据和集成事实；业务目标、完整流程顺序、权限与异常处理仍以明确需求或更直接证据为准。",
+                "- **确认边界**：",
+                *(f"  - {_cell(item)}" for item in _capability_boundaries(capability)),
                 "",
             ]
         )
@@ -2059,6 +2260,24 @@ def _v2_requirements(
                 f"{_source(_location(row, evidence))} |"
             )
         lines.append("")
+    actor_capabilities: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for capability in capabilities:
+        actor_capabilities[_capability_actor(capability)].append(capability)
+    lines.extend(
+        [
+            "## 角色与入口矩阵",
+            "",
+            "角色名称仅在源码能够区分界面、接口、后台服务或内部模块时使用；具体岗位和授权范围仍需正式需求确认。",
+            "",
+            "| 调用方类型 | 已实现能力 | 代表入口 |",
+            "|---|---|---|",
+        ]
+    )
+    for actor, items in actor_capabilities.items():
+        lines.append(
+            f"| {_cell(actor)} | {_cell('、'.join(str(item['title']) for item in items[:16]))} | "
+            f"{_cell('；'.join(_capability_trigger(item) for item in items[:4]))} |"
+        )
     lines.extend(
         [
             "## 源码反构的现状规格",
@@ -2077,6 +2296,77 @@ def _v2_requirements(
             f"{_cell(', '.join(sorted(reads)[:6]) or '未提取到显式数据输入')} | "
             f"{_cell(', '.join(sorted(writes)[:6]) or '由实现入口产生行为，具体结果需结合调用方确认')} | "
             f"{_source(source)} |"
+        )
+    lines.extend(["", "## 现状规格详情", ""])
+    for index, capability in enumerate(capabilities, 1):
+        reads = sorted(_capability_set(capability, "reads"))
+        writes = sorted(_capability_set(capability, "writes"))
+        actions = sorted(_capability_set(capability, "actions"))
+        interfaces = sorted(_capability_set(capability, "interfaces"))
+        symbols = _capability_list(capability, "symbols")
+        source = capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        behaviors = _capability_confirmed_behaviors(capability)
+        boundaries = _capability_boundaries(capability)
+        lines.extend(
+            [
+                f"### IMP-{index:02d} {_cell(str(capability['title']))}",
+                "",
+                "| 规格项 | 当前实现能够证明的内容 |",
+                "|---|---|",
+                f"| 目标 | {_cell(_capability_purpose(capability))} |",
+                f"| 使用者/调用方 | {_cell(_capability_actor(capability))} |",
+                f"| 触发方式 | {_cell(_capability_trigger(capability))} |",
+                "| 前置条件 | "
+                + "<br>".join(_cell(item) for item in _capability_preconditions(capability))
+                + " |",
+                "| 基本处理行为 | "
+                + "<br>".join(
+                    _cell(f"{step}. {item}") for step, item in enumerate(behaviors, 1)
+                )
+                + " |",
+                f"| 已确认输入 | {_cell(', '.join(reads) or '未提取到显式表级输入')} |",
+                f"| 已确认输出/副作用 | {_cell(', '.join(writes) or '未提取到显式表级写入')} |",
+                f"| 页面/接口 | {_cell(', '.join([*actions[:12], *interfaces[:12]]) or '无明确页面或接口入口')} |",
+                f"| 关键实现 | {_cell(', '.join(symbols[:16]) or _file_stem(source.path if source else ''))} |",
+                "| 约束与未确认事项 | "
+                + "<br>".join(_cell(item) for item in boundaries)
+                + " |",
+                f"| 证据 | {_source(source)} |",
+                "",
+            ]
+        )
+    data_map: dict[str, dict[str, list[str]]] = defaultdict(
+        lambda: {"reads": [], "writes": []}
+    )
+    for capability in capabilities:
+        title = str(capability["title"])
+        for item in sorted(_capability_set(capability, "reads")):
+            if title not in data_map[item]["reads"]:
+                data_map[item]["reads"].append(title)
+        for item in sorted(_capability_set(capability, "writes")):
+            if title not in data_map[item]["writes"]:
+                data_map[item]["writes"].append(title)
+    lines.extend(
+        [
+            "## 数据与能力映射",
+            "",
+            "该映射用于需求影响分析：修改字段、表或外部数据对象时，可以先定位受影响能力。",
+            "",
+            "| 数据对象 | 读取能力 | 写入能力 |",
+            "|---|---|---|",
+        ]
+    )
+    ranked_data = sorted(
+        data_map.items(),
+        key=lambda item: (
+            -len(item[1]["reads"]) - len(item[1]["writes"]),
+            item[0],
+        ),
+    )
+    for data, usage in ranked_data[:80]:
+        lines.append(
+            f"| `{_cell(data)}` | {_cell('、'.join(usage['reads']) or '-')} | "
+            f"{_cell('、'.join(usage['writes']) or '-')} |"
         )
     constraints = _kind_rows(document, "PermissionRow", "StateRow", "ErrorRow")
     if constraints:
@@ -2306,7 +2596,7 @@ def _v2_architecture(
 def _v2_detailed_design(
     document: MarkdownDocument, evidence: dict[str, EvidenceLocation]
 ) -> list[str]:
-    capabilities = _human_capabilities(document, evidence, limit=24)
+    capabilities = _human_capabilities(document, evidence, limit=32)
     lines = [
         "## 设计总览",
         "",
@@ -2327,27 +2617,139 @@ def _v2_detailed_design(
     lines.extend(["", "## 模块详细设计", ""])
     for index, capability in enumerate(capabilities, 1):
         source = capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
-        reads = capability["reads"] if isinstance(capability["reads"], set) else set()
-        writes = capability["writes"] if isinstance(capability["writes"], set) else set()
-        actions = capability["actions"] if isinstance(capability["actions"], set) else set()
-        interfaces = capability["interfaces"] if isinstance(capability["interfaces"], set) else set()
-        symbols = capability["symbols"] if isinstance(capability["symbols"], list) else []
+        reads = _capability_set(capability, "reads")
+        writes = _capability_set(capability, "writes")
+        actions = _capability_set(capability, "actions")
+        interfaces = _capability_set(capability, "interfaces")
+        calls = _capability_set(capability, "calls")
+        configs = _capability_set(capability, "configs")
+        hosts = _capability_set(capability, "hosts")
+        symbols = _capability_list(capability, "symbols")
+        behaviors = _capability_confirmed_behaviors(capability)
+        fact_lines = _capability_fact_lines(capability, limit=20)
         lines.extend(
             [
                 f"### {index}. {_cell(str(capability['title']))}",
                 "",
+                f"- **设计职责（现状）**：{_cell(_capability_purpose(capability))}",
                 f"- **所属单元**：{_cell(_unit_label(str(capability['unit'])))}",
                 f"- **调用方/使用者**：{_cell(_capability_actor(capability))}",
                 f"- **触发入口**：{_cell(_capability_trigger(capability))}",
+                f"- **运行宿主**：{_cell(', '.join(sorted(hosts)) or '未在当前文件直接声明')}",
                 f"- **读取数据**：{_cell(', '.join(sorted(reads)) or '未提取到显式表级读取')}",
                 f"- **写入数据**：{_cell(', '.join(sorted(writes)) or '未提取到显式表级写入')}",
                 f"- **界面操作**：{_cell(', '.join(sorted(actions)[:10]) or '无明确界面事件')}",
                 f"- **接口入口**：{_cell(', '.join(sorted(interfaces)[:10]) or '无明确外部接口')}",
-                f"- **关键实现**：{_cell(', '.join(symbols[:10]) or _file_stem(source.path if source else ''))}",
+                f"- **内部调用/使用**：{_cell(', '.join(sorted(calls)[:16]) or '未提取到显式调用关系')}",
+                f"- **直接配置**：{_cell(', '.join(sorted(configs)[:16]) or '未提取到直接配置事实')}",
+                f"- **关键实现符号**：{_cell(', '.join(symbols[:20]) or _file_stem(source.path if source else ''))}",
                 f"- **源码证据**：{_source(source)}",
-                "- **未确认事项**：业务目标、完整异常分支和跨模块调用顺序仍需需求材料、调用图或运行时证据确认。",
+                "",
+                "#### 已确认实现行为",
+                "",
+                *(f"{step}. {_cell(item)}" for step, item in enumerate(behaviors, 1)),
+                "",
+                "#### 原子实现证据",
+                "",
+                *(
+                    (f"- {item}" for item in fact_lines)
+                    if fact_lines
+                    else ("- 当前只确认到实现符号，未提取到表级读写、宿主或调用事实。",)
+                ),
+                "",
+                "#### 设计边界",
+                "",
+                *(f"- {_cell(item)}" for item in _capability_boundaries(capability)),
                 "",
             ]
+        )
+    relations: list[tuple[int, int, tuple[str, ...]]] = []
+    for producer_index, producer in enumerate(capabilities):
+        producer_writes = _capability_set(producer, "writes")
+        if not producer_writes:
+            continue
+        for consumer_index, consumer in enumerate(capabilities):
+            if producer_index == consumer_index:
+                continue
+            shared = tuple(sorted(producer_writes & _capability_set(consumer, "reads")))
+            if shared:
+                relations.append((producer_index, consumer_index, shared))
+    lines.extend(
+        [
+            "## 跨能力数据协作",
+            "",
+            "下列关系只表示一个能力写入的数据对象被另一个能力显式读取；它证明潜在协作边界，不声明运行时先后、同步方式或事务一致性。",
+            "",
+        ]
+    )
+    if relations:
+        related_indexes = sorted(
+            {index for producer, consumer, _ in relations for index in (producer, consumer)}
+        )
+        identifiers = {index: f"C{index + 1:02d}" for index in related_indexes}
+        lines.extend(["```mermaid", "flowchart LR"])
+        for index in related_indexes:
+            lines.append(
+                f'    {identifiers[index]}["{_cell(str(capabilities[index]["title"]))}"]'
+            )
+        for producer, consumer, shared in relations[:40]:
+            lines.append(
+                f'    {identifiers[producer]} -->|"{_cell(", ".join(shared[:3]))}"| '
+                f"{identifiers[consumer]}"
+            )
+        lines.extend(
+            [
+                "```",
+                "",
+                "| 生产/更新能力 | 共享数据对象 | 读取/消费能力 |",
+                "|---|---|---|",
+            ]
+        )
+        for producer, consumer, shared in relations[:80]:
+            lines.append(
+                f"| {_cell(str(capabilities[producer]['title']))} | "
+                f"`{_cell(', '.join(shared))}` | {_cell(str(capabilities[consumer]['title']))} |"
+            )
+    else:
+        lines.extend(["当前没有提取到跨能力的显式表级写入→读取关系。", ""])
+    impact: dict[str, dict[str, list[str]]] = defaultdict(
+        lambda: {"reads": [], "writes": []}
+    )
+    for capability in capabilities:
+        title = str(capability["title"])
+        for data in sorted(_capability_set(capability, "reads")):
+            if title not in impact[data]["reads"]:
+                impact[data]["reads"].append(title)
+        for data in sorted(_capability_set(capability, "writes")):
+            if title not in impact[data]["writes"]:
+                impact[data]["writes"].append(title)
+    lines.extend(
+        [
+            "",
+            "## 数据对象影响矩阵",
+            "",
+            "| 数据对象 | 读取方 | 写入方 | 变更关注点 |",
+            "|---|---|---|---|",
+        ]
+    )
+    ranked_impact = sorted(
+        impact.items(),
+        key=lambda item: (
+            -len(item[1]["reads"]) - len(item[1]["writes"]),
+            item[0],
+        ),
+    )
+    for data, usage in ranked_impact[:100]:
+        concern = (
+            "同时存在读写方，修改结构或语义时需联动回归"
+            if usage["reads"] and usage["writes"]
+            else "仅识别写入方，消费链路尚未完整提取"
+            if usage["writes"]
+            else "仅识别读取方，数据生产来源尚未完整提取"
+        )
+        lines.append(
+            f"| `{_cell(data)}` | {_cell('、'.join(usage['reads']) or '-')} | "
+            f"{_cell('、'.join(usage['writes']) or '-')} | {_cell(concern)} |"
         )
     issues = tuple(
         row
@@ -2365,7 +2767,7 @@ def _v2_detailed_design(
                 "|---|---|---|---:|---:|---|",
             ]
         )
-        for row in issues:
+        for row in issues[:30]:
             values = _values(row)
             status = (
                 "轻微 UTF-8 损坏，受控恢复"
@@ -2377,6 +2779,10 @@ def _v2_detailed_design(
                 f"{_cell(str(values.get('selected_encoding') or '-'))} | "
                 f"{int(values.get('replacement_count') or 0)} | "
                 f"{int(values.get('dropped_fact_count') or 0)} | {_source(_location(row, evidence))} |"
+            )
+        if len(issues) > 30:
+            lines.append(
+                f"| … | 其余 {len(issues) - 30} 个文件保留在 Capsule Agent 视图中 | - | - | - | - |"
             )
         lines.append("")
     return lines
@@ -2446,6 +2852,43 @@ def _v2_user_guide(
                     f"`{_cell(str(entry))}` | {_source(_location(row, evidence))} |"
                 )
             lines.extend(["", "</details>", ""])
+    operation_capabilities = tuple(
+        capability
+        for capability in _human_capabilities(document, evidence, limit=32)
+        if _capability_set(capability, "actions")
+        or _capability_set(capability, "interfaces")
+    )
+    lines.extend(
+        [
+            "## 典型操作路径",
+            "",
+            "以下步骤是由页面/命令入口、事件处理器和显式数据副作用组合出的操作线索；没有运行时证据时，不补写按钮文案、页面跳转或成功提示。",
+            "",
+        ]
+    )
+    if operation_capabilities:
+        for index, capability in enumerate(operation_capabilities[:24], 1):
+            source = (
+                capability["source"]
+                if isinstance(capability["source"], EvidenceLocation)
+                else None
+            )
+            actions = sorted(_capability_set(capability, "actions"))
+            interfaces = sorted(_capability_set(capability, "interfaces"))
+            writes = sorted(_capability_set(capability, "writes"))
+            lines.extend(
+                [
+                    f"### U-{index:02d} {_cell(str(capability['title']))}",
+                    "",
+                    f"1. 进入或调用：{_cell(', '.join(interfaces[:8]) or (source.path if source else '已识别入口'))}。",
+                    f"2. 触发操作：{_cell(', '.join(actions[:12]) or _capability_trigger(capability))}。",
+                    f"3. 已确认结果：{_cell('写入或更新 ' + ', '.join(writes[:12]) if writes else '进入已识别的处理函数；最终业务结果需运行时验证')}。",
+                    f"4. 源码证据：{_source(source)}。",
+                    "",
+                ]
+            )
+    else:
+        lines.extend(["当前没有足够的页面、命令或接口证据形成操作路径。", ""])
     lines.extend(
         [
             "",
@@ -2463,7 +2906,7 @@ def _v2_acceptance(
     document: MarkdownDocument, evidence: dict[str, EvidenceLocation]
 ) -> list[str]:
     explicit = _kind_rows(document, "AcceptanceRow")
-    capabilities = _human_capabilities(document, evidence, limit=18)
+    capabilities = _human_capabilities(document, evidence, limit=28)
     lines = ["## 正式验收材料", ""]
     if explicit:
         lines.extend(
@@ -2483,7 +2926,6 @@ def _v2_acceptance(
     )
     scenario_index = 0
     for capability in capabilities:
-        reads = capability["reads"] if isinstance(capability["reads"], set) else set()
         writes = capability["writes"] if isinstance(capability["writes"], set) else set()
         interfaces = capability["interfaces"] if isinstance(capability["interfaces"], set) else set()
         actions = capability["actions"] if isinstance(capability["actions"], set) else set()
@@ -2491,13 +2933,21 @@ def _v2_acceptance(
             continue
         scenario_index += 1
         source = capability["source"] if isinstance(capability["source"], EvidenceLocation) else None
+        preconditions = _capability_preconditions(capability)
+        behaviors = _capability_confirmed_behaviors(capability)
+        actions_or_interfaces = [
+            *sorted(_capability_set(capability, "actions")),
+            *sorted(_capability_set(capability, "interfaces")),
+        ]
         lines.extend(
             [
                 f"### AC-{scenario_index:02d} {_cell(str(capability['title']))}",
                 "",
-                f"- **Given**：{_cell('、'.join(sorted(reads)[:6]) + ' 可访问' if reads else '相关实现依赖和运行环境可用')}。",
+                f"- **Given**：{_cell('；'.join(preconditions))}。",
                 f"- **When**：通过 {_cell(_capability_trigger(capability))} 触发。",
-                f"- **Then**：{_cell('更新 ' + '、'.join(sorted(writes)[:6]) if writes else '进入已识别接口或界面处理路径')}。",
+                f"- **Then**：{_cell('；'.join(behaviors))}。",
+                f"- **And**：{_cell('可从 ' + '、'.join(actions_or_interfaces[:10]) + ' 观察入口行为' if actions_or_interfaces else '核对写入对象 ' + '、'.join(sorted(writes)[:10]) if writes else '需要运行时补充可观察结果')}。",
+                "- **当前状态**：验收候选，尚未因源码存在而视为测试通过。",
                 f"- **证据**：{_source(source)}",
                 "",
             ]
@@ -2511,7 +2961,26 @@ def _v2_acceptance(
             & {part.lower() for part in PurePosixPath(location.path).parts}
         )
     )
-    lines.extend(["## 已存在测试证据", ""])
+    lines.extend(
+        [
+            "## 验收覆盖矩阵",
+            "",
+            "| 能力 | 候选场景 | 可观察入口 | 数据副作用 | 自动化证据绑定 |",
+            "|---|---|---|---|---|",
+        ]
+    )
+    for capability in capabilities:
+        writes = sorted(_capability_set(capability, "writes"))
+        entry = [
+            *sorted(_capability_set(capability, "actions")),
+            *sorted(_capability_set(capability, "interfaces")),
+        ]
+        lines.append(
+            f"| {_cell(str(capability['title']))} | 已生成 | "
+            f"{_cell(', '.join(entry[:8]) or '内部调用，需补运行时入口')} | "
+            f"{_cell(', '.join(writes[:10]) or '未提取到显式写入')} | 未建立直接绑定 |"
+        )
+    lines.extend(["", "## 已存在测试证据", ""])
     if tests:
         for row in tests[:30]:
             values = _values(row)

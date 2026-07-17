@@ -73,6 +73,69 @@ _DATA_CALL: Final = re.compile(
 _WEB_SERVICE_BASE: Final = re.compile(
     r"\bclass\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*[A-Za-z_][\w.]*WebService\b"
 )
+_SQL_READ_TABLE: Final = re.compile(
+    r"\b(?:FROM|JOIN)\s+(?P<table>[A-Za-z_][A-Za-z0-9_$#.]{1,127})", re.I
+)
+_SQL_WRITE_TABLE: Final = re.compile(
+    r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO)\s+"
+    r"(?P<table>[A-Za-z_][A-Za-z0-9_$#.]{1,127})",
+    re.I,
+)
+_RUN_MESSAGE: Final = re.compile(
+    r'\b(?:this\.)?(?:RunMsg|StatusMessage|StatusText)\s*=\s*"(?P<message>(?:\\.|[^"])*)"',
+    re.I,
+)
+_TRANSACTION_CALL: Final = re.compile(
+    r"\b[A-Za-z_][\w.]*\.(?P<method>BeginTransaction|CommitTransaction|"
+    r"RollBackTransaction|RollbackTransaction|Commit|RollBack|Rollback)\s*\(",
+    re.I,
+)
+_CATCH: Final = re.compile(
+    r"\bcatch\s*(?:\(\s*(?P<type>[A-Za-z_][\w.]*)?(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\))?"
+)
+_THREAD_START: Final = re.compile(
+    r"\bThreadStart\s*\(\s*(?P<method>[A-Za-z_][A-Za-z0-9_]*)\s*\)", re.I
+)
+_RUN_TIME_SPAN: Final = re.compile(
+    r"\b(?:this\.)?RunTimeSpan\s*=\s*(?P<value>\d+)", re.I
+)
+
+
+def _string_literals(source: str) -> tuple[tuple[str, int], ...]:
+    literals: list[tuple[str, int]] = []
+    index = 0
+    while index < len(source):
+        verbatim = source[index] == "@" and index + 1 < len(source) and source[index + 1] == '"'
+        if not verbatim and source[index] != '"':
+            index += 1
+            continue
+        start = index
+        index += 2 if verbatim else 1
+        value: list[str] = []
+        while index < len(source):
+            character = source[index]
+            if verbatim:
+                if character == '"':
+                    if index + 1 < len(source) and source[index + 1] == '"':
+                        value.append('"')
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                value.append(character)
+                index += 1
+                continue
+            if character == "\\" and index + 1 < len(source):
+                value.append(source[index + 1])
+                index += 2
+                continue
+            if character == '"':
+                index += 1
+                break
+            value.append(character)
+            index += 1
+        literals.append(("".join(value), start))
+    return tuple(literals)
 
 
 def _parameters(raw: str) -> tuple[ParameterRecord, ...]:
@@ -156,6 +219,86 @@ def _implementation_facts(
                 predicate,
                 match.group("table").upper(),
                 f"{match.group('receiver')}.{match.group('method')}",
+                source_ref(alias, path, source, match.start()),
+            )
+        )
+    for literal, offset in _string_literals(source):
+        for match in _SQL_READ_TABLE.finditer(literal):
+            records.append(
+                ImplementationFactRecord(
+                    subject,
+                    "reads",
+                    match.group("table").upper(),
+                    "SQL text",
+                    source_ref(alias, path, source, offset + match.start()),
+                )
+            )
+        for match in _SQL_WRITE_TABLE.finditer(literal):
+            records.append(
+                ImplementationFactRecord(
+                    subject,
+                    "writes",
+                    match.group("table").upper(),
+                    "SQL text",
+                    source_ref(alias, path, source, offset + match.start()),
+                )
+            )
+    for match in _RUN_MESSAGE.finditer(source):
+        message = match.group("message").strip()
+        if message:
+            records.append(
+                ImplementationFactRecord(
+                    subject,
+                    "reports",
+                    message,
+                    "runtime status message",
+                    source_ref(alias, path, source, match.start()),
+                )
+            )
+    transaction_labels = {
+        "begintransaction": "transaction:begin",
+        "commit": "transaction:commit",
+        "committransaction": "transaction:commit",
+        "rollback": "transaction:rollback",
+        "rollbacktransaction": "transaction:rollback",
+    }
+    for match in _TRANSACTION_CALL.finditer(source):
+        records.append(
+            ImplementationFactRecord(
+                subject,
+                "controls",
+                transaction_labels[match.group("method").lower()],
+                match.group("method"),
+                source_ref(alias, path, source, match.start()),
+            )
+        )
+    for match in _CATCH.finditer(source):
+        records.append(
+            ImplementationFactRecord(
+                subject,
+                "controls",
+                f"exception-handler:{match.group('type') or 'any'}",
+                "catch",
+                source_ref(alias, path, source, match.start()),
+            )
+        )
+    for match in _THREAD_START.finditer(source):
+        records.append(
+            ImplementationFactRecord(
+                subject,
+                "calls",
+                match.group("method"),
+                "background thread entry",
+                source_ref(alias, path, source, match.start()),
+            )
+        )
+    for match in _RUN_TIME_SPAN.finditer(source):
+        records.append(
+            ImplementationFactRecord(
+                subject,
+                "configures",
+                f"RunTimeSpan={match.group('value')}",
+                "runtime limit",
                 source_ref(alias, path, source, match.start()),
             )
         )

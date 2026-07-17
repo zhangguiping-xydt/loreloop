@@ -215,6 +215,43 @@ public class ObjectHelperProxy {
     assert not [item for item in report.implementation_facts if item.predicate == "hosts"]
 
 
+def test_csharp_detector_extracts_legacy_workflow_and_embedded_sql_facts() -> None:
+    source = r'''
+public class Synchronization_Dept {
+    public void StartRun() {
+        this.RunTimeSpan = 240;
+        var thread = new Thread(new ThreadStart(SynchronizationDepartment));
+        thread.Start();
+    }
+    public void SynchronizationDepartment() {
+        this.RunMsg = "一级部门信息处理...";
+        db.BeginTransaction();
+        string sql = @"select * from has_onelevel_dic a
+                       join ac_department d on a.ORGNO = d.DEPT_NO";
+        db.ExectueTable(sql);
+        db.Insert("AC_ATM_DATA_STATE");
+        db.CommitTransaction();
+        try { DoWork(); } catch (InvalidOperationException exc) { Log(exc); }
+    }
+}
+'''
+
+    report = detect_extended_source(
+        source, ".", "Center/Business/Business/Synchronization_Dept.cs"
+    )
+    facts = {(item.predicate, item.object, item.detail) for item in report.implementation_facts}
+
+    assert ("reads", "HAS_ONELEVEL_DIC", "SQL text") in facts
+    assert ("reads", "AC_DEPARTMENT", "SQL text") in facts
+    assert ("writes", "AC_ATM_DATA_STATE", "db.Insert") in facts
+    assert ("reports", "一级部门信息处理...", "runtime status message") in facts
+    assert ("controls", "transaction:begin", "BeginTransaction") in facts
+    assert ("controls", "transaction:commit", "CommitTransaction") in facts
+    assert ("controls", "exception-handler:InvalidOperationException", "catch") in facts
+    assert ("calls", "SynchronizationDepartment", "background thread entry") in facts
+    assert ("configures", "RunTimeSpan=240", "runtime limit") in facts
+
+
 def test_platform_detector_extracts_docker_compose_and_kubernetes_facts() -> None:
     dockerfile = """
 FROM python:3.13-slim AS runtime
