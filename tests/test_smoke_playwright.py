@@ -15,7 +15,7 @@ import threading
 from functools import partial
 from http.server import BaseHTTPRequestHandler, HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 import zipfile
 
 import pytest
@@ -29,7 +29,15 @@ from loreloop.evidence.artifacts import ArtifactStore  # noqa: E402
 from loreloop.evidence.chain import EvidenceChain  # noqa: E402
 from loreloop.webexplore.actions import execute_action_script, parse_action_script  # noqa: E402
 from loreloop.webexplore.browser import PlaywrightBrowser  # noqa: E402
+from loreloop.webexplore.coverage import build_web_coverage  # noqa: E402
+from loreloop.webexplore.explorer import Explorer  # noqa: E402
 from loreloop.webexplore.recorder import record_scenario  # noqa: E402
+from loreloop.webexplore.scenarios import (  # noqa: E402
+    ScenarioAssertion,
+    WebScenario,
+    trial_candidate,
+    write_candidate,
+)
 from loreloop.webexplore.verify import verify_expectation, verify_script_expectation  # noqa: E402
 
 PAGE = """<!doctype html>
@@ -172,6 +180,80 @@ def write_site():
     thread.join(timeout=2)
 
 
+@pytest.fixture()
+def sso_site():
+    endpoints: dict[str, str] = {}
+
+    class AppHandler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            if self.path.startswith("/callback"):
+                self.send_response(302)
+                self.send_header("Set-Cookie", "loreloop_sso=ready; Path=/; HttpOnly")
+                self.send_header("Location", "/app#/manage/hpf-ratio-config")
+                self.end_headers()
+                return
+            if self.path.startswith("/app") and "loreloop_sso=ready" in self.headers.get(
+                "Cookie", ""
+            ):
+                page = b"""<!doctype html><html><head><title>Ratio config</title></head>
+                <body><h1>Ratio config</h1><p>Total 27 rows</p><button>Search</button></body>
+                </html>"""
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(page)))
+                self.end_headers()
+                self.wfile.write(page)
+                return
+            callback = f"{endpoints['app']}/callback"
+            location = f"{endpoints['auth']}/login?{urlencode({'return': callback})}"
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    class AuthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            return_url = parse_qs(urlsplit(self.path).query).get("return", [""])[0]
+            page = f"""<!doctype html><html><head><title>SSO Login</title></head>
+            <body><form method="post" action="/login?{urlencode({'return': return_url})}">
+            <label>Password <input type="password" name="password"></label>
+            <button type="submit">Sign in</button></form></body></html>""".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+
+        def do_POST(self):  # noqa: N802
+            return_url = parse_qs(urlsplit(self.path).query).get("return", [""])[0]
+            self.send_response(302)
+            self.send_header("Location", return_url)
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    app = HTTPServer(("127.0.0.1", 0), AppHandler)
+    auth = HTTPServer(("127.0.0.1", 0), AuthHandler)
+    endpoints.update(
+        app=f"http://127.0.0.1:{app.server_address[1]}",
+        auth=f"http://127.0.0.1:{auth.server_address[1]}",
+    )
+    threads = [
+        threading.Thread(target=server.serve_forever, daemon=True) for server in (app, auth)
+    ]
+    for thread in threads:
+        thread.start()
+    yield f"{endpoints['app']}/app#/manage/hpf-ratio-config"
+    for server in (app, auth):
+        server.shutdown()
+        server.server_close()
+    for thread in threads:
+        thread.join(timeout=2)
+
+
 def test_observe_captures_title_text_forms_links(site, browser):
     obs = browser.observe(site)
     assert obs.title == "Upload Console"
@@ -181,6 +263,80 @@ def test_observe_captures_title_text_forms_links(site, browser):
     assert "Upload" in obs.headings
     assert "Filter" in obs.buttons
     assert obs.snapshot_hash == browser.observe(site).snapshot_hash
+
+
+def test_cross_origin_sso_handover_returns_to_preserved_spa_route(sso_site, tmp_path):
+    class AutomaticLoginBrowser(PlaywrightBrowser):
+        def wait_for_user(self, message: str) -> None:
+            previous = self._allow_writes
+            self._allow_writes = True
+            try:
+                self.page.locator('input[type="password"]').fill("fixture-only")
+                self.page.get_by_role("button", name="Sign in").click()
+                self.page.wait_for_url(sso_site, timeout=10_000)
+                self._settle()
+            finally:
+                self._allow_writes = previous
+            self._handover_origin = None
+
+    browser = AutomaticLoginBrowser(
+        headed=False,
+        allow_login_handover=True,
+    )
+    try:
+        result = Explorer(
+            browser,
+            tmp_path,
+            max_pages=1,
+            discover_seeds=False,
+        ).explore(sso_site)
+    finally:
+        browser.close()
+
+    assert [page.url for page in result.pages] == [sso_site]
+    assert [page.title for page in result.pages] == ["Ratio config"]
+    assert result.login_walls and result.login_walls[0].startswith("http://127.0.0.1:")
+    assert result.login_resumed == [sso_site]
+
+
+def test_action_script_replays_through_cross_origin_sso_handover(sso_site):
+    class AutomaticLoginBrowser(PlaywrightBrowser):
+        def wait_for_user(self, message: str) -> None:
+            previous = self._allow_writes
+            self._allow_writes = True
+            try:
+                self.page.locator('input[type="password"]').fill("fixture-only")
+                self.page.get_by_role("button", name="Sign in").click()
+                self.page.wait_for_url(sso_site, timeout=10_000)
+                self._settle()
+            finally:
+                self._allow_writes = previous
+            self._handover_origin = None
+            self._blocked_requests.clear()
+
+    parsed = urlsplit(sso_site)
+    browser = AutomaticLoginBrowser(
+        headed=False,
+        allow_login_handover=True,
+    )
+    try:
+        execution = execute_action_script(
+            browser,
+            parse_action_script(
+                {
+                    "version": 1,
+                    "base": f"{parsed.scheme}://{parsed.netloc}",
+                    "steps": [{"goto": f"{parsed.path}#{parsed.fragment}"}],
+                }
+            ),
+        )
+    finally:
+        browser.close()
+
+    assert execution.succeeded
+    assert execution.final_observation is not None
+    assert execution.final_observation.url == sso_site
+    assert execution.final_observation.title == "Ratio config"
 
 
 def test_observe_rejects_http_error_pages(site, browser):
@@ -257,7 +413,13 @@ def test_script_verify_against_real_page(site, browser, tmp_path):
     assert result.passed
     rec = chain.verify()[0]
     assert rec.payload["script_digest"] == script.digest
-    assert artifacts.load(rec.payload["trace_artifact"])["status"] == "completed"
+    trace = artifacts.load(rec.payload["trace_artifact"])
+    assert trace["status"] == "completed"
+    assert len(trace["states"]) == 3
+    assert all(
+        artifacts.load(state["artifact"])["type"] == "page_observation"
+        for state in trace["states"]
+    )
 
 
 def test_real_recorder_captures_safe_controls_but_not_passwords(site, browser, tmp_path):
@@ -281,6 +443,42 @@ def test_real_recorder_captures_safe_controls_but_not_passwords(site, browser, t
     assert "one item" in payload
     assert "must-not-record" not in payload
     assert any(step.op == "fill" for step in scenario.script.steps)
+
+
+def test_real_candidate_trial_captures_provisional_states(site, browser, tmp_path):
+    parsed = urlsplit(site)
+    scenario = WebScenario(
+        "upload-trial",
+        "Upload page trial",
+        parse_action_script(
+            {
+                "version": 1,
+                "base": f"{parsed.scheme}://{parsed.netloc}",
+                "steps": [{"goto": parsed.path}],
+            }
+        ),
+        (ScenarioAssertion("title-contains", "Upload Console"),),
+    )
+    candidate = write_candidate(tmp_path, scenario)
+    chain = EvidenceChain.for_workdir(tmp_path)
+    artifacts = ArtifactStore.for_workdir(tmp_path)
+
+    result = trial_candidate(
+        tmp_path,
+        scenario.scenario_id,
+        browser,
+        chain,
+        artifacts,
+        run_id="run-trial",
+    )
+    coverage = build_web_coverage(tmp_path, chain.verify(), artifacts)
+
+    assert result.passed
+    assert candidate.exists()
+    assert len(result.execution.states) == 1
+    assert result.record.payload["authoritative"] is False
+    assert coverage.summary["pages_trialed"] == 1
+    assert coverage.journeys[0].status == "trial-passed"
 
 
 def test_real_browser_blocks_javascript_post_without_allow_writes(write_site, browser):
@@ -381,6 +579,23 @@ def test_real_web_cli_loop_updates_and_searches_baseline(site, tmp_path):
 
     scenario_run = _cli(repo, environment, "web", "test", "run", scenario_id)
     assert f"PASS: {scenario_id}" in scenario_run.stdout
+    coverage_output = tmp_path / "web-coverage.md"
+    coverage = _cli(
+        repo,
+        environment,
+        "web",
+        "test",
+        "coverage",
+        "--format",
+        "markdown",
+        "--output",
+        str(coverage_output),
+    )
+    assert f"exported Web coverage: {coverage_output}" in coverage.stdout
+    coverage_text = coverage_output.read_text(encoding="utf-8")
+    assert "Pages tested: 1 / 1" in coverage_text
+    assert "Page states observed: 1" in coverage_text
+    assert f"- [x] Page remains available: Upload Console (`{scenario_id}`)" in coverage_text
     playwright_output = tmp_path / "playwright-export"
     scenario_export = _cli(
         repo,

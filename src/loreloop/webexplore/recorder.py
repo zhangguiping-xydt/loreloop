@@ -97,6 +97,8 @@ def record_scenario(
     initial = parsed.path or "/"
     if parsed.query:
         initial += f"?{parsed.query}"
+    if parsed.fragment:
+        initial += f"#{parsed.fragment}"
     steps: list[dict] = [{"goto": initial}]
     for step in events:
         if not steps or steps[-1] != step:

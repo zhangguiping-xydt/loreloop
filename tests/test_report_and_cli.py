@@ -2637,3 +2637,60 @@ def test_cli_ingest_web_requires_playwright(workdir):
     except ImportError:
         pass
     assert main(["ingest", "--from", "web", "http://localhost:3000"]) == 2
+
+
+def test_cli_ingest_web_fails_when_exploration_captures_no_pages(
+    workdir, monkeypatch, capsys
+):
+    class EmptyBrowser:
+        def __init__(self, headed=False):
+            pass
+
+        def observe(self, url):
+            raise ConnectionError("unreachable")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("loreloop.webexplore.browser.PlaywrightBrowser", EmptyBrowser)
+
+    assert (
+        main(
+            [
+                "ingest",
+                "--from",
+                "web",
+                "https://app.local/#/missing",
+                "--max-pages",
+                "1",
+            ]
+        )
+        == 2
+    )
+    err = capsys.readouterr().err
+    assert "error: web exploration captured no pages" in err
+    assert "re-run with --headed for login handover" in err
+
+
+def test_cli_web_coverage_reports_and_exports_checklist(workdir, capsys):
+    assert main(["web", "test", "coverage"]) == 0
+    assert "pages: 0/0 tested" in capsys.readouterr().out
+
+    output = workdir / "web-coverage.md"
+    assert (
+        main(
+            [
+                "web",
+                "test",
+                "coverage",
+                "--format",
+                "markdown",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    assert "# Web Coverage Checklist" in output.read_text(encoding="utf-8")
+    assert main(["web", "test", "coverage", "--output", str(output)]) == 2
+    assert "already exists" in capsys.readouterr().err

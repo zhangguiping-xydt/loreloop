@@ -292,6 +292,7 @@ git commit -m "add governed web test"
 
 # Replay the exact chain-approved file locally or in CI.
 loreloop web test run --all
+loreloop web test coverage --format markdown --output web-coverage.md
 loreloop web test export --format playwright --output tests/playwright/generated
 
 # Govern extracted Web knowledge separately.
@@ -309,12 +310,34 @@ loreloop knowledge replay baseline
 Files under `.loreloop/web-tests/candidates/` are private, untrusted review
 material. Approval publishes the exact scenario to `tests/loreloop/web/` and
 binds its digest to the evidence chain; only that matching file can run.
-Generated Playwright specs are derivative output, not the authority. Scenarios
-are read-only by default. Recording or replaying a write-risk journey requires
+Generated Playwright specs and coverage reports are derivative output, not the
+authority. Scenarios are read-only by default. Recording or replaying a write-risk journey requires
 an explicit `--allow-writes`, and password/token/secret/API-key fields are not
-recorded. Each replay stores its trace, observation, assertions, and result on
-the chain. With `--include-web`, the latest governed result also appears as an
-acceptance fact in the package.
+recorded. Each replay stores an evidence-backed page state after every successful
+step, plus its trace, final observation, assertions, and result on the chain.
+`web test coverage` separates observed-only controls, exercised controls, and
+write-gated controls; it never treats a visible button as tested. With
+`--include-web`, the latest governed result also appears as an acceptance fact
+in the package.
+
+For normal bug fixes and feature work, users stay in Codex, Claude Code,
+OpenCode, or co-mind and describe the task in natural language. The companion
+workflow runs `begin`, selects impacted tests from the task-start snapshot,
+executes provisional self-tests, trials safe Web candidates, and folds the
+results and coverage gaps into `report`. The commands remain available for
+inspection and CI, but ordinary users do not need to orchestrate them:
+
+```bash
+loreloop test select <run-id> --format markdown --output task-test-plan.md
+loreloop test run <run-id>
+loreloop task summarize <run-id> \
+  --analysis "root cause or requirement interpretation" \
+  --implementation "implemented changes"
+loreloop complete <run-id> --confirm
+loreloop test prove <run-id>
+loreloop report <run-id>
+```
+
 In a non-Git aggregate workspace with more than one declared repository, use
 `loreloop web test approve <scenario-id> --repo <repo-name>`; the approved JSON
 is written into that repository so its committed snapshot remains authoritative.

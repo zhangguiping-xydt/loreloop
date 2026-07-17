@@ -22,6 +22,7 @@ from .browser import Observation, same_origin
 WEB_EXPLORATION_EVENT = "web_exploration_captured"
 WEB_TEST_APPROVED_EVENT = "web_test_approved"
 WEB_TEST_EXECUTED_EVENT = "web_test_executed"
+WEB_TEST_TRIALED_EVENT = "web_test_trialed"
 MAX_SCENARIO_BYTES = 1024 * 1024
 MAX_SCENARIOS = 10_000
 _ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,95}$")
@@ -87,6 +88,15 @@ class WebScenario:
 
 @dataclass(frozen=True, slots=True)
 class ScenarioRunResult:
+    scenario: WebScenario
+    passed: bool
+    execution: ActionExecution
+    assertions: tuple[dict[str, Any], ...]
+    record: EvidenceRecord
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioTrialResult:
     scenario: WebScenario
     passed: bool
     execution: ActionExecution
@@ -335,12 +345,22 @@ def run_scenario(
             "script": scenario.script.to_json(),
         }
     )[0]
-    trace_artifact = artifacts.save_json(execution.trace_artifact_payload())[0]
+    state_artifacts = tuple(
+        artifacts.save_observation(state.observation)[0] for state in execution.states
+    )
+    trace_artifact = artifacts.save_json(
+        execution.trace_artifact_payload(state_artifacts)
+    )[0]
     results: list[dict[str, Any]] = []
     observation_artifact = None
     if execution.succeeded and execution.final_observation is not None:
         observation = execution.final_observation
-        observation_artifact = artifacts.save_observation(observation)[0]
+        observation_artifact = (
+            state_artifacts[-1]
+            if execution.states
+            and execution.states[-1].observation.snapshot_hash == observation.snapshot_hash
+            else artifacts.save_observation(observation)[0]
+        )
         results = [
             _evaluate_assertion(assertion, observation, scenario.script.base)
             for assertion in scenario.assertions
@@ -358,9 +378,73 @@ def run_scenario(
             "status": "passed" if passed else execution.status if not execution.succeeded else "failed",
             "assertions": results,
             "allow_writes": allow_writes,
+            "states": [
+                state.to_json(state_artifacts[index])
+                for index, state in enumerate(execution.states)
+            ],
         },
     )
     return ScenarioRunResult(scenario, passed, execution, tuple(results), record)
+
+
+def trial_candidate(
+    workdir: Path,
+    prefix: str,
+    browser,
+    chain: EvidenceChain,
+    artifacts: ArtifactStore,
+    *,
+    run_id: str,
+) -> ScenarioTrialResult:
+    """Strictly read-only candidate replay that never grants test authority."""
+    _, scenario = _resolve(prefix, list_candidate_scenarios(workdir), "candidate")
+    if scenario.risk != "read-only":
+        raise WebScenarioError("write-risk candidate cannot run in trial mode")
+    execution = execute_action_script(browser, scenario.script, allow_writes=False)
+    state_artifacts = tuple(
+        artifacts.save_observation(state.observation)[0] for state in execution.states
+    )
+    trace_artifact = artifacts.save_json(
+        execution.trace_artifact_payload(state_artifacts)
+    )[0]
+    results: list[dict[str, Any]] = []
+    observation_artifact = None
+    if execution.succeeded and execution.final_observation is not None:
+        observation = execution.final_observation
+        observation_artifact = (
+            state_artifacts[-1]
+            if execution.states
+            and execution.states[-1].observation.snapshot_hash == observation.snapshot_hash
+            else artifacts.save_observation(observation)[0]
+        )
+        results = [
+            _evaluate_assertion(assertion, observation, scenario.script.base)
+            for assertion in scenario.assertions
+        ]
+    passed = execution.succeeded and bool(results) and all(item["passed"] for item in results)
+    record = chain.append(
+        WEB_TEST_TRIALED_EVENT,
+        {
+            "run_id": run_id,
+            "scenario_id": scenario.scenario_id,
+            "scenario_digest": scenario.digest,
+            "status": "passed"
+            if passed
+            else execution.status
+            if not execution.succeeded
+            else "failed",
+            "assertions": results,
+            "trace_artifact": trace_artifact,
+            "observation_artifact": observation_artifact,
+            "states": [
+                state.to_json(state_artifacts[index])
+                for index, state in enumerate(execution.states)
+            ],
+            "authoritative": False,
+            "risk": scenario.risk,
+        },
+    )
+    return ScenarioTrialResult(scenario, passed, execution, tuple(results), record)
 
 
 def render_playwright(scenario: WebScenario) -> str:
@@ -482,6 +566,8 @@ def _scenario_from_observation(
     target = parsed.path or "/"
     if parsed.query:
         target += f"?{parsed.query}"
+    if parsed.fragment:
+        target += f"#{parsed.fragment}"
     title = observation.get("title") if isinstance(observation.get("title"), str) else ""
     headings = observation.get("headings")
     assertions: list[ScenarioAssertion] = []

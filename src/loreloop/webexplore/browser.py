@@ -82,7 +82,13 @@ def _origin(url: str) -> tuple[str, str, int] | None:
 class PlaywrightBrowser:
     """Playwright-backed browser. Requires ``pip install loreloop[web]``."""
 
-    def __init__(self, headed: bool = False, timeout_ms: int = 15000) -> None:
+    def __init__(
+        self,
+        headed: bool = False,
+        timeout_ms: int = 15000,
+        *,
+        allow_login_handover: bool | None = None,
+    ) -> None:
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
@@ -98,6 +104,10 @@ class PlaywrightBrowser:
                 service_workers="block",
             )
             self._allowed_origin: str | None = None
+            self._login_handover_enabled = (
+                headed if allow_login_handover is None else allow_login_handover
+            )
+            self._handover_origin: str | None = None
             self._allow_writes = False
             self._blocked_requests: list[dict[str, str]] = []
             self._context.route("**/*", self._route_request)
@@ -115,6 +125,10 @@ class PlaywrightBrowser:
     def page(self):
         return self._page
 
+    @property
+    def login_handover_enabled(self) -> bool:
+        return self._login_handover_enabled
+
     def observe(self, url: str) -> Observation:
         require_http_url(url)
         self.set_network_policy(url, allow_writes=False)
@@ -123,7 +137,7 @@ class PlaywrightBrowser:
             if response is not None and response.status >= 400:
                 raise BrowserError(f"page returned HTTP {response.status}: {response.url}")
             if not same_origin(self._page.url, url):
-                raise BrowserError(f"navigation left allowed origin: {self._page.url}")
+                self._adopt_login_redirect("navigation")
             self._settle()
             return self.observe_current()
         except BrowserError:
@@ -132,7 +146,17 @@ class PlaywrightBrowser:
             raise BrowserError(f"cannot observe {url}: {exc}") from exc
 
     def observe_current(self) -> Observation:
-        if self._allowed_origin and not same_origin(self._page.url, self._allowed_origin):
+        if (
+            self._allowed_origin
+            and not same_origin(self._page.url, self._allowed_origin)
+            and not self._is_handover_origin(self._page.url)
+        ):
+            self._adopt_login_redirect("page")
+        if (
+            self._allowed_origin
+            and not same_origin(self._page.url, self._allowed_origin)
+            and not self._is_handover_origin(self._page.url)
+        ):
             raise BrowserError(f"page left allowed origin: {self._page.url}")
         title = self._page.title()
         text = self._page.inner_text("body", timeout=self._timeout_ms)[:20_000]
@@ -206,10 +230,14 @@ class PlaywrightBrowser:
         finally:
             self._allow_writes = previous
         self._settle()
+        if self._allowed_origin and same_origin(self._page.url, self._allowed_origin):
+            self._handover_origin = None
+            self._blocked_requests.clear()
 
     def set_network_policy(self, base_url: str, *, allow_writes: bool = False) -> None:
         require_http_url(base_url)
         self._allowed_origin = base_url
+        self._handover_origin = None
         self._allow_writes = allow_writes
         self._blocked_requests.clear()
 
@@ -224,7 +252,13 @@ class PlaywrightBrowser:
             route.continue_()
             return
         reason = None
-        if self._allowed_origin and not same_origin(request.url, self._allowed_origin):
+        if self._may_start_login_handover(request):
+            self._handover_origin = request.url
+        if (
+            self._allowed_origin
+            and not same_origin(request.url, self._allowed_origin)
+            and not self._is_handover_origin(request.url)
+        ):
             reason = "cross-origin"
         elif request.method.upper() not in {"GET", "HEAD", "OPTIONS"} and not self._allow_writes:
             reason = "write-method"
@@ -235,6 +269,45 @@ class PlaywrightBrowser:
             route.abort("blockedbyclient")
             return
         route.continue_()
+
+    def _may_start_login_handover(self, request) -> bool:
+        if not self._login_handover_enabled or not self._allowed_origin:
+            return False
+        if same_origin(request.url, self._allowed_origin):
+            return False
+        try:
+            return (
+                request.method.upper() in {"GET", "HEAD"}
+                and request.is_navigation_request()
+                and request.resource_type == "document"
+            )
+        except Exception:
+            return False
+
+    def _is_handover_origin(self, url: str) -> bool:
+        return bool(
+            self._login_handover_enabled
+            and self._handover_origin
+            and same_origin(url, self._handover_origin)
+        )
+
+    def _adopt_login_redirect(self, label: str) -> None:
+        if not self._login_handover_enabled:
+            raise BrowserError(f"{label} left allowed origin: {self._page.url}")
+        # Redirect requests are not consistently exposed to Playwright routing.
+        # Adopt the visible identity-provider origin, then reload once so its
+        # same-origin scripts/styles can load under the bounded handover policy.
+        self._handover_origin = self._page.url
+        self._blocked_requests.clear()
+        try:
+            response = self._page.reload(
+                timeout=self._timeout_ms, wait_until="domcontentloaded"
+            )
+        except Exception as exc:
+            raise BrowserError(f"cannot load login handover page: {exc}") from exc
+        if response is not None and response.status >= 400:
+            raise BrowserError(f"page returned HTTP {response.status}: {response.url}")
+        self._settle()
 
     def close(self) -> None:
         self._context.close()

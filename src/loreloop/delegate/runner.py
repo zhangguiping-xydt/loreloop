@@ -40,6 +40,7 @@ class RunPreparation:
     pack: ContextPack
     base_commits: dict[str, str]
     repository_roots: dict[str, str]
+    source_snapshot_artifact: str
 
     @property
     def base_commit(self) -> str | None:
@@ -54,6 +55,7 @@ class DelegationResult:
     pack: ContextPack
     base_commits: dict[str, str]
     repository_roots: dict[str, str]
+    source_snapshot_artifact: str
 
     @property
     def base_commit(self) -> str | None:
@@ -83,6 +85,12 @@ class DelegateRunner:
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
         trace_path = self._runs_dir / f"{run_id}.jsonl"
         base_commits, repository_roots = _repository_snapshot(self._workdir)
+        from ..evidence.artifacts import ArtifactStore
+        from ..workflow.snapshot import capture_task_source_snapshot
+
+        source_snapshot_artifact = ArtifactStore.for_workdir(self._workdir).save_json(
+            capture_task_source_snapshot(self._workdir)
+        )[0]
         drifted = (
             drifted_code_entry_ids(self._workdir, entries, policies=ingestion_policies)
             if base_commits
@@ -98,7 +106,10 @@ class DelegateRunner:
             related=related,
         )
         prefix = render(pack)
-        task_prompt = f"# Task\n\n{task}\n"
+        from ..workflow.model import TaskIntent
+
+        intent = TaskIntent.from_text(task)
+        task_prompt = f"# Task\n\nTask kind: {intent.kind}\n\n{task}\n"
         prompt = "\n".join(
             part.rstrip() for part in (prefix, requirement_context, task_prompt) if part
         ) + "\n"
@@ -121,6 +132,7 @@ class DelegateRunner:
             related_entries=pack.related_ids,
             mode=mode,
             requirement_materials=requirement_materials or [],
+            source_snapshot_artifact=source_snapshot_artifact,
         )
         return RunPreparation(
             run_id=run_id,
@@ -129,6 +141,7 @@ class DelegateRunner:
             pack=pack,
             base_commits=base_commits,
             repository_roots=repository_roots,
+            source_snapshot_artifact=source_snapshot_artifact,
         )
 
     def run(
@@ -168,6 +181,7 @@ class DelegateRunner:
             pack=prepared.pack,
             base_commits=prepared.base_commits,
             repository_roots=prepared.repository_roots,
+            source_snapshot_artifact=prepared.source_snapshot_artifact,
         )
 
     def finish(self, trace_path: Path, *, output_chars: int = 0, mode: str) -> None:

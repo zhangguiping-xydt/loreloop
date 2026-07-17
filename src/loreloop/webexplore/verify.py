@@ -445,7 +445,10 @@ def _save_script_artifact(artifacts: ArtifactStore | None, script: ActionScript)
 def _save_trace_artifact(artifacts: ArtifactStore | None, execution: ActionExecution) -> str | None:
     if artifacts is None:
         return None
-    return artifacts.save_json(execution.trace_artifact_payload())[0]
+    state_artifacts = tuple(
+        artifacts.save_observation(state.observation)[0] for state in execution.states
+    )
+    return artifacts.save_json(execution.trace_artifact_payload(state_artifacts))[0]
 
 
 def _load_script_from_chain(

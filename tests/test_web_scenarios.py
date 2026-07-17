@@ -17,7 +17,7 @@ from loreloop.knowledge.authoritative_detector_tests import (
 from loreloop.knowledge.authoritative_records import DetectionError
 from loreloop.knowledge.repos import save_repos
 from loreloop.knowledge.authoritative_web_test_input import build_governed_web_test_results
-from loreloop.webexplore.actions import ActionExecution, StepTrace, parse_action_script
+from loreloop.webexplore.actions import ActionExecution, PageState, StepTrace, parse_action_script
 from loreloop.webexplore.browser import Observation
 from loreloop.webexplore.recorder import _event_step
 from loreloop.webexplore.scenarios import (
@@ -30,10 +30,12 @@ from loreloop.webexplore.scenarios import (
     export_playwright,
     generate_latest_candidates,
     load_web_scenario,
+    list_approved_scenarios,
     parse_web_scenario,
     render_playwright,
     run_scenario,
     scenario_locator,
+    trial_candidate,
     write_candidate,
 )
 
@@ -106,6 +108,38 @@ def test_latest_exploration_generates_private_candidate(tmp_path: Path) -> None:
     assert generated.script.steps[0].to_json() == {"goto": "/uploads"}
     assert generated.source_artifact == artifact
     assert generated.source_snapshot == observation.snapshot_hash
+
+
+def test_generated_candidate_preserves_spa_hash_route(tmp_path: Path) -> None:
+    chain = EvidenceChain.for_workdir(tmp_path)
+    artifacts = ArtifactStore.for_workdir(tmp_path)
+    observation = Observation(
+        "https://example.test/ui/#/manage/hpf-ratio-config",
+        "Ratio config",
+        "Ratio config\nTotal 27 rows",
+    )
+    artifact = artifacts.save_observation(observation)[0]
+    chain.append(
+        WEB_EXPLORATION_EVENT,
+        {
+            "start_url": observation.url,
+            "trace": "web/traces/explore.json",
+            "pages": [
+                {
+                    "url": observation.url,
+                    "title": observation.title,
+                    "snapshot": observation.snapshot_hash,
+                    "artifact": artifact,
+                }
+            ],
+        },
+    )
+
+    generated = load_web_scenario(generate_latest_candidates(tmp_path, chain, artifacts)[0])
+
+    assert generated.script.steps[0].to_json() == {
+        "goto": "/ui/#/manage/hpf-ratio-config"
+    }
 
 
 def test_candidate_approval_binds_exact_committed_file_to_chain(tmp_path: Path) -> None:
@@ -209,6 +243,59 @@ def test_run_records_assertions_and_requires_write_authorization(
 
     with pytest.raises(WebScenarioError, match="requires --allow-writes"):
         run_scenario(_scenario(risk="writes"), object(), chain, artifacts)
+
+
+def test_candidate_trial_is_read_only_non_authoritative_and_keeps_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = write_candidate(tmp_path, _scenario())
+    observation = Observation(
+        "https://example.test/uploads",
+        "Uploads - LoreLoop",
+        "Filtered results: 1 item",
+    )
+    execution = ActionExecution(
+        _scenario().script.digest,
+        "completed",
+        [StepTrace(0, {"goto": "/uploads"}, "completed", "ok", 1, observation.url)],
+        final_observation=observation,
+        states=(PageState(0, observation),),
+    )
+    monkeypatch.setattr(
+        "loreloop.webexplore.scenarios.execute_action_script",
+        lambda *args, **kwargs: execution,
+    )
+    chain = EvidenceChain.for_workdir(tmp_path)
+    artifacts = ArtifactStore.for_workdir(tmp_path)
+
+    result = trial_candidate(
+        tmp_path,
+        "upload",
+        object(),
+        chain,
+        artifacts,
+        run_id="run-1",
+    )
+
+    assert result.passed
+    assert candidate.exists()
+    assert result.record.event == "web_test_trialed"
+    assert result.record.payload["authoritative"] is False
+    assert result.record.payload["states"][0]["artifact"]
+    assert list_approved_scenarios(tmp_path) == ()
+
+    writes_dir = tmp_path / "writes"
+    writes_dir.mkdir()
+    write_candidate(writes_dir, _scenario(risk="writes"))
+    with pytest.raises(WebScenarioError, match="write-risk candidate"):
+        trial_candidate(
+            writes_dir,
+            "upload",
+            object(),
+            EvidenceChain.for_workdir(writes_dir),
+            ArtifactStore.for_workdir(writes_dir),
+            run_id="run-1",
+        )
 
 
 def test_latest_chain_verified_execution_becomes_acceptance_fact(tmp_path: Path) -> None:

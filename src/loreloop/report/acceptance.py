@@ -206,7 +206,10 @@ def evaluate_run(
 
 
 def render_report(
-    run: RunSummary, chain: EvidenceChain, artifacts: ArtifactStore | None = None
+    run: RunSummary,
+    chain: EvidenceChain,
+    artifacts: ArtifactStore | None = None,
+    workdir: Path | None = None,
 ) -> str:
     records = chain.verify()
     evaluation = evaluate_run(run, chain, artifacts)
@@ -250,6 +253,8 @@ def render_report(
             "delegation, so the run is not acceptable as recorded.",
             "",
         ]
+    if artifacts is not None and workdir is not None:
+        lines.extend(_task_workflow_sections(run.run_id, records, artifacts, workdir))
     if not checks:
         lines += ["No acceptance checks were recorded for this run.", ""]
     else:
@@ -288,6 +293,149 @@ def render_report(
                 lines.append(f"- **{_md(rec.payload.get('check', '?'))}**: {_md(detail)}")
             lines.append("")
     return "\n".join(lines)
+
+
+def _task_workflow_sections(
+    run_id: str,
+    records: list[EvidenceRecord],
+    artifacts: ArtifactStore,
+    workdir: Path,
+) -> list[str]:
+    from ..webexplore.coverage import build_web_coverage
+    from ..webexplore.scenarios import WEB_TEST_TRIALED_EVENT
+    from ..workflow.execution import TASK_TEST_EXECUTED_EVENT
+    from ..workflow.impact import latest_task_test_plan
+    from ..workflow.summary import latest_task_narrative
+
+    lines: list[str] = []
+    narrative = latest_task_narrative(run_id, records)
+    if narrative is not None:
+        lines.extend(
+            [
+                "## Root cause or requirement analysis",
+                "",
+                narrative.analysis,
+                "",
+                "## Implementation summary",
+                "",
+                narrative.implementation,
+                "",
+            ]
+        )
+        if narrative.acceptance:
+            lines.extend(["## Acceptance criteria", ""])
+            lines.extend(f"- {item}" for item in narrative.acceptance)
+            lines.append("")
+        if narrative.risks:
+            lines.extend(["## Known risks and limitations", ""])
+            lines.extend(f"- {item}" for item in narrative.risks)
+            lines.append("")
+        lines.extend(
+            [
+                "The sections above are host-agent-authored narrative; test, browser, "
+                "Git, and chain evidence below determine verification.",
+                "",
+            ]
+        )
+    plan = latest_task_test_plan(run_id, records, artifacts)
+    if plan is not None:
+        lines.extend(
+            [
+                "## Task understanding and change impact",
+                "",
+                f"- Task type: {plan.intent.kind}",
+                f"- Source changes since task start: {len(plan.changes)}",
+            ]
+        )
+        for change in plan.changes:
+            lines.append(f"  - {change.kind}: `{change.repository}:{change.path}`")
+        lines.extend(["", "## Selected tests and rationale", ""])
+        for tier, title in (
+            ("must", "Must run"),
+            ("recommended", "Recommended"),
+            ("missing", "Coverage gap"),
+        ):
+            selected = [item for item in plan.selections if item.tier == tier]
+            lines.append(f"### {title} ({len(selected)})")
+            lines.append("")
+            if not selected:
+                lines.append("- None")
+            for item in selected:
+                location = f"{item.repository}:{item.path}" if item.path else item.repository
+                lines.append(f"- **{_md(item.name)}** (`{location}`): {_md(item.reason)}")
+            lines.append("")
+        if plan.commands:
+            import shlex
+
+            lines.extend(["### Suggested deterministic commands", ""])
+            for command in plan.commands:
+                lines.append(f"- `{_md(shlex.join(command.argv))}`")
+            lines.append("")
+
+    executions = [
+        record
+        for record in records
+        if record.event == TASK_TEST_EXECUTED_EVENT and record.payload.get("run_id") == run_id
+    ]
+    if executions:
+        latest_executions: dict[tuple[str, ...], EvidenceRecord] = {}
+        for record in executions:
+            command = record.payload.get("command")
+            if isinstance(command, list) and all(isinstance(item, str) for item in command):
+                latest_executions[tuple(command)] = record
+        lines.extend(["## Provisional automated test execution", ""])
+        for command, record in latest_executions.items():
+            import shlex
+
+            lines.append(
+                f"- {record.payload.get('status', 'unknown')}: "
+                f"`{_md(shlex.join(command))}` — provisional evidence; "
+                "rerun after completion for acceptance authority"
+            )
+        lines.append("")
+
+    trials = [
+        record
+        for record in records
+        if record.event == WEB_TEST_TRIALED_EVENT and record.payload.get("run_id") == run_id
+    ]
+    if trials:
+        latest_trials: dict[str, EvidenceRecord] = {}
+        for record in trials:
+            scenario_id = record.payload.get("scenario_id")
+            if isinstance(scenario_id, str):
+                latest_trials[scenario_id] = record
+        lines.extend(["## Provisional Web trials", ""])
+        for scenario_id, record in sorted(latest_trials.items()):
+            lines.append(
+                f"- `{scenario_id}`: {record.payload.get('status', 'unknown')} — "
+                "non-authoritative; approval and governed replay are still required"
+            )
+        lines.append("")
+
+    try:
+        coverage = build_web_coverage(workdir, records, artifacts)
+    except (OSError, ValueError) as exc:
+        lines.extend(["## Web coverage", "", f"Coverage unavailable: {_md(str(exc))}", ""])
+    else:
+        summary = coverage.summary
+        if summary["pages_observed"] or summary["journeys_candidate"] or summary["journeys_approved"]:
+            lines.extend(
+                [
+                    "## Web coverage",
+                    "",
+                    f"- Pages tested: {summary['pages_tested']} / {summary['pages_observed']}",
+                    f"- Pages with trial-only evidence: {summary['pages_trialed']}",
+                    f"- Page states observed: {summary['states_observed']}",
+                    f"- Controls exercised: {summary['controls_exercised']} / "
+                    f"{summary['controls_observed']}",
+                    f"- Controls exercised only in trial: "
+                    f"{summary['controls_trial_exercised']}",
+                    f"- Write-gated controls: {summary['controls_write_gated']}",
+                    "",
+                ]
+            )
+    return lines
 
 
 def _md(text: str) -> str:
@@ -457,6 +605,7 @@ def record_command_check(
     *,
     cwd: Path,
     timeout: float = 300.0,
+    state_workdir: Path | None = None,
 ) -> EvidenceRecord:
     """Execute an operator-specified command without a shell and pin its output.
 
@@ -489,7 +638,7 @@ def record_command_check(
     finished = datetime.now(timezone.utc)
     stdout = redact_sensitive(stdout)
     stderr = redact_sensitive(stderr)
-    repository_states = capture_repository_states(cwd)
+    repository_states = capture_repository_states(state_workdir or cwd)
     artifact, _ = artifacts.save_json(
         {
             "type": "command_evidence",

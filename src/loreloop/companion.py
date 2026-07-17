@@ -59,6 +59,35 @@ Do not use `loreloop run` for normal interactive work: it launches a separate
 coding-agent process. Use it only when the operator explicitly requests an
 automated or headless delegation.
 
+## Default autonomous development loop
+
+The operator should only need to describe a bug or requirement in natural
+language. Keep LoreLoop subcommands behind this host-agent workflow:
+
+1. Classify the request as bug, feature, or general task. For a bug, reproduce
+   it and add or identify a regression test. For a feature, derive concrete
+   acceptance criteria before implementation.
+2. Implement in this current host session.
+3. Before claiming success, run `loreloop test select <run-id> --format json`.
+   Read MUST, RECOMMENDED, MISSING, and the suggested commands. Never hide a
+   MISSING coverage gap.
+4. Run `loreloop test run <run-id>` to execute deterministic non-Web commands
+   as provisional evidence. Fix failures and regenerate the plan after source
+   changes that materially alter impact.
+5. For a generated read-only Web candidate, use
+   `loreloop web test trial <run-id> <scenario-id> [--headed]`. Trial evidence
+   is provisional and cannot replace operator approval. Never trial a
+   write-risk candidate.
+6. Record the host-agent narrative with `loreloop task summarize <run-id>
+   --analysis "..." --implementation "..."`, adding each acceptance criterion
+   and remaining risk with repeated `--acceptance` and `--risk` options.
+7. Present one concise completion summary containing root cause or requirement
+   interpretation, changed files, selected-test rationale, results, Web states,
+   coverage gaps, and risks. Then ask for completion confirmation.
+
+The detailed CLI remains an advanced/debugging surface. Do not make the
+operator manually orchestrate select, run, coverage, or report in normal work.
+
 ## Export the authoritative project package
 
 When the operator asks to export project knowledge, a knowledge baseline, or
@@ -136,6 +165,7 @@ When the operator asks for repeatable Web tests:
     loreloop web test approve <scenario-id>
     git add tests/loreloop/web/<scenario-id>.json && git commit
     loreloop web test run <scenario-id>
+    loreloop web test coverage --format markdown --output web-coverage.md
     loreloop web test export --format playwright --output <directory>
 
 In a non-Git aggregate with multiple declared repositories, pass
@@ -191,9 +221,15 @@ You may run read-only knowledge commands at any time:
 ## Finish and prove — explicit operator authorization
 
 - When implementation is ready, summarize the concrete changes and propose
-  acceptance assertions. Ask the operator to confirm completion before
+  acceptance assertions. Include the provisional task-test and Web-trial
+  results, plus every remaining coverage gap. Ask the operator to confirm completion before
   running `loreloop complete <run-id> --confirm`. Never infer that approval
   from silence or from your own confidence.
+- After confirmed completion, run `loreloop test prove <run-id>`. It reruns
+  deterministic selected commands as post-completion, chain-backed command
+  checks. These checks, not provisional self-test events, decide acceptance.
+  Then run `loreloop report <run-id>` and give the operator the complete report
+  outcome.
 - Propose acceptance assertions for the operator to approve. Prefer
   deterministic ones — they are checked without trusting your self-report:
 

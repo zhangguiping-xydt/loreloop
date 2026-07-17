@@ -1099,6 +1099,18 @@ def cmd_ingest(args: argparse.Namespace) -> int:
                     f"could not resume {abandoned} login handover(s); inspect {result.trace_path}",
                     file=sys.stderr,
                 )
+            if not result.pages:
+                next_step = (
+                    "inspect the trace, verify the URL and access permissions, then retry"
+                    if args.headed
+                    else "re-run with --headed for login handover, or verify the URL and access permissions"
+                )
+                raise CLIError(
+                    "web exploration captured no pages",
+                    f"all {len(result.skipped)} attempted page(s) were skipped; "
+                    f"trace: {result.trace_path}",
+                    next_step,
+                )
             entries = reverse_web(_inference_agent(args.agent), result.pages)
             artifacts = ArtifactStore.for_workdir(workdir)
             pages = []
@@ -1276,8 +1288,146 @@ def cmd_project(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_test(args: argparse.Namespace) -> int:
+    from .evidence.artifacts import ArtifactStore
+
+    workdir = _workdir()
+    chain = EvidenceChain.for_workdir(workdir)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    if args.test_action == "prove":
+        from .workflow.execution import prove_task_test_plan
+
+        try:
+            checks, skipped = prove_task_test_plan(
+                workdir,
+                args.run_id,
+                chain.verify(),
+                chain,
+                artifacts,
+                timeout=args.timeout,
+            )
+        except ValueError as exc:
+            raise CLIError(
+                "cannot prove task tests",
+                str(exc),
+                "confirm completion and ensure a current test plan exists, then retry",
+            ) from exc
+        for record in checks:
+            status = "PASS" if record.event == "check_passed" else "FAIL"
+            print(f"{status}: {record.payload.get('check', 'selected tests')}")
+        for result in skipped:
+            print(f"SKIPPED: {shlex.join(result.argv)}")
+            print(f"  {result.reason}")
+        failed = sum(record.event == "check_failed" for record in checks)
+        print(f"{len(checks) - failed} acceptance checks passed, {failed} failed, "
+              f"{len(skipped)} skipped")
+        return 1 if failed or skipped or not checks else 0
+    if args.test_action == "run":
+        from .workflow.execution import execute_task_test_plan
+
+        try:
+            results = execute_task_test_plan(
+                workdir,
+                args.run_id,
+                chain.verify(),
+                chain,
+                artifacts,
+                timeout=args.timeout,
+            )
+        except ValueError as exc:
+            raise CLIError(
+                "cannot run task tests",
+                str(exc),
+                f"run `loreloop test select {args.run_id}` first, then retry",
+            ) from exc
+        for result in results:
+            print(f"{result.status.upper()}: {shlex.join(result.argv)}")
+            if result.reason:
+                print(f"  {result.reason}")
+        failed = sum(result.status in {"failed", "timed-out"} for result in results)
+        skipped = sum(result.status == "skipped" for result in results)
+        passed = sum(result.status == "passed" for result in results)
+        print(f"{passed} passed, {failed} failed, {skipped} skipped (provisional evidence)")
+        return 1 if failed or skipped or not results else 0
+
+    from .workflow.impact import create_task_test_plan, render_task_test_plan
+
+    try:
+        plan, record = create_task_test_plan(
+            workdir,
+            args.run_id,
+            chain.verify(),
+            chain,
+            artifacts,
+        )
+    except ValueError as exc:
+        raise CLIError(
+            "cannot select task tests",
+            str(exc),
+            "start the task with `loreloop begin <task>`, make the change, then retry",
+        ) from exc
+    rendered = render_task_test_plan(plan, args.format)
+    if args.output:
+        output = Path(args.output)
+        if output.exists() and not args.force:
+            raise CLIError(
+                "test-plan output already exists",
+                str(output),
+                "choose another path or pass --force",
+            )
+        if output.is_symlink():
+            raise CLIError(
+                "unsafe test-plan output",
+                f"refusing symlinked output: {output}",
+                "choose a regular output file",
+            )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered, encoding="utf-8")
+        print(f"exported task test plan: {output}")
+    else:
+        print(rendered, end="")
+    print(f"evidence: chain hash {record.chain_hash[:16]}", file=sys.stderr)
+    return 0
+
+
+def cmd_task(args: argparse.Namespace) -> int:
+    from .workflow.summary import record_task_narrative
+
+    workdir = _workdir()
+    chain = EvidenceChain.for_workdir(workdir)
+    records = chain.verify()
+    if not any(
+        record.event in {"delegation_prepared", "delegation_completed"}
+        and record.payload.get("run_id") == args.run_id
+        for record in records
+    ):
+        raise CLIError(
+            "unknown task run",
+            args.run_id,
+            "copy the exact run id printed by `loreloop begin`, then retry",
+        )
+    try:
+        _, record = record_task_narrative(
+            chain,
+            args.run_id,
+            args.analysis,
+            args.implementation,
+            tuple(args.acceptance),
+            tuple(args.risk),
+        )
+    except ValueError as exc:
+        raise CLIError(
+            "invalid task summary",
+            str(exc),
+            "provide concise analysis, implementation, acceptance, and risk text",
+        ) from exc
+    print(f"recorded task summary for {args.run_id} (chain hash {record.chain_hash[:16]})")
+    return 0
+
+
 def cmd_web(args: argparse.Namespace) -> int:
     from .evidence.artifacts import ArtifactStore
+    from .webexplore.coverage import build_web_coverage, render_web_coverage
     from .webexplore.scenarios import (
         WebScenarioError,
         approve_candidate,
@@ -1288,12 +1438,30 @@ def cmd_web(args: argparse.Namespace) -> int:
         list_candidate_scenarios,
         run_scenario,
         scenario_locator,
+        trial_candidate,
         write_candidate,
     )
 
     workdir = _workdir()
     chain = EvidenceChain.for_workdir(workdir)
     artifacts = ArtifactStore.for_workdir(workdir)
+    if args.web_test_action == "coverage":
+        report = build_web_coverage(workdir, chain.verify(), artifacts)
+        rendered = render_web_coverage(report, args.format)
+        if args.output:
+            output = Path(args.output)
+            if output.exists() and not args.force:
+                raise WebScenarioError(
+                    f"Web coverage output already exists: {output}; use --force to replace it"
+                )
+            if output.is_symlink():
+                raise WebScenarioError(f"refusing symlinked Web coverage output: {output}")
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(rendered, encoding="utf-8")
+            print(f"exported Web coverage: {output}")
+        else:
+            print(rendered, end="")
+        return 0
     if args.web_test_action == "generate":
         paths = generate_latest_candidates(workdir, chain, artifacts)
         for path in paths:
@@ -1349,6 +1517,39 @@ def cmd_web(args: argparse.Namespace) -> int:
         print(f"recorded candidate: {path.relative_to(workdir)}")
         print("Next: loreloop web test review")
         return 0
+    if args.web_test_action == "trial":
+        from .webexplore.browser import PlaywrightBrowser
+
+        records = chain.verify()
+        known_run = any(
+            record.event in {"delegation_prepared", "delegation_completed"}
+            and record.payload.get("run_id") == args.run_id
+            for record in records
+        )
+        if not known_run:
+            raise WebScenarioError(f"unknown task run: {args.run_id}")
+        browser = PlaywrightBrowser(headed=args.headed)
+        try:
+            result = trial_candidate(
+                workdir,
+                args.scenario_id,
+                browser,
+                chain,
+                artifacts,
+                run_id=args.run_id,
+            )
+        finally:
+            browser.close()
+        label = "PASS" if result.passed else "FAIL"
+        print(
+            f"TRIAL {label}: {result.scenario.scenario_id}  "
+            f"{result.scenario.title} (non-authoritative)"
+        )
+        for assertion in result.assertions:
+            mark = "PASS" if assertion["passed"] else "FAIL"
+            print(f"  {mark} {assertion['kind']}: {assertion['value']}")
+        print("Candidate remains unapproved; trial evidence cannot enter acceptance or baseline.")
+        return 0 if result.passed else 1
     if args.web_test_action == "run":
         from .webexplore.browser import PlaywrightBrowser
 
@@ -1522,6 +1723,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             result.repository_roots,
             result.pack.related_ids,
             current_policies,
+            result.source_snapshot_artifact,
         ),
     )
     print(result.output)
@@ -1599,7 +1801,10 @@ def _completion_payload(
     repository_roots: dict[str, str],
     related_entries: list[str],
     ingestion_policies: dict[str, IngestionPolicy],
+    source_snapshot_artifact: str,
 ) -> dict:
+    from .workflow.model import TaskIntent
+
     return {
         "run_id": run_id,
         "task": task,
@@ -1608,6 +1813,8 @@ def _completion_payload(
         "repository_roots": repository_roots,
         "related_entries": related_entries,
         "ingestion_policies": ingestion_policies_payload(ingestion_policies, set(base_commits)),
+        "source_snapshot_artifact": source_snapshot_artifact,
+        "task_intent": TaskIntent.from_text(task).to_json(),
     }
 
 
@@ -1649,6 +1856,7 @@ def cmd_begin(args: argparse.Namespace) -> int:
         prepared.repository_roots,
         prepared.pack.related_ids,
         current_policies,
+        prepared.source_snapshot_artifact,
     )
     payload["mode"] = "session"
     payload["requirement_materials"] = [item.evidence_payload() for item in requirement_materials]
@@ -1880,7 +2088,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     chain = EvidenceChain.for_workdir(workdir)
     artifacts = ArtifactStore.for_workdir(workdir)
     evaluation = evaluate_run(run, chain, artifacts)
-    report = render_report(run, chain, artifacts=artifacts)
+    report = render_report(run, chain, artifacts=artifacts, workdir=workdir)
     print(report)
     if evaluation.accepted:
         print(f"Next: loreloop harvest {trace.stem}")
@@ -3283,6 +3491,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_project_remove.set_defaults(func=cmd_project)
 
+    p_test = sub.add_parser("test", help="select evidence-backed tests for a task run")
+    test_sub = p_test.add_subparsers(dest="test_action", required=True)
+    p_test_select = test_sub.add_parser(
+        "select", help="map changes since task start to existing tests and coverage gaps"
+    )
+    p_test_select.add_argument("run_id", metavar="RUN_ID")
+    p_test_select.add_argument(
+        "--format", choices=("summary", "markdown", "json"), default="summary"
+    )
+    p_test_select.add_argument("--output", metavar="FILE")
+    p_test_select.add_argument("--force", action="store_true")
+    p_test_select.set_defaults(func=cmd_test)
+    p_test_run = test_sub.add_parser(
+        "run", help="execute selected deterministic tests as provisional task evidence"
+    )
+    p_test_run.add_argument("run_id", metavar="RUN_ID")
+    p_test_run.add_argument("--timeout", type=float, default=300.0)
+    p_test_run.set_defaults(func=cmd_test)
+    p_test_prove = test_sub.add_parser(
+        "prove", help="rerun selected tests after completion as acceptance evidence"
+    )
+    p_test_prove.add_argument("run_id", metavar="RUN_ID")
+    p_test_prove.add_argument("--timeout", type=float, default=300.0)
+    p_test_prove.set_defaults(func=cmd_test)
+
+    p_task = sub.add_parser("task", help="record the host agent's structured task narrative")
+    task_sub = p_task.add_subparsers(dest="task_action", required=True)
+    p_task_summarize = task_sub.add_parser(
+        "summarize", help="record analysis, implementation, acceptance and known risks"
+    )
+    p_task_summarize.add_argument("run_id", metavar="RUN_ID")
+    p_task_summarize.add_argument("--analysis", required=True)
+    p_task_summarize.add_argument("--implementation", required=True)
+    p_task_summarize.add_argument("--acceptance", action="append", default=[])
+    p_task_summarize.add_argument("--risk", action="append", default=[])
+    p_task_summarize.set_defaults(func=cmd_task)
+
     p_web = sub.add_parser("web", help="govern replayable Web test scenarios")
     web_sub = p_web.add_subparsers(dest="web_command", required=True)
     p_web_test = web_sub.add_parser("test", help="generate, approve, run or export Web tests")
@@ -3295,6 +3540,15 @@ def build_parser() -> argparse.ArgumentParser:
         "review", help="list candidate and approved Web scenarios"
     )
     p_web_test_review.set_defaults(func=cmd_web)
+    p_web_test_coverage = web_test_sub.add_parser(
+        "coverage", help="report user-journey, page-state and control coverage"
+    )
+    p_web_test_coverage.add_argument(
+        "--format", choices=("summary", "markdown", "json"), default="summary"
+    )
+    p_web_test_coverage.add_argument("--output", metavar="FILE")
+    p_web_test_coverage.add_argument("--force", action="store_true")
+    p_web_test_coverage.set_defaults(func=cmd_web)
     p_web_test_approve = web_test_sub.add_parser(
         "approve", help="publish one reviewed candidate into the committed test suite"
     )
@@ -3311,6 +3565,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_web_test_record.add_argument("--risk", choices=("read-only", "writes"), default="read-only")
     p_web_test_record.add_argument("--allow-writes", action="store_true")
     p_web_test_record.set_defaults(func=cmd_web)
+    p_web_test_trial = web_test_sub.add_parser(
+        "trial", help="strictly read-only replay of an unapproved candidate"
+    )
+    p_web_test_trial.add_argument("run_id", metavar="RUN_ID")
+    p_web_test_trial.add_argument("scenario_id", metavar="SCENARIO_ID")
+    p_web_test_trial.add_argument("--headed", action="store_true")
+    p_web_test_trial.set_defaults(func=cmd_web)
     p_web_test_run = web_test_sub.add_parser(
         "run", help="replay one or all chain-approved Web scenarios"
     )

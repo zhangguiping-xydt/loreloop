@@ -17,7 +17,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit
 
 from ..paths import ensure_private_directory, ensure_state_root, secure_append_text, state_path
 from .browser import Browser, Observation, require_http_url, same_origin
@@ -69,10 +69,11 @@ class Explorer:
             seeds=len(seeds),
         )
         while queue and len(pages) < self._max_pages:
-            url = queue.popleft().split("#")[0].rstrip("/")
-            if url in seen:
+            url = queue.popleft()
+            key = _crawl_key(url)
+            if key in seen:
                 continue
-            seen.add(url)
+            seen.add(key)
             if not same_origin(url, start_url):
                 skipped.append(url)
                 self._trace(trace_path, "skipped_cross_origin", url=url)
@@ -85,6 +86,11 @@ class Explorer:
                 skipped.append(url)
                 continue
 
+            if obs.looks_like_login:
+                obs = self._handle_login_wall(trace_path, obs, skipped, login_walls, login_resumed)
+                if obs is None:
+                    continue
+
             if not same_origin(obs.url, start_url):
                 skipped.append(obs.url)
                 self._trace(
@@ -94,20 +100,6 @@ class Explorer:
                     url=obs.url,
                 )
                 continue
-
-            if obs.looks_like_login:
-                obs = self._handle_login_wall(trace_path, obs, skipped, login_walls, login_resumed)
-                if obs is None:
-                    continue
-                if not same_origin(obs.url, start_url):
-                    skipped.append(obs.url)
-                    self._trace(
-                        trace_path,
-                        "skipped_cross_origin_redirect",
-                        requested_url=url,
-                        url=obs.url,
-                    )
-                    continue
 
             pages.append(obs)
             self._trace(
@@ -120,7 +112,7 @@ class Explorer:
                 forms=len(obs.forms),
             )
             for link in obs.links:
-                if link.split("#")[0].rstrip("/") not in seen:
+                if _crawl_key(link) not in seen:
                     queue.append(link)
 
         self._trace(trace_path, "exploration_finished", pages=len(pages), skipped=len(skipped))
@@ -184,13 +176,13 @@ class Explorer:
 
     def _seed_urls(self, start_url: str) -> list[str]:
         seeds = [start_url]
-        seen = {start_url.split("#")[0].rstrip("/")}
+        seen = {_crawl_key(start_url)}
         for url in [*self._code_route_seeds(start_url), *self._remote_seed_urls(start_url)]:
-            clean = url.split("#")[0].rstrip("/")
+            clean = _crawl_key(url)
             if clean in seen or not same_origin(clean, start_url):
                 continue
             seen.add(clean)
-            seeds.append(clean)
+            seeds.append(url)
             if len(seeds) >= self._max_pages * 3:
                 break
         return seeds
@@ -252,6 +244,16 @@ class Explorer:
                 if len(routes) >= 40:
                     return routes
         return routes
+
+
+def _crawl_key(url: str) -> str:
+    """Deduplicate document anchors while preserving hash-routed SPA pages."""
+    parsed = urlsplit(url)
+    fragment = parsed.fragment
+    if not (fragment.startswith("/") or fragment.startswith("!/")):
+        fragment = ""
+    path = parsed.path.rstrip("/")
+    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, fragment))
 
 
 _ROUTE_RE = re.compile(r"""["'`](/[A-Za-z0-9._~!$&'()*+,;=:@/%-]{1,120})["'`]""")

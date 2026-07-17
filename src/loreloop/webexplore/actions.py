@@ -80,6 +80,8 @@ class StepTrace:
     detail: str
     elapsed_ms: int
     url: str | None = None
+    title: str | None = None
+    snapshot: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -91,6 +93,27 @@ class StepTrace:
         }
         if self.url is not None:
             payload["url"] = self.url
+        if self.title is not None:
+            payload["title"] = self.title
+        if self.snapshot is not None:
+            payload["snapshot"] = self.snapshot
+        return payload
+
+
+@dataclass(frozen=True)
+class PageState:
+    step_index: int
+    observation: Observation
+
+    def to_json(self, artifact: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "step_index": self.step_index,
+            "url": self.observation.url,
+            "title": self.observation.title,
+            "snapshot": self.observation.snapshot_hash,
+        }
+        if artifact is not None:
+            payload["artifact"] = artifact
         return payload
 
 
@@ -102,6 +125,7 @@ class ActionExecution:
     final_observation: Observation | None = None
     reason: str | None = None
     allow_writes: bool = False
+    states: tuple[PageState, ...] = ()
 
     @property
     def succeeded(self) -> bool:
@@ -111,7 +135,9 @@ class ActionExecution:
     def steps_completed(self) -> int:
         return sum(1 for step in self.steps if step.status == "completed")
 
-    def trace_artifact_payload(self) -> dict[str, Any]:
+    def trace_artifact_payload(
+        self, state_artifacts: tuple[str, ...] = ()
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "type": "interaction_trace",
             "script_digest": self.script_digest,
@@ -125,6 +151,13 @@ class ActionExecution:
         if self.final_observation is not None:
             payload["final_url"] = self.final_observation.url
             payload["final_snapshot"] = self.final_observation.snapshot_hash
+        if self.states:
+            payload["states"] = [
+                state.to_json(
+                    state_artifacts[index] if index < len(state_artifacts) else None
+                )
+                for index, state in enumerate(self.states)
+            ]
         return payload
 
 
@@ -199,42 +232,89 @@ def execute_action_script(
     consume_blocked = getattr(browser, "consume_blocked_requests", None)
 
     trace: list[StepTrace] = []
+    states: list[PageState] = []
     for index, step in enumerate(script.steps):
         started = time.monotonic()
         try:
             _perform_step(page, script, step, allow_writes=allow_writes, timeout_ms=timeout_ms)
-            _ensure_same_origin(page, script.base)
+            _complete_login_handover(browser, page, script.base)
             blocked = consume_blocked() if callable(consume_blocked) else []
             if blocked:
                 first = blocked[0]
                 raise ActionBlocked(
                     f"blocked {first['method']} request ({first['reason']}): {first['url']}"
                 )
+            observation = browser.observe_current()
         except ActionBlocked as exc:
             trace.append(_trace_step(index, step, "blocked", exc, started, page))
             return ActionExecution(
-                script.digest, "blocked", trace, reason=str(exc), allow_writes=allow_writes
+                script.digest,
+                "blocked",
+                trace,
+                reason=str(exc),
+                allow_writes=allow_writes,
+                states=tuple(states),
             )
         except Exception as exc:
             trace.append(_trace_step(index, step, "failed", exc, started, page))
             return ActionExecution(
-                script.digest, "failed", trace, reason=str(exc), allow_writes=allow_writes
+                script.digest,
+                "failed",
+                trace,
+                reason=str(exc),
+                allow_writes=allow_writes,
+                states=tuple(states),
             )
-        trace.append(_trace_step(index, step, "completed", "ok", started, page))
-
-    try:
-        final = browser.observe_current()
-    except Exception as exc:
-        return ActionExecution(
-            script.digest, "failed", trace, reason=str(exc), allow_writes=allow_writes
+        states.append(PageState(index, observation))
+        trace.append(
+            _trace_step(
+                index,
+                step,
+                "completed",
+                "ok",
+                started,
+                page,
+                observation=observation,
+            )
         )
+
+    final = states[-1].observation if states else None
+    if final is None:
+        try:
+            final = browser.observe_current()
+        except Exception as exc:
+            return ActionExecution(
+                script.digest,
+                "failed",
+                trace,
+                reason=str(exc),
+                allow_writes=allow_writes,
+                states=tuple(states),
+            )
     return ActionExecution(
         script.digest,
         "completed",
         trace,
         final_observation=final,
         allow_writes=allow_writes,
+        states=tuple(states),
     )
+
+
+def _complete_login_handover(browser, page, base: str) -> None:
+    if same_origin(page.url, base):
+        return
+    if not getattr(browser, "login_handover_enabled", False):
+        _ensure_same_origin(page, base)
+    observe_current = getattr(browser, "observe_current", None)
+    wait_for_user = getattr(browser, "wait_for_user", None)
+    if not callable(observe_current) or not callable(wait_for_user):
+        _ensure_same_origin(page, base)
+    observation = observe_current()
+    if not observation.looks_like_login:
+        _ensure_same_origin(page, base)
+    wait_for_user(f"login required at {page.url} — please sign in in the browser window")
+    _ensure_same_origin(page, base)
 
 
 def _parse_step(raw: Any, index: int) -> ActionStep:
@@ -497,7 +577,14 @@ def _ensure_same_origin(page, base: str) -> None:
 
 
 def _trace_step(
-    index: int, step: ActionStep, status: str, detail: object, started: float, page
+    index: int,
+    step: ActionStep,
+    status: str,
+    detail: object,
+    started: float,
+    page,
+    *,
+    observation: Observation | None = None,
 ) -> StepTrace:
     return StepTrace(
         index=index,
@@ -506,6 +593,8 @@ def _trace_step(
         detail=str(detail),
         elapsed_ms=int((time.monotonic() - started) * 1000),
         url=getattr(page, "url", None),
+        title=observation.title if observation is not None else None,
+        snapshot=observation.snapshot_hash if observation is not None else None,
     )
 
 

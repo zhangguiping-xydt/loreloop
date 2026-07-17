@@ -172,7 +172,9 @@ def test_prepare_builds_current_session_prompt_without_invoking_agent(tmp_path):
 
     assert agent.prompts == []
     assert "Established facts" in prepared.prompt
-    assert prepared.prompt.endswith("# Task\n\nfix the upload endpoint\n")
+    assert prepared.prompt.endswith(
+        "# Task\n\nTask kind: bug\n\nfix the upload endpoint\n"
+    )
     events = [json.loads(line) for line in prepared.trace_path.read_text().splitlines()]
     assert [event["event"] for event in events] == ["delegation_started"]
     assert events[0]["mode"] == "session"

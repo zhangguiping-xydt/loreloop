@@ -512,8 +512,10 @@ Scenario v1 是严格 JSON 数据结构，复用 ActionScript 的同源、动作
 批准文件是权威源。`web test export --format playwright` 只生成确定性派生 `.spec.ts`，不能反向
 授予批准。`read-only` 是默认风险；`writes` 的录制和执行都需要显式 `--allow-writes`。headed
 recorder 只捕获 click/fill/select，不记录 password、token、secret 或 API key 字段，不支持任意
-JavaScript。每次执行保存 interaction script、trace、终态 observation 和逐条断言，并追加
-`web_test_executed`。提交态 Scenario 由权威源码检测器严格限定在 `tests/loreloop/web/*.json`，作为
+JavaScript。每次执行在每个成功步骤后保存页面状态 observation，并保存 interaction script、
+trace、终态 observation 和逐条断言，再追加 `web_test_executed`。`web test coverage` 从探索页、
+逐步状态、候选/批准场景和最近执行结果生成覆盖率清单，明确区分 observed-only、exercised 和
+write-gated，不能把“控件可见”当成“功能已验证”。提交态 Scenario 由权威源码检测器严格限定在 `tests/loreloop/web/*.json`，作为
 `loreloop-web` integration `TestRow` 进入验收规格；`--include-web` 还会把链上最近一次匹配批准摘要
 的执行状态作为 `WebAcceptanceRow` 写入同一 SemanticCore、Markdown 和 Capsule。
 
@@ -531,6 +533,27 @@ JavaScript。每次执行保存 interaction script、trace、终态 observation 
   重放 blocked 时命令报错退出,不写链、不改 DB;failed 才表示路径级 drift。
 
 链记录先写,DB 后写。通过验证时,链上 digest pin 的是重锚后的行。
+
+### 7.8 自然语言任务、自测与统一报告
+
+普通用户只在宿主 Codex/Claude Code/OpenCode/co-mind 中描述 Bug 或需求。`begin` 将任务确定性分类为
+`bug`、`feature` 或 `task`，并在任务开始时把当前工作树文件摘要保存为私有内容寻址工件。后续影响
+分析比较任务开始快照和当前快照，因此任务前已有的 staged、unstaged 或 untracked 文件不会被误算
+为本次改动。
+
+`test select` 根据实际变化建立 `TaskTestPlan`：直接变化的测试、同名模块测试、路由/API/字段或符号
+引用进入 MUST；公共配置、认证、路由、中间件等影响进入 RECOMMENDED；无法映射的源码进入 MISSING。
+计划同时给出不经 shell 的确定性命令。`test run` 执行这些命令并保存脱敏的 command evidence，但该
+结果只属于实现阶段的 provisional evidence；操作者确认完成后，`test prove` 自动重跑同一计划并将
+每条命令记录为 completion 之后的 chain-backed check，只有这些检查才能决定 acceptance。
+
+未批准的只读 Web candidate 可通过 `web test trial` 做严格安全边界内的临时回放。trial 保留逐步
+页面状态、断言和工件，并显式写入 `authoritative: false`；write-risk candidate 被拒绝，trial 也不会
+进入基线或验收事实。正式 Web 权威仍来自 operator approval 后的 governed replay。
+
+宿主 Agent 用 `task summarize` 记录根因/需求解释、实现摘要、验收标准和已知风险。统一 `report`
+将这部分明确标为 agent-authored narrative，并与 Git 变化、测试选择、provisional 自测、Web trial、
+Web coverage 和完成后的 acceptance checks 分开展示，避免把 Agent 自述当成验证证据。
 
 ---
 

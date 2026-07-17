@@ -141,6 +141,49 @@ def test_explore_rejects_browser_redirect_to_another_origin(tmp_path):
     assert "skipped_cross_origin_redirect" in events
 
 
+def test_explore_allows_cross_origin_login_handover_then_returns_to_app(tmp_path):
+    login = Observation(
+        url="https://auth.local/login",
+        title="Sign in",
+        text="Please sign in.",
+        forms=["input:text:user,input:password:pass"],
+    )
+    dashboard = Observation(
+        url="https://app.local/#/dashboard",
+        title="Dashboard",
+        text="Signed in.",
+    )
+    browser = FakeBrowser(
+        {"https://app.local": login, "https://auth.local/login": login},
+        handover_resolves={"https://auth.local/login": dashboard},
+    )
+
+    result = Explorer(browser, tmp_path, discover_seeds=False).explore("https://app.local")
+
+    assert [page.title for page in result.pages] == ["Dashboard"]
+    assert result.login_walls == ["https://auth.local/login"]
+    assert result.login_resumed == ["https://app.local/#/dashboard"]
+
+
+def test_explore_preserves_spa_hash_route_for_navigation(tmp_path):
+    target = "https://app.local/ui/#/manage/hpf-ratio-config"
+
+    class RecordingBrowser:
+        def __init__(self):
+            self.urls = []
+
+        def observe(self, url):
+            self.urls.append(url)
+            return Observation(url=url, title="Ratio config", text="Loaded")
+
+    browser = RecordingBrowser()
+
+    result = Explorer(browser, tmp_path, discover_seeds=False).explore(target)
+
+    assert browser.urls == [target]
+    assert [page.url for page in result.pages] == [target]
+
+
 def test_remote_seed_fetch_rejects_cross_origin_redirect(tmp_path, monkeypatch):
     class Response:
         def __enter__(self):

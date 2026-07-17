@@ -1,13 +1,13 @@
 $ loreloop --help
 usage: loreloop [-h] [--agent {claude,codex,opencode,co-mind}]
-                {doctor,codex,opencode,claude,comind,trust,init,demo,ingest,repo,project,web,verify,begin,complete,run,check,report,harvest,knowledge}
+                {doctor,codex,opencode,claude,comind,trust,init,demo,ingest,repo,project,test,task,web,verify,begin,complete,run,check,report,harvest,knowledge}
                 ...
 
 Reverse-engineer project knowledge, apply it to coding-agent work, and return
 accepted outcomes to a tamper-evident knowledge loop.
 
 positional arguments:
-  {doctor,codex,opencode,claude,comind,trust,init,demo,ingest,repo,project,web,verify,begin,complete,run,check,report,harvest,knowledge}
+  {doctor,codex,opencode,claude,comind,trust,init,demo,ingest,repo,project,test,task,web,verify,begin,complete,run,check,report,harvest,knowledge}
     doctor              check prerequisites and writable trust state
     codex               install or inspect the native Codex integration
     opencode            install or inspect the native OpenCode integration
@@ -19,6 +19,8 @@ positional arguments:
     ingest              reverse-engineer knowledge from a source
     repo                manage repositories in this trust domain
     project             manage the federation project registry
+    test                select evidence-backed tests for a task run
+    task                record the host agent's structured task narrative
     web                 govern replayable Web test scenarios
     verify              verify an expectation against a live page
     begin               prepare knowledge for the coding-agent session already
@@ -332,6 +334,81 @@ positional arguments:
 
 options:
   -h, --help  show this help message and exit
+
+$ loreloop test --help
+usage: loreloop test [-h] {select,run,prove} ...
+
+positional arguments:
+  {select,run,prove}
+    select            map changes since task start to existing tests and
+                      coverage gaps
+    run               execute selected deterministic tests as provisional task
+                      evidence
+    prove             rerun selected tests after completion as acceptance
+                      evidence
+
+options:
+  -h, --help          show this help message and exit
+
+$ loreloop test select --help
+usage: loreloop test select [-h] [--format {summary,markdown,json}]
+                            [--output FILE] [--force]
+                            RUN_ID
+
+positional arguments:
+  RUN_ID
+
+options:
+  -h, --help            show this help message and exit
+  --format {summary,markdown,json}
+  --output FILE
+  --force
+
+$ loreloop test run --help
+usage: loreloop test run [-h] [--timeout TIMEOUT] RUN_ID
+
+positional arguments:
+  RUN_ID
+
+options:
+  -h, --help         show this help message and exit
+  --timeout TIMEOUT
+
+$ loreloop test prove --help
+usage: loreloop test prove [-h] [--timeout TIMEOUT] RUN_ID
+
+positional arguments:
+  RUN_ID
+
+options:
+  -h, --help         show this help message and exit
+  --timeout TIMEOUT
+
+$ loreloop task --help
+usage: loreloop task [-h] {summarize} ...
+
+positional arguments:
+  {summarize}
+    summarize  record analysis, implementation, acceptance and known risks
+
+options:
+  -h, --help   show this help message and exit
+
+$ loreloop task summarize --help
+usage: loreloop task summarize [-h] --analysis ANALYSIS --implementation
+                               IMPLEMENTATION [--acceptance ACCEPTANCE]
+                               [--risk RISK]
+                               RUN_ID
+
+positional arguments:
+  RUN_ID
+
+options:
+  -h, --help            show this help message and exit
+  --analysis ANALYSIS
+  --implementation IMPLEMENTATION
+  --acceptance ACCEPTANCE
+  --risk RISK
 
 $ loreloop verify --help
 usage: loreloop verify [-h] [--headed] [--script SCRIPT] [--allow-writes]
@@ -669,16 +746,20 @@ options:
   -h, --help  show this help message and exit
 
 $ loreloop web test --help
-usage: loreloop web test [-h] {generate,review,approve,record,run,export} ...
+usage: loreloop web test [-h]
+                         {generate,review,coverage,approve,record,trial,run,export}
+                         ...
 
 positional arguments:
-  {generate,review,approve,record,run,export}
+  {generate,review,coverage,approve,record,trial,run,export}
     generate            generate candidate scenarios from the latest captured
                         exploration
     review              list candidate and approved Web scenarios
+    coverage            report user-journey, page-state and control coverage
     approve             publish one reviewed candidate into the committed test
                         suite
     record              record a headed user journey as a private candidate
+    trial               strictly read-only replay of an unapproved candidate
     run                 replay one or all chain-approved Web scenarios
     export              export approved scenarios as deterministic Playwright
                         tests
@@ -697,6 +778,16 @@ usage: loreloop web test review [-h]
 
 options:
   -h, --help  show this help message and exit
+
+$ loreloop web test coverage --help
+usage: loreloop web test coverage [-h] [--format {summary,markdown,json}]
+                                  [--output FILE] [--force]
+
+options:
+  -h, --help            show this help message and exit
+  --format {summary,markdown,json}
+  --output FILE
+  --force
 
 $ loreloop web test approve --help
 usage: loreloop web test approve [-h] [--repo REPO_NAME] SCENARIO_ID
@@ -721,6 +812,17 @@ options:
   --title TITLE
   --risk {read-only,writes}
   --allow-writes
+
+$ loreloop web test trial --help
+usage: loreloop web test trial [-h] [--headed] RUN_ID SCENARIO_ID
+
+positional arguments:
+  RUN_ID
+  SCENARIO_ID
+
+options:
+  -h, --help   show this help message and exit
+  --headed
 
 $ loreloop web test run --help
 usage: loreloop web test run [-h] [--all] [--headed] [--allow-writes]
