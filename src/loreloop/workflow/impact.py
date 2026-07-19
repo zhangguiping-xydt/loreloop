@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import configparser
 import json
 import re
 import shlex
+import tomllib
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -21,15 +24,24 @@ from .model import SourceChange, TaskIntent, TaskTestPlan, TestCommand, TestSele
 from .snapshot import capture_task_source_snapshot, compare_task_source_snapshots
 
 TASK_TEST_PLAN_EVENT = "task_test_plan_created"
-_ROUTE = re.compile(r"['\"`](/[^'\"`\s]{1,200})['\"`]")
+_ROUTE_CALL = re.compile(
+    r"""(?ix)
+    (?:
+        (?:@[A-Za-z_$][A-Za-z0-9_$]*\.)?
+        (?:get|post|put|patch|delete|options|head|route|request|
+           getmapping|postmapping|putmapping|patchmapping|deletemapping|
+           httpget|httppost|httpput|httppatch|httpdelete)
+        |
+        [A-Za-z_$][A-Za-z0-9_$]*\.
+        (?:get|post|put|patch|delete|options|head|request|getasync|postasync)
+    )
+    \s*[\(\[]\s*['\"`](?P<route>/[^'\"`\s]{1,200})['\"`]
+    """
+)
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 _SOURCE_SYMBOL = re.compile(
     r"\b(?:def|class|function|interface|type|const|let|var|func)\s+"
     r"(?P<name>[A-Za-z_$][A-Za-z0-9_$-]{2,})"
-)
-_FIELD = re.compile(
-    r"(?:['\"](?P<quoted>[A-Za-z_$][A-Za-z0-9_$-]{2,})['\"]\s*:)|"
-    r"(?P<plain>[A-Za-z_$][A-Za-z0-9_$-]{2,})\s*[:=]"
 )
 _SHARED = re.compile(
     r"(^|/)(auth|router|routing|middleware|config|configuration|client|database|db|"
@@ -50,6 +62,9 @@ _IGNORED_TOKENS = {
     "utils",
     "util",
 }
+_NON_AUTHORITATIVE_TEST_ROOTS = frozenset(
+    {".omo", "artifacts", "baseline", "baselines", "eval", "example", "examples"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,8 +183,11 @@ def _test_inventory(snapshot: dict[str, Any]) -> tuple[_InventoryTest, ...]:
         if not isinstance(root_raw, str) or not isinstance(files, dict):
             continue
         root = Path(root_raw)
+        pytest_roots = _pytest_test_roots(root)
         for path in sorted(files):
             if not isinstance(path, str) or not is_supported_test_evidence_path(path):
+                continue
+            if not _is_authoritative_test_path(path, pytest_roots):
                 continue
             candidate = root / path
             try:
@@ -198,6 +216,78 @@ def _test_inventory(snapshot: dict[str, Any]) -> tuple[_InventoryTest, ...]:
     return tuple(inventory)
 
 
+def _is_authoritative_test_path(path: str, pytest_roots: tuple[str, ...]) -> bool:
+    pure = PurePosixPath(path)
+    parts = tuple(part.casefold() for part in pure.parts)
+    if not parts:
+        return False
+    if pure.suffix.casefold() == ".py" and pytest_roots:
+        return any(_is_within_test_root(pure, root) for root in pytest_roots)
+    return parts[0] not in _NON_AUTHORITATIVE_TEST_ROOTS
+
+
+def _is_within_test_root(path: PurePosixPath, root: str) -> bool:
+    root_path = PurePosixPath(root)
+    if root_path.is_absolute() or ".." in root_path.parts:
+        return False
+    path_parts = tuple(part.casefold() for part in path.parts)
+    root_parts = tuple(part.casefold() for part in root_path.parts if part not in {"", "."})
+    return bool(root_parts) and path_parts[: len(root_parts)] == root_parts
+
+
+def _pytest_test_roots(root: Path) -> tuple[str, ...]:
+    readers = (
+        (root / "pytest.ini", "pytest"),
+        (root / "pyproject.toml", "pyproject"),
+        (root / "tox.ini", "pytest"),
+        (root / "setup.cfg", "tool:pytest"),
+    )
+    for path, section in readers:
+        if not path.is_file():
+            continue
+        try:
+            if section == "pyproject":
+                raw = tomllib.loads(path.read_text(encoding="utf-8"))
+                value = (
+                    raw.get("tool", {}).get("pytest", {}).get("ini_options", {}).get("testpaths")
+                )
+            else:
+                parser = configparser.ConfigParser(interpolation=None)
+                parser.read(path, encoding="utf-8")
+                value = parser.get(section, "testpaths", fallback=None)
+        except (
+            AttributeError,
+            OSError,
+            TypeError,
+            UnicodeError,
+            tomllib.TOMLDecodeError,
+            configparser.Error,
+        ):
+            continue
+        roots = _normalize_test_roots(value)
+        if roots:
+            return roots
+    return ()
+
+
+def _normalize_test_roots(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        candidates = value.split()
+    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+        candidates = value
+    else:
+        return ()
+    roots: list[str] = []
+    for candidate in candidates:
+        candidate_path = PurePosixPath(candidate)
+        if candidate_path.is_absolute() or ".." in candidate_path.parts:
+            continue
+        normalized = candidate_path.as_posix().strip("/")
+        if normalized and normalized != "." and normalized not in roots:
+            roots.append(normalized)
+    return tuple(roots)
+
+
 def _select(
     changes: tuple[SourceChange, ...],
     inventory: tuple[_InventoryTest, ...],
@@ -206,9 +296,24 @@ def _select(
     selected: dict[tuple[str, str, str], TestSelection] = {}
     mapped_changes: set[tuple[str, str]] = set()
     for change in changes:
+        if is_supported_test_evidence_path(change.path):
+            for test in inventory:
+                if test.repository != change.repository or test.path != change.path:
+                    continue
+                key = (test.repository, test.path, test.name)
+                selected[key] = TestSelection(
+                    "must",
+                    test.repository,
+                    test.path,
+                    test.name,
+                    test.framework,
+                    "test file changed in this task",
+                )
+            continue
         changed_source = _source(snapshot, change.repository, change.path)
         changed_tokens = _path_tokens(change.path) | _source_tokens(changed_source)
-        changed_routes = set(_ROUTE.findall(changed_source))
+        changed_tokens = _discriminative_tokens(changed_tokens, inventory, change.repository)
+        changed_routes = _route_literals(changed_source)
         shared = bool(_SHARED.search(change.path))
         for test in inventory:
             if test.repository != change.repository:
@@ -262,19 +367,14 @@ def _match_test(
     shared: bool,
     test: _InventoryTest,
 ) -> tuple[str | None, str]:
-    if test.path == change.path:
-        return "must", "test file changed in this task"
     change_stem = _normalized_stem(change.path)
     test_stem = _normalized_stem(test.path)
     if change_stem and change_stem == test_stem:
         return "must", f"test name matches changed module {change_stem}"
-    test_folded = test.source.casefold()
-    route_match = next((route for route in changed_routes if route.casefold() in test_folded), None)
+    route_match = next(iter(sorted(changed_routes & _route_literals(test.source))), None)
     if route_match:
         return "must", f"test covers changed route {route_match}"
-    referenced = sorted(
-        token for token in changed_tokens if len(token) >= 4 and token.casefold() in test_folded
-    )
+    referenced = sorted(changed_tokens & _identifier_tokens(test.source))
     if referenced:
         return "must", f"test references changed module token {referenced[0]}"
     if shared:
@@ -351,24 +451,49 @@ def _read_text(path: Path) -> str:
 
 
 def _path_tokens(path: str) -> set[str]:
+    pure = PurePosixPath(path)
+    subjects = [pure.stem]
+    if pure.stem.casefold() in {"__init__", "index", "main", "app"} and pure.parent.name:
+        subjects.append(pure.parent.name)
     return {
         token.casefold()
-        for token in _TOKEN.findall(path)
+        for token in _TOKEN.findall(" ".join(subjects))
         if token.casefold() not in _IGNORED_TOKENS
     }
 
 
 def _source_tokens(source: str) -> set[str]:
-    tokens = {match.group("name").casefold() for match in _SOURCE_SYMBOL.finditer(source)}
-    for match in _FIELD.finditer(source):
-        value = match.group("quoted") or match.group("plain")
-        if value:
-            tokens.add(value.casefold())
-    return {
-        token
-        for token in tokens
-        if len(token) >= 4 and token not in _IGNORED_TOKENS
+    tokens = {
+        match.group("name").casefold()
+        for match in _SOURCE_SYMBOL.finditer(source)
+        if not match.group("name").startswith("_")
     }
+    return {token for token in tokens if len(token) >= 4 and token not in _IGNORED_TOKENS}
+
+
+def _identifier_tokens(source: str) -> set[str]:
+    return {token.casefold() for token in _TOKEN.findall(source)}
+
+
+def _route_literals(source: str) -> set[str]:
+    return {
+        route.casefold()
+        for match in _ROUTE_CALL.finditer(source)
+        if (route := match.group("route")) not in {"/", "//"} and not route.startswith(("//", "/*"))
+    }
+
+
+def _discriminative_tokens(
+    tokens: set[str], inventory: tuple[_InventoryTest, ...], repository: str
+) -> set[str]:
+    repository_tests = [test for test in inventory if test.repository == repository]
+    if not repository_tests:
+        return tokens
+    frequency: Counter[str] = Counter()
+    for test in repository_tests:
+        frequency.update(tokens & _identifier_tokens(test.source))
+    maximum_occurrences = max(3, (len(repository_tests) + 9) // 10)
+    return {token for token in tokens if frequency[token] <= maximum_occurrences}
 
 
 def _normalized_stem(path: str) -> str:

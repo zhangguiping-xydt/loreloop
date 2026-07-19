@@ -30,6 +30,7 @@ from ..security import redact_sensitive
 
 CHECK_EVENTS = {"check_passed", "check_failed"}
 DELEGATION_EVENT = "delegation_completed"
+TASK_TEST_PLAN_EVENT = "task_test_plan_created"
 
 
 class RunTraceError(Exception):
@@ -190,10 +191,21 @@ def evaluate_run(
     # check recorded before completion could only be checking work that did
     # not exist yet — pre-planted "evidence" for a run still in flight.
     after = completions[0].index if completions else -1
+    latest_test_plan = max(
+        (
+            record.index
+            for record in records
+            if record.event == TASK_TEST_PLAN_EVENT and record.payload.get("run_id") == run.run_id
+        ),
+        default=-1,
+    )
     raw_checks = [
         r
         for r in records
-        if r.event in CHECK_EVENTS and r.payload.get("run_id") == run.run_id and r.index > after
+        if r.event in CHECK_EVENTS
+        and r.payload.get("run_id") == run.run_id
+        and r.index > after
+        and (not _is_task_test_check(r) or r.index > latest_test_plan)
     ]
     latest: dict[str, EvidenceRecord] = {}
     for record in raw_checks:
@@ -306,9 +318,7 @@ def render_report(
     return "\n".join(lines)
 
 
-def _repository_state_problems(
-    checks: list[EvidenceRecord], workdir: Path | None
-) -> list[str]:
+def _repository_state_problems(checks: list[EvidenceRecord], workdir: Path | None) -> list[str]:
     """Require command checks to prove one unchanged final source state."""
     command_checks = [record for record in checks if record.payload.get("judge") == "command"]
     if not command_checks:
@@ -456,7 +466,11 @@ def _task_workflow_sections(
         lines.extend(["## Web coverage", "", f"Coverage unavailable: {_md(str(exc))}", ""])
     else:
         summary = coverage.summary
-        if summary["pages_observed"] or summary["journeys_candidate"] or summary["journeys_approved"]:
+        if (
+            summary["pages_observed"]
+            or summary["journeys_candidate"]
+            or summary["journeys_approved"]
+        ):
             lines.extend(
                 [
                     "## Web coverage",
@@ -466,8 +480,7 @@ def _task_workflow_sections(
                     f"- Page states observed: {summary['states_observed']}",
                     f"- Controls exercised: {summary['controls_exercised']} / "
                     f"{summary['controls_observed']}",
-                    f"- Controls exercised only in trial: "
-                    f"{summary['controls_trial_exercised']}",
+                    f"- Controls exercised only in trial: {summary['controls_trial_exercised']}",
                     f"- Write-gated controls: {summary['controls_write_gated']}",
                     "",
                 ]
@@ -740,3 +753,9 @@ def _check_identity(record: EvidenceRecord) -> str:
         "command": payload.get("command"),
     }
     return json.dumps(material, ensure_ascii=False, sort_keys=True)
+
+
+def _is_task_test_check(record: EvidenceRecord) -> bool:
+    return record.payload.get("judge") == "command" and str(
+        record.payload.get("check", "")
+    ).startswith("selected tests:")

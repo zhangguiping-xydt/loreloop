@@ -4,6 +4,7 @@ import sys
 import pytest
 
 from loreloop.cli import main
+from loreloop.evidence.artifacts import ArtifactStore
 from loreloop.evidence.chain import EvidenceChain
 from loreloop.report.acceptance import (
     load_run,
@@ -87,6 +88,62 @@ def test_latest_result_for_same_check_supersedes_an_earlier_failure(workdir):
     assert "Verdict: ACCEPTED" in report
     assert "Checks (1 passed / 0 failed)" in report
     assert "got 500" not in report
+
+
+def test_new_task_test_plan_supersedes_checks_from_an_older_plan(workdir):
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    endorse_run(chain, run.run_id)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    chain.append("task_test_plan_created", {"run_id": run.run_id, "plan_artifact": "old"})
+    record_command_check(
+        chain,
+        artifacts,
+        run.run_id,
+        "selected tests: obsolete_failure",
+        [sys.executable, "-c", "raise SystemExit(1)"],
+        cwd=workdir,
+    )
+    chain.append("task_test_plan_created", {"run_id": run.run_id, "plan_artifact": "new"})
+    record_command_check(
+        chain,
+        artifacts,
+        run.run_id,
+        "selected tests: corrected_plan",
+        [sys.executable, "-c", "print('passed')"],
+        cwd=workdir,
+    )
+
+    report = render_report(run, chain, artifacts)
+
+    assert "Verdict: ACCEPTED" in report
+    assert "Checks (1 passed / 0 failed)" in report
+    assert "corrected_plan" in report
+    assert "obsolete_failure" not in report
+
+
+def test_new_task_test_plan_requires_fresh_proof(workdir):
+    trace = write_trace(workdir)
+    chain = EvidenceChain.for_workdir(workdir)
+    run = load_run(trace)
+    endorse_run(chain, run.run_id)
+    artifacts = ArtifactStore.for_workdir(workdir)
+    chain.append("task_test_plan_created", {"run_id": run.run_id, "plan_artifact": "old"})
+    record_command_check(
+        chain,
+        artifacts,
+        run.run_id,
+        "selected tests: old_plan",
+        [sys.executable, "-c", "print('passed')"],
+        cwd=workdir,
+    )
+    chain.append("task_test_plan_created", {"run_id": run.run_id, "plan_artifact": "new"})
+
+    report = render_report(run, chain, artifacts)
+
+    assert "Verdict: NOT ACCEPTED" in report
+    assert "No acceptance checks were recorded" in report
 
 
 def test_acceptance_check_text_rejects_empty_control_and_oversized_values(workdir):
@@ -2691,9 +2748,7 @@ def test_cli_ingest_web_requires_playwright(workdir):
     assert main(["ingest", "--from", "web", "http://localhost:3000"]) == 2
 
 
-def test_cli_ingest_web_fails_when_exploration_captures_no_pages(
-    workdir, monkeypatch, capsys
-):
+def test_cli_ingest_web_fails_when_exploration_captures_no_pages(workdir, monkeypatch, capsys):
     class EmptyBrowser:
         def __init__(self, headed=False):
             pass
