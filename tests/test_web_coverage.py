@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from loreloop.webexplore.browser import Observation
 from loreloop.webexplore.coverage import build_web_coverage, render_web_coverage
 from loreloop.webexplore.scenarios import (
     WEB_EXPLORATION_EVENT,
+    WEB_TEST_EXECUTED_EVENT,
     ScenarioAssertion,
     WebScenario,
     approve_candidate,
@@ -165,3 +167,69 @@ def test_coverage_reports_unapproved_journey_as_candidate(tmp_path: Path) -> Non
     assert report.summary["journeys_candidate"] == 1
     assert report.journeys[0].status == "not-run"
     assert "candidate-only" in render_web_coverage(report, "json")
+
+
+def test_coverage_does_not_treat_unapproved_committed_file_as_approved(
+    tmp_path: Path,
+) -> None:
+    scenario = WebScenario(
+        "unapproved-file",
+        "Unapproved file",
+        parse_action_script(
+            {
+                "version": 1,
+                "base": "https://example.test",
+                "steps": [{"goto": "/"}],
+            }
+        ),
+        (ScenarioAssertion("title-contains", "Example"),),
+    )
+    target = tmp_path / "tests/loreloop/web/unapproved-file.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps(scenario.to_json()), encoding="utf-8")
+
+    report = build_web_coverage(
+        tmp_path,
+        EvidenceChain.for_workdir(tmp_path).verify(),
+        ArtifactStore.for_workdir(tmp_path),
+    )
+
+    assert report.summary["journeys_approved"] == 0
+    assert report.journeys == ()
+
+
+def test_coverage_ignores_execution_for_stale_scenario_digest(tmp_path: Path) -> None:
+    scenario = WebScenario(
+        "stale-execution",
+        "Stale execution",
+        parse_action_script(
+            {
+                "version": 1,
+                "base": "https://example.test",
+                "steps": [{"goto": "/"}],
+            }
+        ),
+        (ScenarioAssertion("title-contains", "Example"),),
+    )
+    chain = EvidenceChain.for_workdir(tmp_path)
+    write_candidate(tmp_path, scenario)
+    approve_candidate(tmp_path, scenario.scenario_id, chain)
+    chain.append(
+        WEB_TEST_EXECUTED_EVENT,
+        {
+            "scenario_id": scenario.scenario_id,
+            "scenario_digest": "0" * 64,
+            "status": "passed",
+            "states": [],
+        },
+    )
+
+    report = build_web_coverage(
+        tmp_path,
+        chain.verify(),
+        ArtifactStore.for_workdir(tmp_path),
+    )
+
+    assert report.summary["journeys_approved"] == 1
+    assert report.summary["journeys_passed"] == 0
+    assert report.journeys[0].status == "not-run"

@@ -2087,7 +2087,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     run = load_run(trace)
     chain = EvidenceChain.for_workdir(workdir)
     artifacts = ArtifactStore.for_workdir(workdir)
-    evaluation = evaluate_run(run, chain, artifacts)
+    evaluation = evaluate_run(run, chain, artifacts, workdir)
     report = render_report(run, chain, artifacts=artifacts, workdir=workdir)
     print(report)
     if evaluation.accepted:

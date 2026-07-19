@@ -25,7 +25,7 @@ from pathlib import Path
 
 from ..evidence.artifacts import ArtifactStore
 from ..evidence.chain import EvidenceChain, EvidenceRecord
-from ..evidence.repository_state import capture_repository_states
+from ..evidence.repository_state import capture_repository_states, repository_states_match
 from ..security import redact_sensitive
 
 CHECK_EVENTS = {"check_passed", "check_failed"}
@@ -55,6 +55,7 @@ class RunEvaluation:
     passed: list[EvidenceRecord]
     failed: list[EvidenceRecord]
     broken_artifacts: list[tuple[str, str]]
+    repository_state_problems: list[str]
     completions: list[EvidenceRecord]
 
     @property
@@ -90,6 +91,7 @@ class RunEvaluation:
             and bool(self.checks)
             and not self.failed
             and not self.broken_artifacts
+            and not self.repository_state_problems
         )
 
 
@@ -174,7 +176,10 @@ def _valid_repo_key(name: str) -> bool:
 
 
 def evaluate_run(
-    run: RunSummary, chain: EvidenceChain, artifacts: ArtifactStore | None = None
+    run: RunSummary,
+    chain: EvidenceChain,
+    artifacts: ArtifactStore | None = None,
+    workdir: Path | None = None,
 ) -> RunEvaluation:
     records = chain.verify()
     completions = [
@@ -201,6 +206,7 @@ def evaluate_run(
         passed=passed,
         failed=failed,
         broken_artifacts=_audit_artifacts(checks, artifacts),
+        repository_state_problems=_repository_state_problems(checks, workdir),
         completions=completions,
     )
 
@@ -212,11 +218,12 @@ def render_report(
     workdir: Path | None = None,
 ) -> str:
     records = chain.verify()
-    evaluation = evaluate_run(run, chain, artifacts)
+    evaluation = evaluate_run(run, chain, artifacts, workdir)
     checks = evaluation.checks
     passed = evaluation.passed
     failed = evaluation.failed
     broken_artifacts = evaluation.broken_artifacts
+    repository_state_problems = evaluation.repository_state_problems
     verdict = "ACCEPTED" if evaluation.accepted else "NOT ACCEPTED"
 
     # Run metadata comes from the chain record when it exists; the trace is a
@@ -286,6 +293,10 @@ def render_report(
             for sha, problem in broken_artifacts:
                 lines.append(f"- artifact `{sha[:16]}`: {_md(problem)}")
             lines.append("")
+        if repository_state_problems:
+            lines += ["### Repository-state consistency failures", ""]
+            lines.extend(f"- {_md(problem)}" for problem in repository_state_problems)
+            lines.append("")
         if failed:
             lines += ["### Failure details", ""]
             for rec in failed:
@@ -293,6 +304,32 @@ def render_report(
                 lines.append(f"- **{_md(rec.payload.get('check', '?'))}**: {_md(detail)}")
             lines.append("")
     return "\n".join(lines)
+
+
+def _repository_state_problems(
+    checks: list[EvidenceRecord], workdir: Path | None
+) -> list[str]:
+    """Require command checks to prove one unchanged final source state."""
+    command_checks = [record for record in checks if record.payload.get("judge") == "command"]
+    if not command_checks:
+        return []
+    problems: list[str] = []
+    states: list[object] = []
+    for record in command_checks:
+        state = record.payload.get("repository_states")
+        if not isinstance(state, dict):
+            problems.append(
+                f"command check {record.payload.get('check')!r} has no repository-state binding"
+            )
+            continue
+        states.append(state)
+    if states and any(state != states[0] for state in states[1:]):
+        problems.append("command checks were recorded against different repository states")
+    if workdir is not None and states:
+        matches, reason = repository_states_match(states[-1], workdir)
+        if not matches:
+            problems.append(reason)
+    return problems
 
 
 def _task_workflow_sections(
@@ -498,6 +535,10 @@ def _audit_artifacts(
                 broken.append((sha, "command artifact exit code does not match the chain record"))
             if payload.get("exit_code") == 0 and data.get("timed_out"):
                 broken.append((sha, "successful command check is marked timed out"))
+            if data.get("repository_states") != payload.get("repository_states"):
+                broken.append(
+                    (sha, "command artifact repository state does not match the chain record")
+                )
         elif data is not None:
             broken.append((sha, f"unsupported evidence artifact type {artifact_type!r}"))
 

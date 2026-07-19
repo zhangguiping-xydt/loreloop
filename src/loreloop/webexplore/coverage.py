@@ -16,8 +16,8 @@ from .scenarios import (
     WEB_TEST_EXECUTED_EVENT,
     WEB_TEST_TRIALED_EVENT,
     WebScenario,
-    list_approved_scenarios,
     list_candidate_scenarios,
+    list_chain_approved_scenarios,
 )
 
 _WRITE_CONTROL = re.compile(
@@ -120,6 +120,11 @@ def build_web_coverage(
     trials: dict[str, EvidenceRecord] = {}
     exercised: dict[str, set[tuple[str, str]]] = {}
     trial_exercised: dict[str, set[tuple[str, str]]] = {}
+    scenarios: dict[str, tuple[str, WebScenario]] = {}
+    for _, scenario in list_candidate_scenarios(workdir):
+        scenarios[scenario.scenario_id] = ("candidate", scenario)
+    for _, scenario in list_chain_approved_scenarios(workdir, records):
+        scenarios[scenario.scenario_id] = ("approved", scenario)
 
     for record in records:
         if record.event == WEB_EXPLORATION_EVENT:
@@ -127,11 +132,20 @@ def build_web_coverage(
                 _add_artifact_page(pages, page, artifacts, tested=False, trialed=False)
         elif record.event == WEB_TEST_EXECUTED_EVENT:
             scenario_id = record.payload.get("scenario_id")
-            if isinstance(scenario_id, str):
+            current = scenarios.get(scenario_id) if isinstance(scenario_id, str) else None
+            if (
+                current is not None
+                and current[0] == "approved"
+                and record.payload.get("scenario_digest") == current[1].digest
+            ):
                 executions[scenario_id] = record
         elif record.event == WEB_TEST_TRIALED_EVENT:
             scenario_id = record.payload.get("scenario_id")
-            if isinstance(scenario_id, str):
+            current = scenarios.get(scenario_id) if isinstance(scenario_id, str) else None
+            if (
+                current is not None
+                and record.payload.get("scenario_digest") == current[1].digest
+            ):
                 trials[scenario_id] = record
 
     for record in executions.values():
@@ -217,12 +231,6 @@ def build_web_coverage(
             kind, label = key
             if status != "exercised" and _control_exercised(kind, label, labels):
                 page.controls[key] = "trial-exercised"
-
-    scenarios: dict[str, tuple[str, WebScenario]] = {}
-    for _, scenario in list_candidate_scenarios(workdir):
-        scenarios[scenario.scenario_id] = ("candidate", scenario)
-    for _, scenario in list_approved_scenarios(workdir):
-        scenarios[scenario.scenario_id] = ("approved", scenario)
 
     journeys: list[JourneyCoverage] = []
     for scenario_id, (authority, scenario) in sorted(scenarios.items()):

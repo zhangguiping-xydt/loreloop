@@ -316,7 +316,8 @@ an explicit `--allow-writes`, and password/token/secret/API-key fields are not
 recorded. Each replay stores an evidence-backed page state after every successful
 step, plus its trace, final observation, assertions, and result on the chain.
 `web test coverage` separates observed-only controls, exercised controls, and
-write-gated controls; it never treats a visible button as tested. With
+write-gated controls; it never treats a visible button as tested, and only a
+current scenario digest backed by a chain approval is reported as approved. With
 `--include-web`, the latest governed result also appears as an acceptance fact
 in the package.
 

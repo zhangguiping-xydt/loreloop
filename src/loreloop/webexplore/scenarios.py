@@ -218,6 +218,22 @@ def list_approved_scenarios(workdir: Path) -> tuple[tuple[Path, WebScenario], ..
     return tuple((path, load_web_scenario(path)) for path in sorted(paths))
 
 
+def list_chain_approved_scenarios(
+    workdir: Path, records: list[EvidenceRecord]
+) -> tuple[tuple[Path, WebScenario], ...]:
+    """Return only committed scenarios whose current digest has chain authority."""
+    approved: dict[str, str] = {}
+    for record in records:
+        if record.event == WEB_TEST_APPROVED_EVENT:
+            scenario_id, digest = _approval_identity(record, workdir)
+            approved[scenario_id] = digest
+    return tuple(
+        (path, scenario)
+        for path, scenario in list_approved_scenarios(workdir)
+        if approved.get(scenario.scenario_id) == scenario.digest
+    )
+
+
 def write_candidate(workdir: Path, scenario: WebScenario) -> Path:
     root = _candidate_directory(workdir, create=True)
     path = root / f"{scenario.scenario_id}.json"

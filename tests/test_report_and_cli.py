@@ -350,6 +350,58 @@ def test_command_check_records_reauditable_deterministic_evidence(workdir):
     assert "Verdict: ACCEPTED" in render_report(run, chain, artifacts)
 
 
+def test_report_rejects_command_checks_from_different_repository_states(workdir):
+    import subprocess
+
+    from loreloop.evidence.artifacts import ArtifactStore
+
+    subprocess.run(["git", "init", "-q"], cwd=workdir, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=workdir, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=workdir, check=True)
+    target = workdir / "value.txt"
+    target.write_text("0", encoding="utf-8")
+    subprocess.run(["git", "add", "value.txt"], cwd=workdir, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=workdir, check=True)
+    trace = write_trace(workdir)
+    run = load_run(trace)
+    chain = EvidenceChain.for_workdir(workdir)
+    endorse_run(chain, run.run_id)
+    artifacts = ArtifactStore.for_workdir(workdir)
+
+    target.write_text("1", encoding="utf-8")
+    record_command_check(
+        chain,
+        artifacts,
+        run.run_id,
+        "value is one",
+        [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; assert Path('value.txt').read_text() == '1'",
+        ],
+        cwd=workdir,
+    )
+    target.write_text("2", encoding="utf-8")
+    record_command_check(
+        chain,
+        artifacts,
+        run.run_id,
+        "value is two",
+        [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; assert Path('value.txt').read_text() == '2'",
+        ],
+        cwd=workdir,
+    )
+
+    report = render_report(run, chain, artifacts, workdir=workdir)
+
+    assert "Verdict: NOT ACCEPTED" in report
+    assert "Repository-state consistency failures" in report
+    assert "different repository states" in report
+
+
 def test_command_evidence_redacts_environment_and_labeled_secrets(workdir, monkeypatch):
     from loreloop.evidence.artifacts import ArtifactStore
 
