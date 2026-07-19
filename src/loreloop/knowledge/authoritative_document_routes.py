@@ -118,9 +118,11 @@ DOCUMENT_ROUTES = (
         frozenset(
             {
                 DocumentRowKind.INTERFACE,
+                DocumentRowKind.CONTRACT_FIELD,
                 DocumentRowKind.COMMAND,
                 DocumentRowKind.PERMISSION,
                 DocumentRowKind.ERROR,
+                DocumentRowKind.IMPLEMENTATION_FACT,
                 DocumentRowKind.WEB_INTERFACE,
             }
         ),
@@ -144,6 +146,7 @@ ROUTED_ROW_KINDS = frozenset(row_kind for route in DOCUMENT_ROUTES for row_kind 
 
 CANONICAL_DOCUMENT_OWNER = {
     DocumentRowKind.INTERFACE: OptionalDocumentFamily.INTERFACE_CONTRACT,
+    DocumentRowKind.CONTRACT_FIELD: OptionalDocumentFamily.INTERFACE_CONTRACT,
     DocumentRowKind.COMMAND: OptionalDocumentFamily.INTERFACE_CONTRACT,
     DocumentRowKind.WEB_INTERFACE: OptionalDocumentFamily.INTERFACE_CONTRACT,
     DocumentRowKind.UI_SURFACE: RequiredDocumentFamily.USER_GUIDE,
@@ -184,6 +187,7 @@ for _row_kind, _owner in CANONICAL_DOCUMENT_OWNER.items():
 
 SECTION_ROUTES = {
     DocumentRowKind.INTERFACE: ("interfaces", "HTTP 接口"),
+    DocumentRowKind.CONTRACT_FIELD: ("contract-fields", "接口数据结构"),
     DocumentRowKind.COMMAND: ("commands", "命令入口"),
     DocumentRowKind.UI_SURFACE: ("ui-surfaces", "用户界面与操作入口"),
     DocumentRowKind.MODULE: ("modules", "模块与符号"),

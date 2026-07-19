@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 from .authoritative_records import (
+    ContractFieldRecord,
     DetectionError,
     DetectionReport,
     InterfaceRecord,
@@ -87,7 +88,13 @@ def _blocks(source: str) -> tuple[_Block, ...]:
     for match in _BLOCK.finditer(source):
         opening = match.end() - 1
         blocks.append(
-            _Block(match.group("kind"), match.group("name"), match.start(), opening, _closing(source, opening))
+            _Block(
+                match.group("kind"),
+                match.group("name"),
+                match.start(),
+                opening,
+                _closing(source, opening),
+            )
         )
     return tuple(blocks)
 
@@ -112,7 +119,9 @@ def _symbols(
         if block.kind == "message":
             fields = tuple(_FIELD.finditer(body))
             stray = re.search(r"\b(?:repeated|optional|required)\b[^;{}]*;", body)
-            if stray is not None and not any(item.start() <= stray.start() < item.end() for item in fields):
+            if stray is not None and not any(
+                item.start() <= stray.start() < item.end() for item in fields
+            ):
                 raise DetectionError(f"invalid protobuf field in message {block.name}")
             values = ", ".join(
                 f"{item.group('name')}:{item.group('type').replace(' ', '')}"
@@ -121,7 +130,9 @@ def _symbols(
             )
             signature = f"message {block.name}({values})"
         else:
-            values = ", ".join(f"{item.group(1)}={item.group(2)}" for item in _ENUM_VALUE.finditer(body))
+            values = ", ".join(
+                f"{item.group(1)}={item.group(2)}" for item in _ENUM_VALUE.finditer(body)
+            )
             signature = f"enum {block.name}({values})"
         records.append(
             SymbolRecord(
@@ -183,6 +194,42 @@ def _interfaces(
     return tuple(records)
 
 
+def _contract_fields(
+    masked: str,
+    source: str,
+    alias: str,
+    path: str,
+    package: str | None,
+    blocks: tuple[_Block, ...],
+) -> tuple[ContractFieldRecord, ...]:
+    records: list[ContractFieldRecord] = []
+    for block in blocks:
+        if block.kind != "message":
+            continue
+        body = masked[block.opening + 1 : block.closing]
+        owner = _qualified(package, block.name)
+        for match in _FIELD.finditer(body):
+            data_type = match.group("type").replace(" ", "")
+            if match.group("label") == "repeated":
+                data_type += "[]"
+            label = match.group("label")
+            records.append(
+                ContractFieldRecord(
+                    owner,
+                    match.group("name"),
+                    data_type,
+                    True if label == "required" else False if label == "optional" else None,
+                    True if label == "optional" else None,
+                    SourceRef(
+                        alias,
+                        path,
+                        source.count("\n", 0, block.opening + 1 + match.start()) + 1,
+                    ),
+                )
+            )
+    return tuple(records)
+
+
 def detect_proto_source(source: str, repository_alias: str, path: str) -> DetectionReport:
     """Extract protobuf message, enum, and service RPC contracts without protoc."""
     masked = _masked(source)
@@ -195,5 +242,6 @@ def detect_proto_source(source: str, repository_alias: str, path: str) -> Detect
         raise DetectionError(f"invalid protobuf source: {path}")
     return DetectionReport(
         interfaces=_interfaces(masked, source, repository_alias, path, package, blocks),
+        contract_fields=_contract_fields(masked, source, repository_alias, path, package, blocks),
         symbols=_symbols(masked, source, repository_alias, path, package, blocks),
     )

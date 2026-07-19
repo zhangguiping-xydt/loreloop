@@ -5,6 +5,8 @@ from loreloop.knowledge.authoritative_detector_extended import (
     is_extended_source,
 )
 from loreloop.knowledge.authoritative_detector_platform import detect_platform_source
+from loreloop.knowledge.authoritative_records import merge_reports
+from loreloop.knowledge.authoritative_report_normalize import normalize_detection_report
 
 
 def test_jvm_detector_extracts_java_and_kotlin_facts_without_comment_examples() -> None:
@@ -38,17 +40,14 @@ class HealthRoutes {
     ]
     assert java_report.interfaces[0].return_type == "User"
     assert tuple(
-        (item.name, item.annotation, item.required)
-        for item in java_report.interfaces[0].parameters
+        (item.name, item.annotation, item.required) for item in java_report.interfaces[0].parameters
     ) == (("id", "String", True),)
     assert {item.qualified_name for item in java_report.symbols} == {"UserController", "update"}
     assert [item.key for item in java_report.configurations] == ["APP_REGION"]
     assert [item.name for item in java_report.dependencies] == [
         "org.springframework.web.bind.annotation.PostMapping"
     ]
-    assert [(item.method, item.path) for item in kotlin_report.interfaces] == [
-        ("GET", "/health")
-    ]
+    assert [(item.method, item.path) for item in kotlin_report.interfaces] == [("GET", "/health")]
     assert {item.qualified_name for item in kotlin_report.symbols} == {
         "HealthRoutes",
         "install",
@@ -72,9 +71,7 @@ public class UserController {
 
     interface = report.interfaces[0]
     assert interface.return_type == "Response<UserDto>"
-    assert tuple(
-        (item.name, item.annotation, item.required) for item in interface.parameters
-    ) == (
+    assert tuple((item.name, item.annotation, item.required) for item in interface.parameters) == (
         ("id", "String", True),
         ("locale", "String", False),
         ("request", "UserRequest", True),
@@ -82,7 +79,7 @@ public class UserController {
 
 
 def test_go_detector_extracts_routes_symbols_environment_and_imports() -> None:
-    source = r'''
+    source = r"""
 package api
 import (
     "net/http"
@@ -97,7 +94,7 @@ func routes(router *gin.Engine) {
     _ = os.Getenv("SERVICE_REGION")
     // router.DELETE("/fake", remove)
 }
-'''
+"""
 
     report = detect_extended_source(source, "backend", "api/server.go")
 
@@ -119,7 +116,7 @@ func routes(router *gin.Engine) {
 
 
 def test_rust_detector_extracts_actix_axum_symbols_env_and_external_crates() -> None:
-    source = r'''
+    source = r"""
 use axum::{routing::post, Router};
 use std::env;
 pub struct AppState {}
@@ -131,7 +128,7 @@ fn routes() -> Router {
 }
 // #[delete("/fake")] fn fake() {}
 /* outer /* inner */ #[delete("/also-fake")] fn also_fake() {} */
-'''
+"""
 
     report = detect_extended_source(source, "backend", "src/main.rs")
 
@@ -145,7 +142,7 @@ fn routes() -> Router {
 
 
 def test_csharp_detector_extracts_controller_and_minimal_api_facts() -> None:
-    source = r'''
+    source = r"""
 using Microsoft.AspNetCore.Mvc;
 [Route("api/[controller]")]
 public class UsersController {
@@ -157,7 +154,7 @@ public class UsersController {
 }
 app.MapPost("/users", CreateUser);
 // app.MapDelete("/fake", DeleteUser);
-'''
+"""
 
     report = detect_extended_source(source, "backend", "Controllers/UsersController.cs")
 
@@ -171,7 +168,7 @@ app.MapPost("/users", CreateUser);
 
 
 def test_csharp_detector_extracts_legacy_ui_asmx_config_and_data_access_facts() -> None:
-    source = r'''
+    source = r"""
 using System.Web.Services;
 public partial class EmployeeForm : System.Windows.Forms.Form {
     string keySync = "SyncEmpSpan";
@@ -182,7 +179,7 @@ public partial class EmployeeForm : System.Windows.Forms.Form {
     [WebMethod]
     public string SyncEmployee(string employeeId) { return employeeId; }
 }
-'''
+"""
 
     report = detect_extended_source(source, ".", "Client/EmployeeForm.asmx.cs")
 
@@ -200,13 +197,65 @@ public partial class EmployeeForm : System.Windows.Forms.Form {
     }
 
 
+def test_csharp_interface_contract_recursively_keeps_only_reachable_dto_fields() -> None:
+    service = r"""
+using System.Web.Services;
+using Acme.Contracts;
+public class EmployeeService : WebService {
+    [WebMethod]
+    public EmployeeResponse GetEmployee(EmployeeRequest request) { return null; }
+}
+"""
+    models = r"""
+namespace Acme.Contracts {
+    public class EmployeeRequest {
+        public MessageHeader Header { get; set; }
+        public string EmployeeId { get; set; }
+    }
+    public class MessageHeader {
+        public string SourceSystem { get; set; }
+    }
+    public class EmployeeResponse {
+        public string Status { get; set; }
+        public Employee Result { get; set; }
+    }
+    public class Employee {
+        public string Name { get; set; }
+        public int Age { get; set; }
+    }
+    public class UnusedInternalModel {
+        public string SecretNote { get; set; }
+    }
+}
+"""
+
+    report = normalize_detection_report(
+        merge_reports(
+            detect_extended_source(service, ".", "Service/EmployeeService.asmx.cs"),
+            detect_extended_source(models, ".", "Contracts/EmployeeModels.cs"),
+        )
+    )
+
+    assert {field.owner_type for field in report.contract_fields} == {
+        "Acme.Contracts.EmployeeRequest",
+        "Acme.Contracts.MessageHeader",
+        "Acme.Contracts.EmployeeResponse",
+        "Acme.Contracts.Employee",
+    }
+    age = next(field for field in report.contract_fields if field.name == "Age")
+    assert age.data_type == "int"
+    assert age.required is None
+    assert age.nullable is False
+    assert not [field for field in report.contract_fields if field.name == "SecretNote"]
+
+
 def test_csharp_web_service_proxy_is_not_reported_as_a_host() -> None:
-    source = r'''
+    source = r"""
 using System.Web.Services;
 public class ObjectHelperProxy {
     private System.Web.Services.Protocols.SoapHttpClientProtocol client;
 }
-'''
+"""
 
     report = detect_extended_source(
         source, ".", "Center/Business/Web References/ObjectHelper/Reference.cs"
@@ -216,7 +265,7 @@ public class ObjectHelperProxy {
 
 
 def test_csharp_detector_extracts_legacy_workflow_and_embedded_sql_facts() -> None:
-    source = r'''
+    source = r"""
 public class Synchronization_Dept {
     public void StartRun() {
         this.RunTimeSpan = 240;
@@ -234,11 +283,9 @@ public class Synchronization_Dept {
         try { DoWork(); } catch (InvalidOperationException exc) { Log(exc); }
     }
 }
-'''
+"""
 
-    report = detect_extended_source(
-        source, ".", "Center/Business/Business/Synchronization_Dept.cs"
-    )
+    report = detect_extended_source(source, ".", "Center/Business/Business/Synchronization_Dept.cs")
     facts = {(item.predicate, item.object, item.detail) for item in report.implementation_facts}
 
     assert ("reads", "HAS_ONELEVEL_DIC", "SQL text") in facts
@@ -329,7 +376,7 @@ spec:
 
 
 def test_dotnet_detector_extracts_output_framework_references_and_build_targets() -> None:
-    project = '''
+    project = """
 <Project>
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -338,13 +385,13 @@ def test_dotnet_detector_extracts_output_framework_references_and_build_targets(
   </PropertyGroup>
   <ItemGroup><Reference Include="DevExpress.Data, Version=1.0.0.0" /></ItemGroup>
 </Project>
-'''
-    build = '''
+"""
+    build = """
 <project>
   <property name="BuildMode" value="release" />
   <target name="compile" />
 </project>
-'''
+"""
 
     project_report = detect_extended_source(project, ".", "Client/Client.csproj")
     build_report = detect_extended_source(build, ".", "Build/Build.XML")
@@ -358,7 +405,6 @@ def test_dotnet_detector_extracts_output_framework_references_and_build_targets(
     assert [(item.predicate, item.object) for item in build_report.implementation_facts] == [
         ("configures", "build target:compile")
     ]
-
 
 
 def test_dockerfile_ignores_multiline_build_commands() -> None:

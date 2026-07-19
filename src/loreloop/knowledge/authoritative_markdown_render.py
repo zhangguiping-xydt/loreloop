@@ -80,7 +80,7 @@ _HUMAN_V2_NAVIGATION = {
         "文档性质",
         "明确需求材料",
         "角色与入口矩阵",
-        "源码反构的现状规格",
+        "当前实现规格（As-is）",
         "现状规格详情",
         "数据与能力映射",
         "实现约束与权限",
@@ -109,11 +109,17 @@ _HUMAN_V2_NAVIGATION = {
     ),
     "acceptance": (
         "正式验收材料",
-        "源码反构的验收候选",
+        "基于当前实现的验收候选",
         "验收覆盖矩阵",
         "已存在测试证据",
     ),
-    "interface_contract": ("接口域索引", "HTTP 接口"),
+    "interface_contract": (
+        "契约使用说明",
+        "接口域索引",
+        "HTTP 接口与服务操作",
+        "公共数据结构",
+        "契约完整性清单",
+    ),
     "database_design": ("数据域总览", "核心实体", "核心表字段详情", "全量实体索引"),
 }
 
@@ -2336,7 +2342,7 @@ def _v2_requirements(
         "## 文档性质",
         "",
         (
-            f"当前快照包含 {len(explicit)} 条明确需求材料；下方另列源码反构的已实现行为。"
+            f"当前快照包含 {len(explicit)} 条明确需求材料；下方另列由源码证明的当前实现行为。"
             if explicit
             else "当前没有明确提交的产品需求材料。本文将源码中已实现的行为整理为“现状规格”，不能替代未来需求决策。"
         ),
@@ -2380,7 +2386,7 @@ def _v2_requirements(
         )
     lines.extend(
         [
-            "## 源码反构的现状规格",
+            "## 当前实现规格（As-is）",
             "",
             "| 编号 | 已实现行为 | 使用者/调用方 | 触发方式 | 已确认输入 | 已确认输出或副作用 | 证据 |",
             "|---|---|---|---|---|---|---|",
@@ -2759,7 +2765,7 @@ def _v2_detailed_design(
                 "",
                 *(f"{step}. {_cell(item)}" for step, item in enumerate(behaviors, 1)),
                 "",
-                "#### 原子实现证据",
+                "#### 关键实现依据",
                 "",
                 *(
                     (f"- {item}" for item in fact_lines)
@@ -2944,7 +2950,7 @@ def _v2_user_guide(document: MarkdownDocument, evidence: dict[str, EvidenceLocat
     lines = [
         "## 使用边界",
         "",
-        "本文是源码反构的入口手册：可确认页面、命令和事件，但不会把事件处理器名称扩写成未经验证的完整操作步骤。",
+        "本文是基于当前实现生成的入口手册：可确认页面、命令和事件，但不会把事件处理器名称扩写成未经验证的完整操作步骤。",
         "",
         "## 用户入口与可执行操作",
         "",
@@ -3058,7 +3064,7 @@ def _v2_acceptance(document: MarkdownDocument, evidence: dict[str, EvidenceLocat
         lines.extend(["当前没有提交态正式验收条款。", ""])
     lines.extend(
         [
-            "## 源码反构的验收候选",
+            "## 基于当前实现的验收候选",
             "",
             "以下场景用于理解和补测试，不代表已经执行或通过。每个 Then 只描述源码能够证明的副作用。",
             "",
@@ -3138,27 +3144,475 @@ def _v2_acceptance(document: MarkdownDocument, evidence: dict[str, EvidenceLocat
     return [*lines, ""]
 
 
+_CONTRACT_SCALARS = frozenset(
+    {
+        "any",
+        "bool",
+        "boolean",
+        "byte",
+        "char",
+        "datetime",
+        "dateonly",
+        "decimal",
+        "dict",
+        "dictionary",
+        "double",
+        "dynamic",
+        "float",
+        "guid",
+        "int",
+        "int16",
+        "int32",
+        "int64",
+        "integer",
+        "list",
+        "long",
+        "map",
+        "nullable",
+        "object",
+        "short",
+        "single",
+        "stream",
+        "string",
+        "timespan",
+        "uint",
+        "uint16",
+        "uint32",
+        "uint64",
+        "void",
+    }
+)
+
+
+def _split_contract_items(value: str) -> tuple[str, ...]:
+    items: list[str] = []
+    start = 0
+    depth = 0
+    for index, character in enumerate(value):
+        if character in "<([{":
+            depth += 1
+        elif character in ">)]}" and depth:
+            depth -= 1
+        elif character == "," and depth == 0:
+            item = value[start:index].strip()
+            if item:
+                items.append(item)
+            start = index + 1
+    item = value[start:].strip()
+    if item:
+        items.append(item)
+    return tuple(items)
+
+
+def _contract_parameters(value: object) -> tuple[tuple[str, str, bool], ...]:
+    if not isinstance(value, str) or not value.strip():
+        return ()
+    parameters: list[tuple[str, str, bool]] = []
+    for item in _split_contract_items(value):
+        name, separator, annotation = item.partition(":")
+        if not separator:
+            parameters.append((item, "-", False))
+            continue
+        no_default = annotation.endswith("*")
+        parameters.append((name.strip(), annotation.rstrip("*").strip() or "-", no_default))
+    return tuple(parameters)
+
+
+def _contract_type_names(value: str) -> tuple[str, ...]:
+    names = tuple(
+        name
+        for name in re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", value)
+        if name.rsplit(".", 1)[-1].casefold() not in _CONTRACT_SCALARS
+    )
+    return tuple(dict.fromkeys(names))
+
+
+def _opaque_contract_type(value: str) -> bool:
+    compact = value.replace("?", "").replace("[]", "").strip().casefold()
+    leaf = compact.rsplit(".", 1)[-1]
+    return leaf in {"any", "dataset", "datatable", "dynamic", "object"}
+
+
+def _contract_field_index(
+    rows: list[MarkdownRow], evidence: dict[str, EvidenceLocation]
+) -> tuple[dict[str, list[MarkdownRow]], dict[str, set[str]]]:
+    by_owner: dict[str, list[MarkdownRow]] = defaultdict(list)
+    aliases: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        owner = _values(row).get("owner_type")
+        if not isinstance(owner, str) or not owner:
+            continue
+        repository = _repository(row, evidence)
+        key = f"{repository}\0{owner}"
+        by_owner[key].append(row)
+        aliases[f"{repository}\0{owner.rsplit('.', 1)[-1].casefold()}"].add(owner)
+    return by_owner, aliases
+
+
+def _resolve_contract_owner(
+    repository: str,
+    annotation: str,
+    by_owner: dict[str, list[MarkdownRow]],
+    aliases: dict[str, set[str]],
+) -> str | None:
+    for name in _contract_type_names(annotation):
+        exact = f"{repository}\0{name}"
+        if exact in by_owner:
+            return name
+        candidates = aliases.get(f"{repository}\0{name.rsplit('.', 1)[-1].casefold()}", set())
+        if len(candidates) == 1:
+            return next(iter(candidates))
+    return None
+
+
+def _expanded_contract_fields(
+    repository: str,
+    annotation: str,
+    prefix: str,
+    by_owner: dict[str, list[MarkdownRow]],
+    aliases: dict[str, set[str]],
+    evidence: dict[str, EvidenceLocation],
+    *,
+    depth: int = 0,
+    stack: tuple[str, ...] = (),
+) -> list[tuple[str, str, str, str, EvidenceLocation | None]]:
+    owner = _resolve_contract_owner(repository, annotation, by_owner, aliases)
+    if owner is None or owner in stack or depth >= 6:
+        return []
+    expanded: list[tuple[str, str, str, str, EvidenceLocation | None]] = []
+    for row in by_owner.get(f"{repository}\0{owner}", ()):
+        values = _values(row)
+        name = str(values.get("name") or "-")
+        data_type = str(values.get("data_type") or "-")
+        required = values.get("required")
+        nullable = values.get("nullable")
+        requirement = (
+            "源码显式必填" if required is True else "可选" if required is False else "未确认"
+        )
+        if nullable is True:
+            requirement += "；可空"
+        elif nullable is False:
+            requirement += "；不可空类型"
+        path = f"{prefix}.{name}" if prefix else name
+        expanded.append((path, data_type, requirement, owner, _location(row, evidence)))
+        if len(expanded) >= 240:
+            break
+        expanded.extend(
+            _expanded_contract_fields(
+                repository,
+                data_type,
+                path,
+                by_owner,
+                aliases,
+                evidence,
+                depth=depth + 1,
+                stack=(*stack, owner),
+            )
+        )
+        if len(expanded) >= 240:
+            break
+    return expanded[:240]
+
+
+def _interface_identity(values: dict[str, Scalar]) -> tuple[str, str, str]:
+    raw_path = str(values.get("path") or values.get("locator") or "/")
+    if "#" in raw_path:
+        endpoint, operation = raw_path.rsplit("#", 1)
+    else:
+        endpoint = raw_path
+        operation = str(values.get("name") or "-")
+    return endpoint, operation, str(values.get("method") or "-")
+
+
+def _interface_related_facts(
+    row: MarkdownRow,
+    rows: list[MarkdownRow],
+    evidence: dict[str, EvidenceLocation],
+) -> list[MarkdownRow]:
+    values = _values(row)
+    name = str(values.get("name") or "").casefold()
+    location = _location(row, evidence)
+    related: list[MarkdownRow] = []
+    for candidate in rows:
+        candidate_values = _values(candidate)
+        subject = str(candidate_values.get("subject") or candidate_values.get("name") or "")
+        candidate_location = _location(candidate, evidence)
+        if (
+            name
+            and subject.casefold() == name
+            and location is not None
+            and candidate_location is not None
+            and location.repository == candidate_location.repository
+            and location.path == candidate_location.path
+        ):
+            related.append(candidate)
+    return related
+
+
 def _v2_interfaces(document: MarkdownDocument, evidence: dict[str, EvidenceLocation]) -> list[str]:
-    lines = _render_interfaces(document, evidence)
-    interfaces = _kind_rows(document, "InterfaceRow", "CommandRow", "WebInterfaceRow")
+    interfaces = _kind_rows(document, "InterfaceRow", "CommandRow")
+    fields = _kind_rows(document, "ContractFieldRow")
     permissions = _kind_rows(document, "PermissionRow")
     errors = _kind_rows(document, "ErrorRow")
-    incomplete = sum(
-        not _values(row).get("parameters") or not _values(row).get("return_type")
-        for row in interfaces
-    )
+    facts = _kind_rows(document, "ImplementationFactRow")
+    by_owner, aliases = _contract_field_index(fields, evidence)
+    grouped: dict[tuple[str, str], list[MarkdownRow]] = defaultdict(list)
+    completeness: list[tuple[str, str, bool, bool, bool, bool]] = []
+    for row in interfaces:
+        values = _values(row)
+        location = _location(row, evidence)
+        repository = location.repository if location is not None else "-"
+        endpoint, _, _ = _interface_identity(values)
+        grouped[(repository, _domain(endpoint))].append(row)
+
+    lines = [
+        "## 契约使用说明",
+        "",
+        "本文记录当前实现能够证明的接口契约。接口路径、操作、代码签名和展开后的数据字段可直接用于现状联调；鉴权、业务必填、错误码、幂等性和运行地址只有在源码明确表达时才成立。",
+        "",
+        "> 参数后的“无默认值”仅描述代码调用签名，不等同于业务必填；旧版 C# 的 `string` 等引用类型在没有注解时统一标为“可空性未确认”。",
+        "",
+        "## 接口域索引",
+        "",
+        "| 仓库 | 接口域 | 接口数 | 协议/方法 | 请求结构 | 响应结构 |",
+        "|---|---|---:|---|---:|---:|",
+    ]
+    for (repository, domain), rows in sorted(grouped.items()):
+        methods: set[str] = set()
+        request_complete = 0
+        response_complete = 0
+        for row in rows:
+            values = _values(row)
+            methods.add(str(values.get("method") or "-"))
+            parameters = _contract_parameters(values.get("parameters"))
+            request_ok = True
+            for _, annotation, _ in parameters:
+                if _opaque_contract_type(annotation) or (
+                    _contract_type_names(annotation)
+                    and _resolve_contract_owner(repository, annotation, by_owner, aliases) is None
+                ):
+                    request_ok = False
+            response = str(values.get("return_type") or "")
+            response_ok = bool(response) and not _opaque_contract_type(response)
+            if (
+                response_ok
+                and _contract_type_names(response)
+                and _resolve_contract_owner(repository, response, by_owner, aliases) is None
+            ):
+                response_ok = False
+            request_complete += request_ok
+            response_complete += response_ok
+        lines.append(
+            f"| `{_cell(repository)}` | `{_cell(domain)}` | {len(rows)} | "
+            f"{_cell(', '.join(sorted(methods)))} | {request_complete}/{len(rows)} | "
+            f"{response_complete}/{len(rows)} |"
+        )
+    lines.extend(["", "## HTTP 接口与服务操作", ""])
+    interface_number = 0
+    used_owners: set[tuple[str, str]] = set()
+    for (repository, domain), rows in sorted(grouped.items()):
+        lines.extend([f"### {_cell(repository)} · {_cell(domain)}", ""])
+        for row in rows:
+            interface_number += 1
+            values = _values(row)
+            endpoint, operation, method = _interface_identity(values)
+            name = str(values.get("name") or operation)
+            parameters = _contract_parameters(values.get("parameters"))
+            response = str(values.get("return_type") or "-")
+            request_rows: list[tuple[str, str, str, str, EvidenceLocation | None]] = []
+            request_complete = True
+            for parameter_name, annotation, no_default in parameters:
+                request_rows.append(
+                    (
+                        parameter_name,
+                        annotation,
+                        "无默认值；业务必填未确认" if no_default else "有默认值或可选声明",
+                        "方法参数",
+                        _location(row, evidence),
+                    )
+                )
+                owner = _resolve_contract_owner(repository, annotation, by_owner, aliases)
+                if owner is not None:
+                    used_owners.add((repository, owner))
+                    request_rows.extend(
+                        _expanded_contract_fields(
+                            repository,
+                            annotation,
+                            parameter_name,
+                            by_owner,
+                            aliases,
+                            evidence,
+                        )
+                    )
+                elif _contract_type_names(annotation):
+                    request_complete = False
+                elif _opaque_contract_type(annotation):
+                    request_complete = False
+            response_rows = _expanded_contract_fields(
+                repository,
+                response,
+                "response",
+                by_owner,
+                aliases,
+                evidence,
+            )
+            response_owner = _resolve_contract_owner(repository, response, by_owner, aliases)
+            if response_owner is not None:
+                used_owners.add((repository, response_owner))
+            response_complete = (
+                bool(response and response != "-")
+                and not _opaque_contract_type(response)
+                and (not _contract_type_names(response) or bool(response_rows))
+            )
+            related_permissions = _interface_related_facts(row, permissions, evidence)
+            related_errors = _interface_related_facts(row, errors, evidence)
+            related_facts = _interface_related_facts(row, facts, evidence)
+            reads = sorted(
+                {
+                    str(_values(item).get("object"))
+                    for item in related_facts
+                    if _values(item).get("predicate") == "reads"
+                }
+            )
+            writes = sorted(
+                {
+                    str(_values(item).get("object"))
+                    for item in related_facts
+                    if _values(item).get("predicate") == "writes"
+                }
+            )
+            controls = sorted(
+                {
+                    str(_values(item).get("object"))
+                    for item in related_facts
+                    if _values(item).get("predicate") == "controls"
+                }
+            )
+            completeness.append(
+                (
+                    f"API-{interface_number:03d}",
+                    name,
+                    request_complete,
+                    response_complete,
+                    bool(related_permissions),
+                    bool(related_errors),
+                )
+            )
+            lines.extend(
+                [
+                    "<details>",
+                    f"<summary><strong>API-{interface_number:03d} {_cell(name)}</strong> · {_cell(method)} · {_cell(endpoint)}</summary>",
+                    "",
+                    "| 契约项 | 当前实现 |",
+                    "|---|---|",
+                    f"| 协议/方法 | `{_cell(method)}` |",
+                    "| 服务地址或路由 | 见本接口标题；SOAP 的 `#Operation` 已拆分为服务地址与操作名 |",
+                    f"| Operation/处理器 | `{_cell(operation)}` / `{_cell(name)}` |",
+                    f"| 代码签名参数 | `{_cell(str(values.get('parameters') or '-'))}` |",
+                    f"| 功能用途 | {_cell(_human_identifier(name))}；更具体的业务目标需由需求材料确认 |",
+                    f"| 返回声明 | `{_cell(response)}` |",
+                    f"| 鉴权与权限 | {_cell('；'.join(_example(_values(item)) for item in related_permissions) or '未从源码精确绑定')} |",
+                    f"| 数据副作用 | {_cell(('读取 ' + ', '.join(reads) if reads else '') + ('；' if reads and writes else '') + ('写入 ' + ', '.join(writes) if writes else '') or '未提取到与该入口同文件的显式数据读写')} |",
+                    f"| 事务/异常控制 | {_cell(', '.join(controls) or '未提取到可绑定控制事实')} |",
+                    f"| 源码证据 | {_source(_location(row, evidence))} |",
+                    "",
+                    "#### 请求结构",
+                    "",
+                    "| 字段路径 | 类型 | 必填/可空 | 定义来源 | 证据 |",
+                    "|---|---|---|---|---|",
+                ]
+            )
+            if request_rows:
+                for field_path, data_type, requirement, owner, source in request_rows:
+                    lines.append(
+                        f"| `{_cell(field_path)}` | `{_cell(data_type)}` | {_cell(requirement)} | "
+                        f"{_cell(owner)} | {_source(source)} |"
+                    )
+            else:
+                lines.append("| - | - | 无请求参数 | 方法签名 | - |")
+            lines.extend(
+                [
+                    "",
+                    "#### 响应结构",
+                    "",
+                    "| 字段路径 | 类型 | 必填/可空 | 定义类型 | 证据 |",
+                    "|---|---|---|---|---|",
+                ]
+            )
+            if response_rows:
+                for field_path, data_type, requirement, owner, source in response_rows:
+                    lines.append(
+                        f"| `{_cell(field_path)}` | `{_cell(data_type)}` | {_cell(requirement)} | "
+                        f"{_cell(owner)} | {_source(source)} |"
+                    )
+            elif response in {"void", "None", "-"}:
+                lines.append("| - | - | 无响应体或返回结构未声明 | 方法签名 | - |")
+            else:
+                lines.append(
+                    f"| `response` | `{_cell(response)}` | 结构未展开 | 方法返回声明 | {_source(_location(row, evidence))} |"
+                )
+            lines.extend(
+                [
+                    "",
+                    "#### 错误、示例与运行约束",
+                    "",
+                    f"- **结构化错误/异常响应**：{_cell('；'.join(_example(_values(item)) for item in related_errors) or '未从源码确认')}。",
+                    "- **请求/响应示例**：未发现可验证示例；不会根据字段名虚构报文。",
+                    "- **幂等性、超时、限流和重试**：未从当前源码确认。",
+                    "- **运行地址、端口与环境差异**：当前路径是代码契约定位，不自动等同于生产 URL。",
+                    "",
+                    "</details>",
+                    "",
+                ]
+            )
+    lines.extend(["## 公共数据结构", ""])
+    if by_owner:
+        lines.extend(
+            [
+                "本节列出被接口签名引用的数据类型。字段在接口卡片中按请求/响应路径递归展开；此处用于跨接口复用和影响分析。",
+                "",
+                "| 仓库 | 类型 | 字段数 | 被接口使用 |",
+                "|---|---|---:|---|",
+            ]
+        )
+        for key, rows in sorted(by_owner.items()):
+            repository, owner = key.split("\0", 1)
+            lines.append(
+                f"| `{_cell(repository)}` | `{_cell(owner)}` | {len(rows)} | "
+                f"{'是' if (repository, owner) in used_owners else '经嵌套类型间接引用'} |"
+            )
+    else:
+        lines.extend(["当前未提取到可与接口签名关联的数据结构字段。", ""])
     lines.extend(
         [
-            "## 契约可信边界",
             "",
-            f"- {incomplete} 个接口缺少完整参数或返回结构；缺失字段不会由名称猜测。",
+            "## 契约完整性清单",
+            "",
+            "| 接口 | 请求结构 | 响应结构 | 权限 | 错误契约 | 可直接用于联调 |",
+            "|---|---|---|---|---|---|",
+        ]
+    )
+    for identifier, name, request_ok, response_ok, permission_ok, error_ok in completeness:
+        ready = request_ok and response_ok
+        lines.append(
+            f"| {identifier} {_cell(name)} | {'完整' if request_ok else '待补'} | "
+            f"{'完整' if response_ok else '待补'} | {'已绑定' if permission_ok else '未确认'} | "
+            f"{'已绑定' if error_ok else '未确认'} | {'结构联调可用' if ready else '需核对源码/WSDL'} |"
+        )
+    lines.extend(
+        [
+            "",
+            "### 契约可信边界",
+            "",
+            f"- 共识别 {len(interfaces)} 个代码接口、{len(fields)} 个可追溯数据结构字段。",
+            "- 数据结构完整只表示已展开代码声明；业务必填、字段取值范围和跨字段规则仍需显式注解、需求或运行时证据。",
             (
-                f"- 已识别 {len(permissions)} 条权限规则。"
+                f"- 已识别 {len(permissions)} 条权限规则，但只有文本或源码位置可与接口匹配时才显示为已绑定。"
                 if permissions
-                else "- 未发现可精确绑定到接口的权限规则；接口存在不代表任意角色均可调用。"
+                else "- 未发现结构化权限规则；接口存在不代表任意角色均可调用。"
             ),
             (
-                f"- 已识别 {len(errors)} 条结构化错误事实。"
+                f"- 已识别 {len(errors)} 条结构化错误事实，但未绑定的错误不会自动归属于某个接口。"
                 if errors
                 else "- 未发现结构化错误码或异常响应契约。"
             ),
@@ -3344,9 +3798,177 @@ def _v2_evidence_footer(
         f"- 本文归纳自 {len(files)} 个源码文件、{len(evidence)} 个证据锚点。",
         "- 精确字段、符号、记录身份和原始字节摘要位于 Capsule Agent 视图。",
         f"- Package ID：`{document.package_id or '-'}`",
-        "- 标注为“源码反构”或“验收候选”的内容描述当前实现，不等同于正式产品需求或已通过测试。",
+        "- 标注为“当前实现”或“验收候选”的内容描述 As-is 行为，不等同于正式产品需求或已通过测试。",
         "",
     ]
+
+
+_DOCUMENT_USE_CASES = {
+    "capability_catalog": (
+        "确认系统已经实现哪些能力、入口和数据影响范围",
+        "功能盘点、范围评审、需求变更影响分析",
+    ),
+    "requirements": (
+        "区分正式需求材料与源码反映的当前行为",
+        "编写新需求、确认现状规则、建立需求追踪",
+    ),
+    "architecture": (
+        "理解系统边界、运行单元、依赖、数据与部署约束",
+        "技术评审、改造拆分、部署与运维准备",
+    ),
+    "detailed_design": (
+        "理解模块职责、处理行为、数据读写和变更影响",
+        "功能开发、缺陷定位、代码评审与回归设计",
+    ),
+    "user_guide": (
+        "确认用户入口、可执行操作和已知结果",
+        "使用培训、操作核对和 Web 探索补充",
+    ),
+    "acceptance": (
+        "组织正式条款、验收候选、测试证据和覆盖缺口",
+        "制定测试计划和项目验收；通过状态仍以实际执行证据为准",
+    ),
+    "interface_contract": (
+        "确认服务操作、请求/响应结构和已知运行约束",
+        "接口设计评审、联调、Mock 与兼容性分析",
+    ),
+    "database_design": (
+        "确认表、字段、索引、外键及代码读写影响",
+        "数据开发、迁移评审、字段变更和数据验收",
+    ),
+}
+
+
+def _v2_document_status(document: MarkdownDocument) -> list[str]:
+    purpose, direct_use = _DOCUMENT_USE_CASES.get(
+        document.family,
+        ("理解当前实现", "评审和影响分析"),
+    )
+    kinds = Counter(row.kind for row in _all_rows(document))
+    explicit = kinds["RequirementRow"] + kinds["AcceptanceRow"]
+    runtime = sum(count for kind, count in kinds.items() if kind.startswith("Web"))
+    return [
+        "## 文档使用与交付状态",
+        "",
+        "| 项目 | 结论 |",
+        "|---|---|",
+        f"| 文档用途 | {_cell(purpose)} |",
+        f"| 当前可直接使用 | {_cell(direct_use)} |",
+        "| 权威范围 | 当前快照中可由源码、提交材料或已治理 Web 证据证明的 **As-is 实现基线** |",
+        f"| 正式材料 | {explicit} 条明确需求/验收事实；{runtime} 条已治理 Web 事实 |",
+        "| 不自动成立 | 未被证据表达的业务意图、生产配置、权限范围、性能指标和测试通过状态 |",
+        "| 更新方式 | 代码、需求或 Web 证据变化后重新导出；同一 SemanticCore 同时生成本文与 Agent 视图 |",
+        "",
+    ]
+
+
+def _v2_family_completion(
+    document: MarkdownDocument, evidence: dict[str, EvidenceLocation]
+) -> list[str]:
+    permissions = _kind_rows(document, "PermissionRow")
+    errors = _kind_rows(document, "ErrorRow")
+    states = _kind_rows(document, "StateRow")
+    tests = _kind_rows(document, "TestRow")
+    facts = _kind_rows(document, "ImplementationFactRow")
+    if document.family == "capability_catalog":
+        return [
+            "## 功能关联与交付检查",
+            "",
+            "| 检查项 | 当前状态 | 使用建议 |",
+            "|---|---|---|",
+            f"| 正式需求映射 | {len(_kind_rows(document, 'RequirementRow'))} 条 | 无明确映射的能力只能视为已实现现状 |",
+            f"| 权限规则 | {len(permissions)} 条 | 开发前按入口和数据范围逐项确认 |",
+            f"| 接口入口 | {len(_kind_rows(document, 'InterfaceRow', 'CommandRow'))} 个 | 详细字段见《接口契约》 |",
+            f"| 数据读写事实 | {sum(_values(row).get('predicate') in {'reads', 'writes'} for row in facts)} 条 | 修改数据结构时联动《数据库设计》和《详细设计》 |",
+            "| 完成定义 | 尚未自动等同于需求完成 | 需在《验收规格》中绑定并执行测试 |",
+            "",
+        ]
+    if document.family == "requirements":
+        requirements = _kind_rows(document, "RequirementRow")
+        return [
+            "## 需求追踪与非功能要求",
+            "",
+            "| 需求治理项 | 当前状态 |",
+            "|---|---|",
+            f"| 明确需求条目 | {len(requirements)} 条 |",
+            f"| 可绑定权限规则 | {len(permissions)} 条 |",
+            f"| 状态/生命周期规则 | {len(states)} 条 |",
+            f"| 错误与异常规则 | {len(errors)} 条 |",
+            "| 性能、容量、可用性、安全、审计指标 | 未从当前需求材料形成完整可验收指标 |",
+            "| 需求 → 设计 → 接口/数据 → 测试追踪 | 当前仅能通过共同源码证据做影响分析，正式需求 ID 仍需项目补充 |",
+            "",
+        ]
+    if document.family == "architecture":
+        dependencies = _kind_rows(document, "DependencyRow")
+        configurations = _kind_rows(document, "ConfigurationRow")
+        deployments = _kind_rows(document, "DeploymentRow")
+        return [
+            "## 集成、部署与运行质量",
+            "",
+            "| 架构关注点 | 当前证据 | 结论 |",
+            "|---|---:|---|",
+            f"| 外部/内部依赖 | {len(dependencies)} | 可用于依赖盘点；运行时调用方向只在源码明确时成立 |",
+            f"| 配置项 | {len(configurations)} | 可用于环境差异检查；密钥和生产值不会写入文档 |",
+            f"| 部署声明 | {len(deployments)} | 未覆盖的节点、端口、网络区和高可用策略需运维确认 |",
+            f"| 数据交互 | {sum(_values(row).get('predicate') in {'reads', 'writes'} for row in facts)} | 仅表示显式读写，不推断事务一致性 |",
+            "| 安全、容量、可观测性、灾备 | - | 没有明确证据时保持未确认，不能作为上线承诺 |",
+            "",
+        ]
+    if document.family == "detailed_design":
+        controls = [row for row in facts if _values(row).get("predicate") == "controls"]
+        return [
+            "## 状态、异常与变更验证",
+            "",
+            f"- **状态规则**：{len(states)} 条；未形成状态机时，开发者需从调用入口和持久化状态继续核对。",
+            f"- **错误规则**：{len(errors)} 条；仅有 `catch` 不等同于稳定的错误契约。",
+            f"- **事务和控制事实**：{len(controls)} 条；修改写入逻辑时应覆盖提交、回滚和部分失败。",
+            "- **变更验证要求**：依据数据对象影响矩阵定位读写双方，并在《验收规格》中补充或选择回归测试。",
+            "- **设计权威边界**：本文描述现有实现；新设计决策、算法取舍和时序承诺需以提交后的需求/设计材料补充。",
+            "",
+        ]
+    if document.family == "user_guide":
+        reported = [row for row in facts if _values(row).get("predicate") == "reports"]
+        return [
+            "## 使用前准备与故障处理",
+            "",
+            f"- **账号与角色**：{len(permissions)} 条源码权限线索；没有精确绑定时需由管理员确认实际菜单和数据权限。",
+            "- **环境与入口地址**：源码路径不等同于生产 URL；部署地址、浏览器要求和网络条件需由运行环境提供。",
+            f"- **已识别状态/提示**：{len(reported)} 条；未识别到的成功提示和错误提示不会补写。",
+            "- **故障处理原则**：保留操作入口、输入和时间，核对对应接口、数据副作用与日志；不可根据本手册推断未验证的恢复动作。",
+            "- **补全文档方式**：通过治理后的 Web 探索补充页面截图、交互步骤、页面状态和可重复测试场景。",
+            "",
+        ]
+    if document.family == "acceptance":
+        explicit = _kind_rows(document, "AcceptanceRow")
+        return [
+            "## 验收环境、数据与判定规则",
+            "",
+            "| 项目 | 当前要求 |",
+            "|---|---|",
+            f"| 正式验收条款 | {len(explicit)} 条；没有正式条款时，源码候选不能代替签字口径 |",
+            f"| 自动化测试资产 | {len(tests)} 条测试记录；存在不代表本次已执行通过 |",
+            "| 环境与版本 | 必须绑定待验收提交、配置、数据库版本及必要外部服务 |",
+            "| 测试数据 | 应给出角色、初始状态、输入、预期状态和清理方式；当前未明确部分保持待补 |",
+            "| 通过判定 | 每条正式标准均有可观察结果和执行证据，且关键缺口已获项目方接受 |",
+            "| 失败处理 | 记录实际结果、日志/截图、影响范围与复测证据，不以源码存在性判定通过 |",
+            "",
+        ]
+    if document.family == "database_design":
+        migrations = _kind_rows(document, "MigrationOperationRow", "HistoricalDataRow")
+        relations = _kind_rows(document, "RelationRow")
+        reads = sum(_values(row).get("predicate") == "reads" for row in facts)
+        writes = sum(_values(row).get("predicate") == "writes" for row in facts)
+        return [
+            "## 数据访问、演进与安全边界",
+            "",
+            f"- **代码访问证据**：读取 {reads} 条、写入 {writes} 条；用于定位字段变更的影响范围。",
+            f"- **显式关系**：{len(relations)} 条；没有外键不代表业务上不存在关联。",
+            f"- **迁移与历史结构**：{len(migrations)} 条；缺少迁移事实时不能推断升级顺序、回滚或数据修复方案。",
+            "- **数据生命周期**：保留期限、归档、脱敏、删除和主数据归属未明确时保持待确认。",
+            "- **发布要求**：字段或约束变更需同时核对读写代码、接口结构、迁移脚本、兼容窗口和回归测试。",
+            "",
+        ]
+    return []
 
 
 def _render_human_v2(document: MarkdownDocument, paths: tuple[str, ...]) -> str:
@@ -3354,7 +3976,10 @@ def _render_human_v2(document: MarkdownDocument, paths: tuple[str, ...]) -> str:
     snapshot_label = (
         "可验证工作树快照" if "working_tree" in document.authority else "干净 Git 提交快照"
     )
-    navigation = list(_HUMAN_V2_NAVIGATION.get(document.family, ()))
+    navigation = [
+        "文档使用与交付状态",
+        *_HUMAN_V2_NAVIGATION.get(document.family, ()),
+    ]
     kinds = {row.kind for row in _all_rows(document)}
     web_sections = tuple(
         (kind, title)
@@ -3403,6 +4028,9 @@ def _render_human_v2(document: MarkdownDocument, paths: tuple[str, ...]) -> str:
             body.extend([f"## {_cell(section.title)}", "", *_generic_table(section.rows, evidence)])
     else:
         body = renderer(document, evidence)
+    body = [*_v2_document_status(document), *body]
+    if document.family != "interface_contract":
+        body.extend(_v2_family_completion(document, evidence))
     body.extend(_render_web_sections(document, evidence, web_sections))
     lines.extend(body)
     lines.extend(_v2_evidence_footer(document, evidence))

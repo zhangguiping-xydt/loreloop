@@ -8,6 +8,7 @@ from typing import Final
 from .authoritative_detector_common import mask_c_like_comments, source_ref
 from .authoritative_records import (
     ConfigurationRecord,
+    ContractFieldRecord,
     DependencyRecord,
     DetectionReport,
     ImplementationFactRecord,
@@ -21,6 +22,13 @@ _TYPE: Final = re.compile(
     r"(?m)^\s*(?:public\s+|private\s+|protected\s+|internal\s+|abstract\s+|"
     + r"sealed\s+|static\s+|partial\s+)*(?:class|interface|record|struct)\s+"
     + r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+)
+_NAMESPACE: Final = re.compile(r"(?m)^\s*namespace\s+(?P<name>[A-Za-z_][A-Za-z0-9_.]*)\s*(?:\{|;)?")
+_PROPERTY: Final = re.compile(
+    r"(?m)^(?P<indent>[ \t]*)(?P<attributes>(?:\[[^\]\n]+\]\s*)*)"
+    r"public\s+(?:(?:static|virtual|override|abstract|new|required)\s+)*"
+    r"(?P<type>[A-Za-z_][\w.<>,?\[\] ]*)\s+"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\{"
 )
 _METHOD: Final = re.compile(
     r"(?m)^\s*(?:\[[^\n]+\]\s*)*(?:public|private|protected|internal)\s+"
@@ -46,8 +54,7 @@ _CONTROLLER_PREFIX: Final = re.compile(
     re.DOTALL,
 )
 _ENV: Final = re.compile(
-    r"\bEnvironment\.GetEnvironmentVariable\s*\(\s*"
-    + r"\"(?P<key>[A-Za-z_][A-Za-z0-9_]*)\""
+    r"\bEnvironment\.GetEnvironmentVariable\s*\(\s*" + r"\"(?P<key>[A-Za-z_][A-Za-z0-9_]*)\""
 )
 _USING: Final = re.compile(
     r"(?m)^\s*(?:global\s+)?using\s+(?:static\s+)?(?P<name>[A-Za-z_][\w.]*)\s*;"
@@ -66,7 +73,7 @@ _UI_CLASS: Final = re.compile(
     r"(?P<base>[A-Za-z_][\w.]*(?:Form|Page|UserControl))\b"
 )
 _DATA_CALL: Final = re.compile(
-    r'\b(?P<receiver>[A-Za-z_][\w.]*)\.(?P<method>Select|Insert|Update|Delete|WriteTable)'
+    r"\b(?P<receiver>[A-Za-z_][\w.]*)\.(?P<method>Select|Insert|Update|Delete|WriteTable)"
     r'\s*\(\s*"(?P<table>[A-Za-z_][A-Za-z0-9_$#.]{1,127})"',
     re.I,
 )
@@ -96,9 +103,86 @@ _CATCH: Final = re.compile(
 _THREAD_START: Final = re.compile(
     r"\bThreadStart\s*\(\s*(?P<method>[A-Za-z_][A-Za-z0-9_]*)\s*\)", re.I
 )
-_RUN_TIME_SPAN: Final = re.compile(
-    r"\b(?:this\.)?RunTimeSpan\s*=\s*(?P<value>\d+)", re.I
+_RUN_TIME_SPAN: Final = re.compile(r"\b(?:this\.)?RunTimeSpan\s*=\s*(?P<value>\d+)", re.I)
+
+_CSHARP_VALUE_TYPES = frozenset(
+    {
+        "bool",
+        "byte",
+        "char",
+        "datetime",
+        "decimal",
+        "double",
+        "float",
+        "guid",
+        "int",
+        "long",
+        "sbyte",
+        "short",
+        "timespan",
+        "uint",
+        "ulong",
+        "ushort",
+    }
 )
+
+
+def _closing_brace(source: str, opening: int) -> int | None:
+    depth = 0
+    for index in range(opening, len(source)):
+        character = source[index]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _contract_fields(source: str, alias: str, path: str) -> tuple[ContractFieldRecord, ...]:
+    namespace_match = _NAMESPACE.search(source)
+    namespace = namespace_match.group("name") if namespace_match is not None else ""
+    records: list[ContractFieldRecord] = []
+    for type_match in _TYPE.finditer(source):
+        opening = source.find("{", type_match.end())
+        if opening < 0 or opening - type_match.end() > 800:
+            continue
+        closing = _closing_brace(source, opening)
+        if closing is None:
+            continue
+        owner = type_match.group("name")
+        if namespace:
+            owner = f"{namespace}.{owner}"
+        body = source[opening + 1 : closing]
+        for property_match in _PROPERTY.finditer(body):
+            absolute = opening + 1 + property_match.start()
+            property_opening = opening + 1 + property_match.end() - 1
+            property_tail = source[property_opening : min(closing, property_opening + 800)]
+            if re.search(r"\b(?:get|set|init)\s*(?:;|\{)", property_tail) is None:
+                continue
+            data_type = " ".join(property_match.group("type").split())
+            simple_type = data_type.rstrip("?").rsplit(".", 1)[-1].casefold()
+            nullable: bool | None
+            if data_type.endswith("?"):
+                nullable = True
+            elif simple_type in _CSHARP_VALUE_TYPES:
+                nullable = False
+            else:
+                nullable = None
+            attributes = property_match.group("attributes")
+            required = True if re.search(r"\[\s*Required(?:Attribute)?\b", attributes) else None
+            records.append(
+                ContractFieldRecord(
+                    owner,
+                    property_match.group("name"),
+                    data_type,
+                    required,
+                    nullable,
+                    source_ref(alias, path, source, absolute),
+                )
+            )
+    return tuple(records)
 
 
 def _string_literals(source: str) -> tuple[tuple[str, int], ...]:
@@ -185,9 +269,9 @@ def _ui_surfaces(source: str, alias: str, path: str) -> tuple[UiSurfaceRecord, .
             for method in _METHOD.finditer(source)
             if method.group("name") == "Page_Load"
             or method.group("name").lower().startswith(("btn", "menu", "grid"))
-            or method.group("name").lower().endswith(
-                ("_click", "_command", "_changed", "_selectedindexchanged")
-            )
+            or method.group("name")
+            .lower()
+            .endswith(("_click", "_command", "_changed", "_selectedindexchanged"))
         )
     )
     entry = path[:-3] if lowered.endswith((".aspx.cs", ".ascx.cs")) else path
@@ -205,7 +289,13 @@ def _ui_surfaces(source: str, alias: str, path: str) -> tuple[UiSurfaceRecord, .
 def _implementation_facts(
     source: str, alias: str, path: str
 ) -> tuple[ImplementationFactRecord, ...]:
-    subject = path.rsplit("/", 1)[-1].removesuffix(".cs")
+    file_subject = path.rsplit("/", 1)[-1].removesuffix(".cs")
+    methods = tuple(_METHOD.finditer(source))
+
+    def subject(offset: int) -> str:
+        containing = [method for method in methods if method.start() <= offset]
+        return containing[-1].group("name") if containing else file_subject
+
     records: list[ImplementationFactRecord] = []
     for match in _DATA_CALL.finditer(source):
         receiver = match.group("receiver").lower()
@@ -215,7 +305,7 @@ def _implementation_facts(
         predicate = "reads" if method == "select" else "writes"
         records.append(
             ImplementationFactRecord(
-                subject,
+                subject(match.start()),
                 predicate,
                 match.group("table").upper(),
                 f"{match.group('receiver')}.{match.group('method')}",
@@ -226,7 +316,7 @@ def _implementation_facts(
         for match in _SQL_READ_TABLE.finditer(literal):
             records.append(
                 ImplementationFactRecord(
-                    subject,
+                    subject(offset + match.start()),
                     "reads",
                     match.group("table").upper(),
                     "SQL text",
@@ -236,7 +326,7 @@ def _implementation_facts(
         for match in _SQL_WRITE_TABLE.finditer(literal):
             records.append(
                 ImplementationFactRecord(
-                    subject,
+                    subject(offset + match.start()),
                     "writes",
                     match.group("table").upper(),
                     "SQL text",
@@ -248,7 +338,7 @@ def _implementation_facts(
         if message:
             records.append(
                 ImplementationFactRecord(
-                    subject,
+                    subject(match.start()),
                     "reports",
                     message,
                     "runtime status message",
@@ -265,7 +355,7 @@ def _implementation_facts(
     for match in _TRANSACTION_CALL.finditer(source):
         records.append(
             ImplementationFactRecord(
-                subject,
+                subject(match.start()),
                 "controls",
                 transaction_labels[match.group("method").lower()],
                 match.group("method"),
@@ -275,7 +365,7 @@ def _implementation_facts(
     for match in _CATCH.finditer(source):
         records.append(
             ImplementationFactRecord(
-                subject,
+                subject(match.start()),
                 "controls",
                 f"exception-handler:{match.group('type') or 'any'}",
                 "catch",
@@ -285,7 +375,7 @@ def _implementation_facts(
     for match in _THREAD_START.finditer(source):
         records.append(
             ImplementationFactRecord(
-                subject,
+                subject(match.start()),
                 "calls",
                 match.group("method"),
                 "background thread entry",
@@ -295,7 +385,7 @@ def _implementation_facts(
     for match in _RUN_TIME_SPAN.finditer(source):
         records.append(
             ImplementationFactRecord(
-                subject,
+                subject(match.start()),
                 "configures",
                 f"RunTimeSpan={match.group('value')}",
                 "runtime limit",
@@ -306,7 +396,7 @@ def _implementation_facts(
         offset = source.index("ServiceBase")
         records.append(
             ImplementationFactRecord(
-                subject,
+                file_subject,
                 "hosts",
                 "Windows Service",
                 None,
@@ -317,7 +407,7 @@ def _implementation_facts(
         offset = source.find("WebService")
         records.append(
             ImplementationFactRecord(
-                subject,
+                file_subject,
                 "hosts",
                 "ASMX Web Service",
                 None,
@@ -400,7 +490,11 @@ def detect_csharp_source(source: str, repository_alias: str, path: str) -> Detec
             False,
             source_ref(repository_alias, path, source, match.start()),
         )
-        for match in (*tuple(_ENV.finditer(masked)), *tuple(_APPSETTING.finditer(masked)), *tuple(_KEY_LITERAL.finditer(masked)))
+        for match in (
+            *tuple(_ENV.finditer(masked)),
+            *tuple(_APPSETTING.finditer(masked)),
+            *tuple(_KEY_LITERAL.finditer(masked)),
+        )
     )
     dependencies = tuple(
         DependencyRecord(
@@ -413,6 +507,7 @@ def detect_csharp_source(source: str, repository_alias: str, path: str) -> Detec
     )
     return DetectionReport(
         interfaces=_interfaces(masked, repository_alias, path),
+        contract_fields=_contract_fields(masked, repository_alias, path),
         symbols=tuple(symbols),
         ui_surfaces=_ui_surfaces(masked, repository_alias, path),
         configurations=configurations,

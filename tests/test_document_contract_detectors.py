@@ -52,6 +52,13 @@ components:
     assert report.symbols[0].qualified_name == "Pet"
     assert report.symbols[0].signature == "schema Pet(id:string!, tags:array[string])"
     assert report.symbols[0].source.line == 20
+    assert tuple(
+        (item.owner_type, item.name, item.data_type, item.required)
+        for item in report.contract_fields
+    ) == (
+        ("Pet", "id", "string", True),
+        ("Pet", "tags", "array[string]", False),
+    )
 
 
 def test_swagger_json_extracts_body_parameter_and_definition_deterministically() -> None:
@@ -126,7 +133,7 @@ def test_openapi_rejects_unsupported_or_ambiguous_version_markers(source: str) -
 
 
 def test_graphql_sdl_extracts_custom_root_operations_and_declared_types() -> None:
-    source = '''schema {
+    source = """schema {
   query: RootQuery
   mutation: RootMutation
 }
@@ -140,7 +147,7 @@ type RootMutation {
 }
 input UserInput { name: String! }
 type User { id: ID! name: String! createdAt: DateTime! }
-'''
+"""
 
     report = detect_graphql_source(source, "api", "schema.graphql")
 
@@ -158,6 +165,11 @@ type User { id: ID! name: String! createdAt: DateTime! }
         "User",
         "UserInput",
     }
+    assert {(item.owner_type, item.name, item.data_type) for item in report.contract_fields} >= {
+        ("UserInput", "name", "String!"),
+        ("User", "id", "ID!"),
+        ("User", "createdAt", "DateTime!"),
+    }
 
 
 @pytest.mark.parametrize(
@@ -174,7 +186,7 @@ def test_graphql_sdl_reports_parse_failures(source: str) -> None:
 
 
 def test_proto_extracts_messages_enums_and_streaming_service_rpcs() -> None:
-    source = '''syntax = "proto3";
+    source = """syntax = "proto3";
 package acme.users.v1;
 message GetUserRequest { string id = 1; }
 message User { string id = 1; repeated string roles = 2; }
@@ -183,7 +195,7 @@ service UserService {
   rpc GetUser(GetUserRequest) returns (User);
   rpc WatchUsers(stream GetUserRequest) returns (stream User) {}
 }
-'''
+"""
 
     report = detect_proto_source(source, "contracts", "users.proto")
 
@@ -198,19 +210,24 @@ service UserService {
         "acme.users.v1.Status",
         "acme.users.v1.User",
     }
-    assert next(item for item in report.symbols if item.qualified_name.endswith(".User")).signature == (
-        "message User(id:string=1, roles:string[]=2)"
-    )
+    assert next(
+        item for item in report.symbols if item.qualified_name.endswith(".User")
+    ).signature == ("message User(id:string=1, roles:string[]=2)")
+    assert {(item.owner_type, item.name, item.data_type) for item in report.contract_fields} == {
+        ("acme.users.v1.GetUserRequest", "id", "string"),
+        ("acme.users.v1.User", "id", "string"),
+        ("acme.users.v1.User", "roles", "string[]"),
+    }
 
 
 def test_proto_accepts_nested_rpc_option_blocks_without_executing_protoc() -> None:
-    source = '''syntax = "proto3";
+    source = """syntax = "proto3";
 service Gateway {
   rpc Get(Request) returns (Response) {
     option (google.api.http) = { get: "/v1/items/{id}" };
   }
 }
-'''
+"""
 
     report = detect_proto_source(source, ".", "gateway.proto")
 

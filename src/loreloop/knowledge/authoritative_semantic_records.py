@@ -59,6 +59,23 @@ def build_semantic_records(
                 "return_type": item.return_type,
             },
         )
+    for item in report.contract_fields:
+        _add(
+            context,
+            records,
+            evidence,
+            "FIELD",
+            DocumentRowKind.CONTRACT_FIELD,
+            "contract_field",
+            item.source,
+            {
+                "owner_type": item.owner_type,
+                "name": item.name,
+                "data_type": item.data_type,
+                "required": item.required,
+                "nullable": item.nullable,
+            },
+        )
     for item in report.symbols:
         _add(
             context,

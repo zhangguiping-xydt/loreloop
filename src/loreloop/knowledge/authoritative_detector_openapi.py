@@ -9,6 +9,7 @@ from typing import TypeAlias, cast
 
 from .authoritative_detector_yaml import YamlValue, parse_yaml_contract
 from .authoritative_records import (
+    ContractFieldRecord,
     DetectionError,
     DetectionReport,
     InterfaceRecord,
@@ -20,10 +21,10 @@ from .authoritative_records import (
 Object: TypeAlias = Mapping[str, YamlValue]
 _METHODS = ("get", "post", "put", "patch", "delete", "head", "options", "trace")
 _YAML_ROOT_VERSION = re.compile(
-    r'''(?mx)
+    r"""(?mx)
     ^(?P<key_quote>["']?)(?P<key>openapi|swagger)(?P=key_quote)\s*:\s*
     (?P<value_quote>["']?)(?P<version>[^\s#"']+)(?P=value_quote)\s*(?:\#.*)?$
-    '''
+    """
 )
 
 
@@ -193,9 +194,7 @@ def _load(source: str, path: str) -> Object:
         raise DetectionError("contract document is not OpenAPI or Swagger")
     version = _text(root.get("openapi" if has_openapi else "swagger"), "version")
     valid = (
-        re.fullmatch(r"3(?:\.\d+){1,2}", version) is not None
-        if has_openapi
-        else version == "2.0"
+        re.fullmatch(r"3(?:\.\d+){1,2}", version) is not None if has_openapi else version == "2.0"
     )
     if not valid:
         raise DetectionError(f"unsupported OpenAPI/Swagger version: {version}")
@@ -308,7 +307,9 @@ def _interfaces(root: Object, source: str, alias: str, path: str) -> tuple[Inter
                     parameters = (
                         *parameters,
                         ParameterRecord(
-                            "body", _schema_type(root, media.get("schema")), request.get("required") is True
+                            "body",
+                            _schema_type(root, media.get("schema")),
+                            request.get("required") is True,
                         ),
                     )
             records.append(
@@ -337,7 +338,9 @@ def _symbols(root: Object, source: str, alias: str, path: str) -> tuple[SymbolRe
         schema = _resolve(root, raw_schema, f"schema {name}")
         properties = _object(schema.get("properties", {}), f"schema {name} properties")
         required_value = schema.get("required", [])
-        if not isinstance(required_value, list) or not all(isinstance(item, str) for item in required_value):
+        if not isinstance(required_value, list) or not all(
+            isinstance(item, str) for item in required_value
+        ):
             raise DetectionError(f"OpenAPI schema {name} required must be an array of names")
         required = set(cast(list[str], required_value))
         fields = ", ".join(
@@ -346,9 +349,47 @@ def _symbols(root: Object, source: str, alias: str, path: str) -> tuple[SymbolRe
         )
         records.append(
             SymbolRecord(
-                "class", name, f"schema {name}({fields})", SourceRef(alias, path, _line(source, name))
+                "class",
+                name,
+                f"schema {name}({fields})",
+                SourceRef(alias, path, _line(source, name)),
             )
         )
+    return tuple(records)
+
+
+def _contract_fields(
+    root: Object, source: str, alias: str, path: str
+) -> tuple[ContractFieldRecord, ...]:
+    components = root.get("components")
+    schemas: Object = {}
+    if components is not None:
+        schemas = _object(_object(components, "components").get("schemas", {}), "schemas")
+    elif root.get("definitions") is not None:
+        schemas = _object(root.get("definitions"), "definitions")
+    records: list[ContractFieldRecord] = []
+    for owner, raw_schema in schemas.items():
+        schema = _resolve(root, raw_schema, f"schema {owner}")
+        properties = _object(schema.get("properties", {}), f"schema {owner} properties")
+        required_value = schema.get("required", [])
+        if not isinstance(required_value, list) or not all(
+            isinstance(item, str) for item in required_value
+        ):
+            raise DetectionError(f"OpenAPI schema {owner} required must be an array of names")
+        required = set(cast(list[str], required_value))
+        for name, raw_property in properties.items():
+            property_schema = _resolve(root, raw_property, f"schema {owner} property {name}")
+            nullable_value = property_schema.get("nullable")
+            records.append(
+                ContractFieldRecord(
+                    owner,
+                    name,
+                    _schema_type(root, raw_property) or "unknown",
+                    name in required,
+                    nullable_value if isinstance(nullable_value, bool) else None,
+                    SourceRef(alias, path, _line(source, name)),
+                )
+            )
     return tuple(records)
 
 
@@ -357,5 +398,6 @@ def detect_openapi_source(source: str, repository_alias: str, path: str) -> Dete
     root = _load(source, path)
     return DetectionReport(
         interfaces=_interfaces(root, source, repository_alias, path),
+        contract_fields=_contract_fields(root, source, repository_alias, path),
         symbols=_symbols(root, source, repository_alias, path),
     )

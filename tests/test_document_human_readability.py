@@ -104,12 +104,14 @@ def test_large_fact_inventory_renders_as_human_views_and_remains_searchable(
         path.read_text(encoding="utf-8") for path in output.glob("*.md")
     )
     assert "当前没有明确提交的产品需求材料" in requirements
-    assert "源码反构的现状规格" in requirements
+    assert "当前实现规格（As-is）" in requirements
     assert "VUE_APP_I18N_LOCALE" not in requirements
     assert "VUE_APP_I18N_LOCALE" in architecture
     assert "用户入口与可执行操作" in user_guide
+    assert "## 使用前准备与故障处理" in user_guide
     assert len(user_guide.splitlines()) < 200
     assert "已存在测试证据" in acceptance
+    assert "## 验收环境、数据与判定规则" in acceptance
     assert len(acceptance.splitlines()) < 200
     assert "## 接口域索引" in interface
     assert "### . · /srv/salary" in interface
@@ -119,6 +121,10 @@ def test_large_fact_inventory_renders_as_human_views_and_remains_searchable(
     assert "zz_deep_symbol_079" in capsule
     assert "证据化人类视图" in detailed
     assert "精确事实由独立 Capsule Agent 视图提供" in detailed
+    assert "## 功能关联与交付检查" in (output / "readable-功能清单.md").read_text(encoding="utf-8")
+    assert "## 需求追踪与非功能要求" in requirements
+    assert "## 集成、部署与运行质量" in architecture
+    assert "## 状态、异常与变更验证" in detailed
 
     assert (
         main(
@@ -139,6 +145,103 @@ def test_large_fact_inventory_renders_as_human_views_and_remains_searchable(
     assert "readable-详细设计.md#Agent视图 · 模块与符号" in searched
     assert ".loreloop-export.json" not in searched
     assert "<details>" not in searched
+
+
+def test_human_interface_contract_expands_csharp_request_and_response_models(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    repo = tmp_path / "contract-project"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "LoreLoop Contract")
+    _git(repo, "config", "user.email", "loreloop@example.invalid")
+    service = repo / "EmployeeService.asmx.cs"
+    service.write_text(
+        "using System.Web.Services;\nusing Acme.Contracts;\n"
+        "public class EmployeeService : WebService {\n"
+        "  [WebMethod]\n"
+        "  public EmployeeResponse GetEmployee(EmployeeRequest request) {\n"
+        "    try { return null; } catch (System.Exception) { return null; }\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (repo / "Unrelated.cs").write_text(
+        "public class Unrelated {\n  public void GetEmployee() { db.BeginTransaction(); }\n}\n",
+        encoding="utf-8",
+    )
+    models = repo / "EmployeeModels.cs"
+    models.write_text(
+        "namespace Acme.Contracts {\n"
+        "public class EmployeeRequest {\n"
+        "  public MessageHeader Header { get; set; }\n"
+        "  public string EmployeeId { get; set; }\n"
+        "}\n"
+        "public class MessageHeader {\n"
+        "  public string SourceSystem { get; set; }\n"
+        "}\n"
+        "public class EmployeeResponse {\n"
+        "  public string Status { get; set; }\n"
+        "  public Employee Result { get; set; }\n"
+        "}\n"
+        "public class Employee {\n"
+        "  public string Name { get; set; }\n"
+        "  public int Age { get; set; }\n"
+        "}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "fixture")
+    output = tmp_path / "contract-baseline"
+    monkeypatch.chdir(repo)
+
+    assert (
+        main(
+            [
+                "knowledge",
+                "export",
+                "--format",
+                "docs",
+                "--output",
+                str(output),
+                "--project-name",
+                "contract",
+            ]
+        )
+        == 0
+    )
+    _ = capsys.readouterr()
+
+    interface = (output / "contract-接口契约.md").read_text(encoding="utf-8")
+    assert "## 契约使用说明" in interface
+    assert "request.Header.SourceSystem" in interface
+    assert "request.EmployeeId" in interface
+    assert "response.Result.Name" in interface
+    assert "response.Result.Age" in interface
+    assert "业务必填未确认" in interface
+    assert "## 契约完整性清单" in interface
+    assert "结构联调可用" in interface
+    assert "exception-handler:System.Exception" in interface
+    assert "transaction:begin" not in interface
+    assert "UnusedInternalModel" not in interface
+    assert main(["knowledge", "replay", str(output)]) == 0
+    _ = capsys.readouterr()
+    assert (
+        main(
+            [
+                "knowledge",
+                "search",
+                "SourceSystem",
+                "--package",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    searched = capsys.readouterr().out
+    assert "事实: SourceSystem" in searched
+    assert "contract-接口契约.md#Agent视图 · 接口数据结构" in searched
 
 
 def test_human_capability_selection_preserves_core_runtime_features() -> None:

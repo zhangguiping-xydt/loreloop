@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 from .authoritative_records import (
+    ContractFieldRecord,
     DetectionError,
     DetectionReport,
     InterfaceRecord,
@@ -14,7 +15,9 @@ from .authoritative_records import (
     SymbolRecord,
 )
 
-_BLOCK = re.compile(r"\b(?:extend\s+)?(?P<kind>type|interface|input|enum)\s+(?P<name>[_A-Za-z]\w*)[^{}]*\{")
+_BLOCK = re.compile(
+    r"\b(?:extend\s+)?(?P<kind>type|interface|input|enum)\s+(?P<name>[_A-Za-z]\w*)[^{}]*\{"
+)
 _SCALAR = re.compile(r"\b(?P<kind>scalar|union)\s+(?P<name>[_A-Za-z]\w*)")
 _SCHEMA = re.compile(r"\bschema\s*\{")
 _ROOT_ENTRY = re.compile(r"\b(query|mutation|subscription)\s*:\s*([_A-Za-z]\w*)")
@@ -194,6 +197,7 @@ def detect_graphql_source(source: str, repository_alias: str, path: str) -> Dete
     _validate(masked)
     roots = _root_types(masked)
     interfaces: list[InterfaceRecord] = []
+    contract_fields: list[ContractFieldRecord] = []
     symbols: list[SymbolRecord] = []
     consumed: list[tuple[int, int]] = []
     for match in _BLOCK.finditer(masked):
@@ -215,6 +219,22 @@ def detect_graphql_source(source: str, repository_alias: str, path: str) -> Dete
                 SourceRef(repository_alias, path, source.count("\n", 0, match.start()) + 1),
             )
         )
+        if match.group("kind") != "enum":
+            contract_fields.extend(
+                ContractFieldRecord(
+                    name,
+                    field.name,
+                    field.return_type,
+                    field.return_type.endswith("!"),
+                    not field.return_type.endswith("!"),
+                    SourceRef(
+                        repository_alias,
+                        path,
+                        source.count("\n", 0, opening + 1 + field.offset) + 1,
+                    ),
+                )
+                for field in fields
+            )
         operation = roots.get(name)
         if operation is not None:
             interfaces.extend(
@@ -246,4 +266,8 @@ def detect_graphql_source(source: str, repository_alias: str, path: str) -> Dete
         )
     if re.search(r"\b(?:type|interface|input|enum|schema)\b", masked) and not symbols:
         raise DetectionError(f"invalid GraphQL SDL source: {path}")
-    return DetectionReport(interfaces=tuple(interfaces), symbols=tuple(symbols))
+    return DetectionReport(
+        interfaces=tuple(interfaces),
+        contract_fields=tuple(contract_fields),
+        symbols=tuple(symbols),
+    )

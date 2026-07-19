@@ -116,6 +116,7 @@ def create_user(name: str) -> dict[str, str]:
     assert "仓库" in interface and ":app.py#L" in interface
     assert "users" in database and "id" in database and "name" in database
     assert "## ER 关系图" in database and "flowchart LR" in database
+    assert "## 数据访问、演进与安全边界" in database
     assert "REQ-BIZ-001" in requirements and "管理员可以创建用户" in requirements
     assert "current_user.role != 'admin'" in requirements
     assert "## HTTP 接口" not in requirements
@@ -173,7 +174,13 @@ def test_cli_docs_export_emits_only_six_documents_without_optional_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Given: a source library with no HTTP/CLI route and no explicit DDL.
-    repo = _repository(tmp_path / "library", {"maths.py": "def add(a, b): return a + b\n"})
+    repo = _repository(
+        tmp_path / "library",
+        {
+            "maths.py": "def add(a, b): return a + b\n",
+            "Models.cs": ("public class LibraryModel {\n  public string Name { get; set; }\n}\n"),
+        },
+    )
     monkeypatch.chdir(repo)
     target = tmp_path / "export"
 

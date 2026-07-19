@@ -34,6 +34,7 @@ def _valid_pointer(pointer: str) -> bool:
 
 class DocumentRowKind(StrEnum):
     INTERFACE = "InterfaceRow"
+    CONTRACT_FIELD = "ContractFieldRow"
     COMMAND = "CommandRow"
     UI_SURFACE = "UiSurfaceRow"
     CURRENT_DATA = "CurrentDataRow"

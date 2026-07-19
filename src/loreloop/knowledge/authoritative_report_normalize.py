@@ -5,9 +5,50 @@ from __future__ import annotations
 from collections.abc import Callable, Hashable, Iterable
 from typing import TypeVar
 
-from .authoritative_records import DetectionReport
+import re
+
+from .authoritative_records import ContractFieldRecord, DetectionReport, InterfaceRecord
 
 T = TypeVar("T")
+
+_SCALAR_CONTRACT_TYPES = frozenset(
+    {
+        "any",
+        "bool",
+        "boolean",
+        "byte",
+        "char",
+        "datetime",
+        "dateonly",
+        "decimal",
+        "dict",
+        "dictionary",
+        "double",
+        "dynamic",
+        "float",
+        "guid",
+        "int",
+        "int16",
+        "int32",
+        "int64",
+        "integer",
+        "list",
+        "long",
+        "map",
+        "nullable",
+        "object",
+        "short",
+        "single",
+        "stream",
+        "string",
+        "timespan",
+        "uint",
+        "uint16",
+        "uint32",
+        "uint64",
+        "void",
+    }
+)
 
 
 def _unique(items: Iterable[T], key: Callable[[T], Hashable]) -> tuple[T, ...]:
@@ -22,8 +63,68 @@ def _unique(items: Iterable[T], key: Callable[[T], Hashable]) -> tuple[T, ...]:
     return tuple(result)
 
 
+def _contract_type_names(annotation: str | None) -> tuple[str, ...]:
+    if not annotation:
+        return ()
+    names = tuple(
+        name
+        for name in re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", annotation)
+        if name.rsplit(".", 1)[-1].casefold() not in _SCALAR_CONTRACT_TYPES
+    )
+    return tuple(dict.fromkeys(names))
+
+
+def _reachable_contract_fields(
+    interfaces: tuple[InterfaceRecord, ...],
+    fields: tuple[ContractFieldRecord, ...],
+) -> tuple[ContractFieldRecord, ...]:
+    """Keep only model fields reachable from an explicit interface signature."""
+    by_repository: dict[str, dict[str, list[str]]] = {}
+    rows_by_owner: dict[tuple[str, str], list[ContractFieldRecord]] = {}
+    for field in fields:
+        repository = field.source.repository_alias
+        owner_key = (repository, field.owner_type)
+        rows_by_owner.setdefault(owner_key, []).append(field)
+        simple = field.owner_type.rsplit(".", 1)[-1].casefold()
+        by_repository.setdefault(repository, {}).setdefault(simple, [])
+        if field.owner_type not in by_repository[repository][simple]:
+            by_repository[repository][simple].append(field.owner_type)
+
+    reachable: set[tuple[str, str]] = set()
+    pending: list[tuple[str, str]] = []
+
+    def resolve(repository: str, annotation: str | None) -> None:
+        owners = by_repository.get(repository, {})
+        for name in _contract_type_names(annotation):
+            exact = (repository, name)
+            if exact in rows_by_owner:
+                candidates = [name]
+            else:
+                candidates = owners.get(name.rsplit(".", 1)[-1].casefold(), [])
+            if len(candidates) != 1:
+                continue
+            key = (repository, candidates[0])
+            if key not in reachable:
+                reachable.add(key)
+                pending.append(key)
+
+    for interface in interfaces:
+        repository = interface.source.repository_alias
+        for parameter in interface.parameters:
+            resolve(repository, parameter.annotation)
+        resolve(repository, interface.return_type)
+    while pending:
+        repository, owner = pending.pop()
+        for field in rows_by_owner.get((repository, owner), ()):
+            resolve(repository, field.data_type)
+    return tuple(
+        field for field in fields if (field.source.repository_alias, field.owner_type) in reachable
+    )
+
+
 def normalize_detection_report(report: DetectionReport) -> DetectionReport:
     """Collapse repeated generated/cross-file facts, never truncate unique contracts."""
+    contract_fields = _reachable_contract_fields(report.interfaces, report.contract_fields)
     return DetectionReport(
         interfaces=_unique(
             report.interfaces,
@@ -35,6 +136,18 @@ def normalize_detection_report(report: DetectionReport) -> DetectionReport:
                 item.path,
                 item.parameters,
                 item.return_type,
+            ),
+        ),
+        contract_fields=_unique(
+            contract_fields,
+            lambda item: (
+                item.source.repository_alias,
+                item.owner_type,
+                item.name,
+                item.data_type,
+                item.required,
+                item.nullable,
+                item.source.path,
             ),
         ),
         symbols=_unique(

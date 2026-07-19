@@ -88,6 +88,7 @@ def _applicability(
         if record.row_kind
         in {
             DocumentRowKind.INTERFACE,
+            DocumentRowKind.CONTRACT_FIELD,
             DocumentRowKind.COMMAND,
             DocumentRowKind.WEB_INTERFACE,
         }

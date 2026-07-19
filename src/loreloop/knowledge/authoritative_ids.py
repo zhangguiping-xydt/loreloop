@@ -34,6 +34,7 @@ PREFIX_ORDINALS: Final = {
     "CAND": 30,
     "FACT": 40,
     "API": 40,
+    "FIELD": 40,
     "CLI": 40,
     "UI": 40,
     "DATAOP": 40,

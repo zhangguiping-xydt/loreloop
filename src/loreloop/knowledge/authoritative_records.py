@@ -51,6 +51,18 @@ class InterfaceRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class ContractFieldRecord:
+    """One source-declared field that may participate in an interface schema."""
+
+    owner_type: str
+    name: str
+    data_type: str
+    required: bool | None
+    nullable: bool | None
+    source: SourceRef
+
+
+@dataclass(frozen=True, slots=True)
 class SymbolRecord:
     kind: Literal["class", "function", "async_function"]
     qualified_name: str
@@ -213,6 +225,7 @@ class SourceCoverageRecord:
 @dataclass(frozen=True, slots=True)
 class DetectionReport:
     interfaces: tuple[InterfaceRecord, ...] = ()
+    contract_fields: tuple[ContractFieldRecord, ...] = ()
     symbols: tuple[SymbolRecord, ...] = ()
     permissions: tuple[PermissionRecord, ...] = ()
     ui_surfaces: tuple[UiSurfaceRecord, ...] = ()
@@ -241,6 +254,7 @@ def merge_reports(*reports: DetectionReport) -> DetectionReport:
     """Merge detector outputs without changing their source traversal order."""
     return DetectionReport(
         interfaces=tuple(item for report in reports for item in report.interfaces),
+        contract_fields=tuple(item for report in reports for item in report.contract_fields),
         symbols=tuple(item for report in reports for item in report.symbols),
         permissions=tuple(item for report in reports for item in report.permissions),
         ui_surfaces=tuple(item for report in reports for item in report.ui_surfaces),
