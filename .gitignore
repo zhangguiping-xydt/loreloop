@@ -34,3 +34,7 @@ runtime/
 .agents/plugins/*
 !.agents/plugins/marketplace.json
 .claude/settings.local.json
+
+/workspace/baseline/
+/workspace/baseline*.zip
+/workspace/change/

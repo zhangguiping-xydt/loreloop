@@ -19,16 +19,16 @@ Git source snapshots
 默认交付命令是：
 
 ```bash
-loreloop knowledge export --format docs --output baseline
-loreloop knowledge replay baseline
+loreloop knowledge export --format docs --output workspace/baseline
+loreloop knowledge replay workspace/baseline
 ```
 
-`--format docs` 生成可直接阅读的目录，未指定 `--output` 时默认使用 `baseline/`。只有明确需要
-压缩交付物时才使用 `--format package --output baseline.zip`；package 未指定输出时默认使用
-`baseline.zip`。
+`--format docs` 生成可直接阅读的目录，未指定 `--output` 时默认使用 `workspace/baseline/`。只有明确需要
+压缩交付物时才使用 `--format package --output workspace/baseline.zip`；package 未指定输出时默认使用
+`workspace/baseline.zip`。
 `--format audit` 是知识条目逐条审计文件，不是权威项目包。
 
-基线可由 `knowledge search <query> --package baseline` 直接检索。搜索必须先在同一份不可变
+基线可由 `knowledge search <query> --package workspace/baseline` 直接检索。搜索必须先在同一份不可变
 文件快照上完成 Capsule replay，再对 SemanticCore Agent 视图执行有界 BM25；不得要求先导入
 SQLite，也不得在验证后重新读取可能已变化的 ZIP。搜索结果必须返回规范归属的人类文档领域和
 精确源码证据，且不得把 Agent 原子事实伪装成人类文档中的逐字陈述。

@@ -497,13 +497,15 @@ options:
   --timeout TIMEOUT
 
 $ loreloop report --help
-usage: loreloop report [-h] [run_id]
+usage: loreloop report [-h] [--output OUTPUT] [run_id]
 
 positional arguments:
   run_id
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help       show this help message and exit
+  --output OUTPUT  report file; defaults to workspace/change/<run-
+                   id>/acceptance-report.md
 
 $ loreloop harvest --help
 usage: loreloop harvest [-h] [--agent {claude,codex,opencode,co-mind}] run_id
@@ -639,8 +641,9 @@ options:
                         audit entries, readable project docs, or a compressed
                         project package
   --output OUTPUT       audit Markdown file, source-docs directory, or
-                        deliverable .zip package; docs defaults to baseline/
-                        and package defaults to baseline.zip
+                        deliverable .zip package; docs defaults to
+                        workspace/baseline/ and package defaults to
+                        workspace/baseline.zip
   --project-name PROJECT_NAME
                         project name used in source documents
   --requirements PATH   committed Markdown requirements; use repo:NAME/path

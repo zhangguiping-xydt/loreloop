@@ -158,7 +158,7 @@ supported when its member repositories have been declared with
 ```bash
 loreloop knowledge export \
   --format docs \
-  --output baseline \
+  --output workspace/baseline \
   --project-name your-project \
   --requirements docs/requirements.md
 ```
@@ -172,16 +172,17 @@ machine-verifiable representation used by replay and retrieval.
 The readable directory layout is:
 
 ```text
-baseline/
-├── your-project-功能清单.md
-├── your-project-需求规格.md
-├── your-project-系统架构.md
-├── your-project-详细设计.md
-├── your-project-用户手册.md
-├── your-project-验收规格.md
-├── your-project-接口契约.md      # only with explicit interface evidence
-├── your-project-数据库设计.md    # only with explicit schema evidence
-└── .loreloop-export.json         # SemanticCore, pre-AST digests, and Markdown digests
+workspace/
+└── baseline/
+    ├── your-project-功能清单.md
+    ├── your-project-需求规格.md
+    ├── your-project-系统架构.md
+    ├── your-project-详细设计.md
+    ├── your-project-用户手册.md
+    ├── your-project-验收规格.md
+    ├── your-project-接口契约.md      # only with explicit interface evidence
+    ├── your-project-数据库设计.md    # only with explicit schema evidence
+    └── .loreloop-export.json         # SemanticCore, pre-AST digests, and Markdown digests
 ```
 
 Six core documents are always produced. Interface and database documents are
@@ -212,7 +213,7 @@ The Capsule can prove the package closure on a machine with no source, database,
 or key:
 
 ```bash
-loreloop knowledge replay baseline
+loreloop knowledge replay workspace/baseline
 ```
 
 Search the verified package directly without extraction or importing it into a
@@ -220,7 +221,7 @@ project store. Retrieval ranks the replay-verified SemanticCore Agent view and
 maps every hit back to its owning human document family and source evidence:
 
 ```bash
-loreloop knowledge search "fund ratio" --package baseline
+loreloop knowledge search "fund ratio" --package workspace/baseline
 ```
 
 The transient BM25 index groups visible paragraphs, lists, and table blocks
@@ -233,7 +234,7 @@ retrieval-only synonyms, translations, abbreviations, or likely identifiers:
 
 ```bash
 loreloop knowledge search "fund ratio" \
-  --package baseline \
+  --package workspace/baseline \
   --expand "housing provident fund contribution ratio HPF hpfRatioConfig"
 ```
 
@@ -245,8 +246,8 @@ project knowledge.
 Create a compressed handoff artifact only when one is needed:
 
 ```bash
-loreloop knowledge export --format package --output baseline.zip
-loreloop knowledge replay baseline.zip
+loreloop knowledge export --format package --output workspace/baseline.zip
+loreloop knowledge replay workspace/baseline.zip
 ```
 
 By default, project documents come from clean commits. During active
@@ -254,7 +255,7 @@ development, export the exact current files without committing or changing the
 real Git index:
 
 ```bash
-loreloop knowledge export --format docs --output baseline --working-tree
+loreloop knowledge export --format docs --output workspace/baseline --working-tree
 ```
 
 The working-tree baseline includes staged, unstaged, and untracked non-ignored
@@ -301,10 +302,10 @@ loreloop knowledge approve <entry-id>
 loreloop knowledge verify <entry-id> --headed
 loreloop knowledge export \
   --format docs \
-  --output baseline \
+  --output workspace/baseline \
   --include-web \
   --force
-loreloop knowledge replay baseline
+loreloop knowledge replay workspace/baseline
 ```
 
 Files under `.loreloop/web-tests/candidates/` are private, untrusted review
@@ -339,6 +340,13 @@ loreloop test prove <run-id>
 loreloop report <run-id>
 ```
 
+The final report is also written to
+`workspace/change/<run-id>/acceptance-report.md`. This keeps requirement or
+root-cause analysis, implementation notes, changed-file impact, selected tests,
+results, acceptance evidence, and remaining risks as one per-change human
+record. `workspace/baseline/` remains the consolidated current-project view;
+change reports do not silently become authoritative baseline facts.
+
 In a non-Git aggregate workspace with more than one declared repository, use
 `loreloop web test approve <scenario-id> --repo <repo-name>`; the approved JSON
 is written into that repository so its committed snapshot remains authoritative.
@@ -353,12 +361,12 @@ For an optional local trust-chain assertion, export with `--attest` and replay
 with `--trusted`:
 
 ```bash
-loreloop knowledge export --format package --output baseline.zip --attest
-loreloop knowledge replay baseline.zip --trusted
+loreloop knowledge export --format package --output workspace/baseline.zip --attest
+loreloop knowledge replay workspace/baseline.zip --trusted
 ```
 
-`--format docs` defaults to the readable `baseline/` directory. Package mode
-(`--format package`) defaults to the compressed `baseline.zip` transport. The
+`--format docs` defaults to the readable `workspace/baseline/` directory. Package mode
+(`--format package`) defaults to the compressed `workspace/baseline.zip` transport. The
 default `--format audit` remains the separate single-file, entry-by-entry trust export;
 it is not the project document package.
 

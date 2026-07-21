@@ -286,6 +286,10 @@ def test_cli_check_and_report_flow(workdir, capsys):
     out = capsys.readouterr().out
     assert "Verdict: ACCEPTED" in out
     assert "login page loads" in out
+    report = workdir / f"workspace/change/{run_id}/acceptance-report.md"
+    assert report.is_file()
+    assert "Verdict: ACCEPTED" in report.read_text(encoding="utf-8")
+    assert "login page loads" in report.read_text(encoding="utf-8")
 
 
 def test_cli_begin_keeps_work_in_current_session_and_complete_signs_it(
@@ -2634,6 +2638,9 @@ def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys)
     assert "--working-tree" in out
     assert (workdir / ".loreloop/knowledge.db").exists()
     assert ".loreloop/" in (workdir / ".gitignore").read_text()
+    assert "/workspace/baseline/" in (workdir / ".gitignore").read_text()
+    assert "/workspace/baseline*.zip" in (workdir / ".gitignore").read_text()
+    assert "/workspace/change/" in (workdir / ".gitignore").read_text()
 
     skill = workdir / ".claude/skills/loreloop/SKILL.md"
     assert skill.exists()
@@ -2644,13 +2651,21 @@ def test_cli_init_creates_store_and_installs_skill(workdir, monkeypatch, capsys)
     assert "recommend moving/deleting `.loreloop` manually" in text
     assert "specific, explicit instruction" in text
     assert "name: loreloop" in text
-    assert "knowledge export --format docs --output baseline" in text
+    assert "knowledge export --format docs --output workspace/baseline" in text
+    assert "workspace/change/<run-id>/acceptance-report.md" in text
     assert "--working-tree" in text
     assert "never issue a shell tool call with its command omitted" in text
 
     # idempotent: second run must not duplicate the gitignore line
     assert main(["init", "--skill"]) == 0
-    assert (workdir / ".gitignore").read_text().count(".loreloop/") == 1
+    gitignore_text = (workdir / ".gitignore").read_text()
+    for entry in (
+        ".loreloop/",
+        "/workspace/baseline/",
+        "/workspace/baseline*.zip",
+        "/workspace/change/",
+    ):
+        assert gitignore_text.count(entry) == 1
 
 
 def test_cli_init_refreshes_legacy_project_skills_to_readable_baseline(
@@ -2677,7 +2692,7 @@ loreloop knowledge export --format package --output baseline.zip
     for path in (claude_skill, agent_skill):
         text = path.read_text(encoding="utf-8")
         assert "Keep the project integration current" in text
-        assert "knowledge export --format docs --output baseline" in text
+        assert "knowledge export --format docs --output workspace/baseline" in text
         assert "only when" in text
         assert text != legacy
     out = capsys.readouterr().out
@@ -2716,7 +2731,7 @@ def test_cli_init_installs_codex_companion_skill(workdir, monkeypatch, capsys):
     assert 'Run `loreloop begin "<task>"`' in text
     assert "Keep the user in this host coding-agent session" in text
     assert "loreloop trust recover --from <directory>" in text
-    assert "knowledge export --format docs --output baseline" in text
+    assert "knowledge export --format docs --output workspace/baseline" in text
     assert "installed companion skill for Codex" in capsys.readouterr().out
 
 

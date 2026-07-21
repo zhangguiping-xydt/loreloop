@@ -81,7 +81,9 @@ language. Keep LoreLoop subcommands behind this host-agent workflow:
 6. Record the host-agent narrative with `loreloop task summarize <run-id>
    --analysis "..." --implementation "..."`, adding each acceptance criterion
    and remaining risk with repeated `--acceptance` and `--risk` options.
-7. Present one concise completion summary containing root cause or requirement
+7. `loreloop report <run-id>` also writes the evidence-backed development
+   record to `workspace/change/<run-id>/acceptance-report.md`. Present one
+   concise completion summary containing root cause or requirement
    interpretation, changed files, selected-test rationale, results, Web states,
    coverage gaps, and risks. Then ask for completion confirmation.
 
@@ -94,12 +96,12 @@ When the operator asks to export project knowledge, a knowledge baseline, or
 reverse-engineered project documents, export a directly readable directory
 rather than the legacy entry audit:
 
-    loreloop knowledge export --format docs --output baseline
+    loreloop knowledge export --format docs --output workspace/baseline
 
 The directory contains six fixed Markdown documents, evidence-backed optional
 interface/database documents, and the portable Capsule. It can be opened,
 searched, and replayed without manual extraction. Use the compressed command
-`loreloop knowledge export --format package --output baseline.zip` only when
+`loreloop knowledge export --format package --output workspace/baseline.zip` only when
 the operator explicitly asks for a handoff artifact. Use `--format audit` only
 when the operator explicitly asks for the entry-by-entry knowledge audit.
 
@@ -110,7 +112,7 @@ string shown above; never issue a shell tool call with its command omitted. Do
 not add `--force` unless the operator explicitly authorizes replacing an
 existing output. Verify a produced package with:
 
-    loreloop knowledge replay baseline
+    loreloop knowledge replay workspace/baseline
 
 Committed snapshots remain the default. If export reports uncommitted source
 changes, show the listed files to the operator. Do not commit, stash, delete,
@@ -118,7 +120,7 @@ or ignore them automatically. If the request is to export the current project
 baseline (rather than specifically a committed-release baseline), retry
 directly without asking for a Git commit:
 
-    loreloop knowledge export --format docs --output baseline --working-tree
+    loreloop knowledge export --format docs --output workspace/baseline --working-tree
 
 This mode includes staged, unstaged, and untracked non-ignored files, binds
 them to the current HEAD and a separate source tree, and labels every document
@@ -134,7 +136,7 @@ merely to make an export pass.
 Search the replay-verified SemanticCore Agent view without extracting the
 package:
 
-    loreloop knowledge search "<query>" --package baseline
+    loreloop knowledge search "<query>" --package workspace/baseline
 
 Every hit is an exact Agent-view fact mapped to its owning human document
 domain and source evidence. Do not claim that an atomic Agent fact appears
@@ -145,7 +147,7 @@ If the question uses different wording, derive 5-15 concise synonyms,
 translations, abbreviations, and likely code identifiers in this current host
 session, then retry without launching a nested agent:
 
-    loreloop knowledge search "<query>" --package baseline --expand "<terms>"
+    loreloop knowledge search "<query>" --package workspace/baseline --expand "<terms>"
 
 Expansion is retrieval-only. Never present expansion terms as project facts or
 evidence, and never let them change trust. Use only replay-verified package
@@ -154,8 +156,8 @@ content returned by the search in the answer.
 When the operator explicitly requests a Web-enriched replacement and has
 approved and verified the relevant Web entries:
 
-    loreloop knowledge export --format docs --output baseline --include-web --force
-    loreloop knowledge replay baseline
+    loreloop knowledge export --format docs --output workspace/baseline --include-web --force
+    loreloop knowledge replay workspace/baseline
 
 When the operator asks for repeatable Web tests:
 

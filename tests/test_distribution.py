@@ -60,7 +60,8 @@ def test_plugin_skill_finishes_installation_with_bundled_installer():
     assert 'Run `loreloop begin "<task>"`' in skill
     assert "loreloop init --skill` once in this new host session" in skill
     assert "refreshes stale project-level" in skill
-    assert "knowledge export --format docs --output baseline" in skill
+    assert "knowledge export --format docs --output workspace/baseline" in skill
+    assert "workspace/change/<run-id>/acceptance-report.md" in skill
     assert "--working-tree" in skill
     assert "Use `--format audit` only" in skill
     assert "command omitted" in skill

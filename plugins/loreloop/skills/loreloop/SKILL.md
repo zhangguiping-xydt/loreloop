@@ -65,13 +65,13 @@ reverse-engineered project documents, export a directly readable directory
 rather than the legacy entry audit:
 
 ```text
-loreloop knowledge export --format docs --output baseline
+loreloop knowledge export --format docs --output workspace/baseline
 ```
 
 The directory contains six fixed Markdown documents, evidence-backed optional
 interface/database documents, and the portable Capsule. It can be opened,
 searched, and replayed without manual extraction. Use the compressed command
-`loreloop knowledge export --format package --output baseline.zip` only when
+`loreloop knowledge export --format package --output workspace/baseline.zip` only when
 the operator explicitly asks for a handoff artifact. Use `--format audit` only
 when the operator explicitly asks for the entry-by-entry knowledge audit.
 
@@ -83,7 +83,7 @@ not add `--force` unless the operator explicitly authorizes replacing an
 existing output. Verify a produced package with:
 
 ```text
-loreloop knowledge replay baseline
+loreloop knowledge replay workspace/baseline
 ```
 
 Committed snapshots remain the default. If export reports uncommitted source
@@ -93,7 +93,7 @@ baseline (rather than specifically a committed-release baseline), retry
 directly without asking for a Git commit:
 
 ```text
-loreloop knowledge export --format docs --output baseline --working-tree
+loreloop knowledge export --format docs --output workspace/baseline --working-tree
 ```
 
 This mode includes staged, unstaged, and untracked non-ignored files, binds
@@ -111,7 +111,7 @@ Search the replay-verified SemanticCore Agent view when the operator asks a
 question about an exported baseline:
 
 ```text
-loreloop knowledge search "<query>" --package baseline
+loreloop knowledge search "<query>" --package workspace/baseline
 ```
 
 Do not unpack or import the ZIP merely to search it. Package search replays the
@@ -129,7 +129,7 @@ current host session: synonyms, Chinese/English translations, abbreviations,
 and likely code identifiers. Retry without launching a nested agent:
 
 ```text
-loreloop knowledge search "<query>" --package baseline --expand "<terms>"
+loreloop knowledge search "<query>" --package workspace/baseline --expand "<terms>"
 ```
 
 Expansion is retrieval-only. Never present an expansion term as project
@@ -143,8 +143,8 @@ approved and LoreLoop has browser-verified, then replace the existing package
 only with explicit overwrite authorization:
 
 ```text
-loreloop knowledge export --format docs --output baseline --include-web --force
-loreloop knowledge replay baseline
+loreloop knowledge export --format docs --output workspace/baseline --include-web --force
+loreloop knowledge replay workspace/baseline
 ```
 
 When the operator asks for repeatable Web tests, keep discovery candidates
@@ -217,8 +217,9 @@ loreloop knowledge search "<query>"
   running `loreloop complete <run-id> --confirm`.
 - Run `loreloop check` or `loreloop verify` only for assertions the operator
   has approved. Re-running an already approved check while iterating is fine.
-- Run `loreloop report <run-id>` when the operator asks for the verdict. Never
-  present a raw test run or the agent's summary as LoreLoop's verdict.
+- Run `loreloop report <run-id>` when the operator asks for the verdict. It
+  also writes `workspace/change/<run-id>/acceptance-report.md`. Never present
+  a raw test run or the agent's summary as LoreLoop's verdict.
 - `loreloop harvest <run-id>` and knowledge curation remain operator acts.
   Execute them only after a specific, explicit instruction for that run or
   entry. Never decide to harvest, approve, reject, reopen, supersede, or

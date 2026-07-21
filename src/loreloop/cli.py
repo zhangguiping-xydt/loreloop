@@ -229,17 +229,25 @@ def cmd_init(args: argparse.Namespace) -> int:
     gitignore = workdir / ".gitignore"
     if (workdir / ".git").exists():
         lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
-        ignore_entry = f"{state_dir.name}/"
-        if ignore_entry not in lines:
+        ignore_entries = (
+            f"{state_dir.name}/",
+            "/workspace/baseline/",
+            "/workspace/baseline*.zip",
+            "/workspace/change/",
+        )
+        missing_entries = [entry for entry in ignore_entries if entry not in lines]
+        if missing_entries:
             with gitignore.open("a", encoding="utf-8") as fh:
                 if lines and lines[-1].strip():
                     fh.write("\n")
-                fh.write(f"{ignore_entry}\n")
-            print(f"added {ignore_entry} to .gitignore (evidence may embed page content)")
+                fh.write("".join(f"{entry}\n" for entry in missing_entries))
+            for entry in missing_entries:
+                print(f"added {entry} to .gitignore (generated LoreLoop data)")
         print(
             "Git note: project-local integration files remain ordinary project files; "
             "LoreLoop never commits them automatically. Use "
-            "`loreloop knowledge export --format docs --output baseline --working-tree` "
+            "`loreloop knowledge export --format docs --output workspace/baseline "
+            "--working-tree` "
             "to export the current state without cleaning Git."
         )
 
@@ -1319,8 +1327,10 @@ def cmd_test(args: argparse.Namespace) -> int:
             print(f"SKIPPED: {shlex.join(result.argv)}")
             print(f"  {result.reason}")
         failed = sum(record.event == "check_failed" for record in checks)
-        print(f"{len(checks) - failed} acceptance checks passed, {failed} failed, "
-              f"{len(skipped)} skipped")
+        print(
+            f"{len(checks) - failed} acceptance checks passed, {failed} failed, "
+            f"{len(skipped)} skipped"
+        )
         return 1 if failed or skipped or not checks else 0
     if args.test_action == "run":
         from .workflow.execution import execute_task_test_plan
@@ -2089,7 +2099,26 @@ def cmd_report(args: argparse.Namespace) -> int:
     artifacts = ArtifactStore.for_workdir(workdir)
     evaluation = evaluate_run(run, chain, artifacts, workdir)
     report = render_report(run, chain, artifacts=artifacts, workdir=workdir)
+    output = (
+        Path(args.output)
+        if args.output
+        else workdir / "workspace/change" / run.run_id / "acceptance-report.md"
+    )
+    if output.is_symlink():
+        raise CLIError(
+            "unsafe report output",
+            f"refusing symlinked output: {output}",
+            "choose a regular report path and retry",
+        )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(f".{output.name}.tmp-{os.getpid()}")
+    try:
+        temporary.write_text(report.rstrip() + "\n", encoding="utf-8")
+        os.replace(temporary, output)
+    finally:
+        temporary.unlink(missing_ok=True)
     print(report)
+    print(f"Change knowledge: {output}")
     if evaluation.accepted:
         print(f"Next: loreloop harvest {trace.stem}")
     else:
@@ -2895,7 +2924,7 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
             "the source snapshot is rebuilt from Git commits or an explicit working tree",
             "remove --stale and retry, or use --format audit for knowledge-entry drift",
         )
-    default_output = "baseline.zip" if args.format == "package" else "baseline"
+    default_output = "workspace/baseline.zip" if args.format == "package" else "workspace/baseline"
     output = Path(args.output or default_output)
     archive_output = is_archive_output(output)
     output_existed: bool | None = None
@@ -3674,6 +3703,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_report = sub.add_parser("report", help="render the acceptance report for a run")
     p_report.add_argument("run_id", nargs="?")
+    p_report.add_argument(
+        "--output",
+        help="report file; defaults to workspace/change/<run-id>/acceptance-report.md",
+    )
     p_report.set_defaults(func=cmd_report)
 
     p_harvest = sub.add_parser("harvest", help="flow knowledge back from an accepted run")
@@ -3756,7 +3789,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         help=(
             "audit Markdown file, source-docs directory, or deliverable .zip package; "
-            "docs defaults to baseline/ and package defaults to baseline.zip"
+            "docs defaults to workspace/baseline/ and package defaults to "
+            "workspace/baseline.zip"
         ),
     )
     p_knowledge_export.add_argument("--project-name", help="project name used in source documents")

@@ -142,7 +142,7 @@ def create_user(name: str) -> dict[str, str]:
     assert not (repo / ".loreloop").exists()
 
 
-def test_package_export_defaults_to_baseline_zip(
+def test_package_export_defaults_to_workspace_baseline_zip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = _repository(tmp_path / "demo", {"app.py": "VALUE = 1\n"})
@@ -150,12 +150,12 @@ def test_package_export_defaults_to_baseline_zip(
 
     assert main(["knowledge", "export", "--format", "package"]) == 0
 
-    package = repo / "baseline.zip"
+    package = repo / "workspace/baseline.zip"
     assert package.is_file()
     assert main(["knowledge", "replay", str(package)]) == 0
 
 
-def test_docs_export_defaults_to_readable_baseline_directory(
+def test_docs_export_defaults_to_readable_workspace_baseline_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = _repository(tmp_path / "demo", {"app.py": "VALUE = 1\n"})
@@ -163,7 +163,7 @@ def test_docs_export_defaults_to_readable_baseline_directory(
 
     assert main(["knowledge", "export", "--format", "docs"]) == 0
 
-    baseline = repo / "baseline"
+    baseline = repo / "workspace/baseline"
     assert baseline.is_dir()
     assert len(tuple(baseline.glob("*.md"))) == 6
     assert (baseline / ".loreloop-export.json").is_file()
@@ -465,8 +465,8 @@ def test_working_tree_export_excludes_its_default_baseline_on_regeneration(
     monkeypatch.chdir(repo)
 
     assert main(["knowledge", "export", "--format", "docs", "--working-tree"]) == 0
-    assert (repo / "baseline").is_dir()
-    first_capsule = (repo / "baseline/.loreloop-export.json").read_text(encoding="utf-8")
+    assert (repo / "workspace/baseline").is_dir()
+    first_capsule = (repo / "workspace/baseline/.loreloop-export.json").read_text(encoding="utf-8")
     assert (
         main(
             [
@@ -480,7 +480,9 @@ def test_working_tree_export_excludes_its_default_baseline_on_regeneration(
         )
         == 0
     )
-    assert (repo / "baseline/.loreloop-export.json").read_text(encoding="utf-8") == first_capsule
+    assert (repo / "workspace/baseline/.loreloop-export.json").read_text(
+        encoding="utf-8"
+    ) == first_capsule
     _ = (repo / "app.py").write_text("def second(): return 2\n", encoding="utf-8")
 
     assert (
@@ -497,13 +499,49 @@ def test_working_tree_export_excludes_its_default_baseline_on_regeneration(
         == 0
     )
 
-    detailed = (repo / "baseline/demo-详细设计.md").read_text(encoding="utf-8")
+    detailed = (repo / "workspace/baseline/demo-详细设计.md").read_text(encoding="utf-8")
     assert "| second | second() |" not in detailed
     assert "| first | first() |" not in detailed
-    assert main(["knowledge", "search", "second", "--package", "baseline"]) == 0
+    assert (
+        main(
+            [
+                "knowledge",
+                "search",
+                "second",
+                "--package",
+                "workspace/baseline",
+            ]
+        )
+        == 0
+    )
     searched = capsys.readouterr().out
     assert "second" in searched
     assert "demo-详细设计.md#Agent视图" in searched
+    assert main(["knowledge", "replay", "workspace/baseline"]) == 0
+
+
+def test_docs_export_keeps_explicit_legacy_output_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repository(tmp_path / "demo", {"app.py": "VALUE = 1\n"})
+    monkeypatch.chdir(repo)
+
+    assert (
+        main(
+            [
+                "knowledge",
+                "export",
+                "--format",
+                "docs",
+                "--output",
+                "baseline",
+            ]
+        )
+        == 0
+    )
+
+    assert (repo / "baseline").is_dir()
+    assert not (repo / "workspace/baseline").exists()
     assert main(["knowledge", "replay", "baseline"]) == 0
 
 
