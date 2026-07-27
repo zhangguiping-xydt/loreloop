@@ -64,6 +64,7 @@ class HarvestAlreadyCompleted(HarvestError):
 class HarvestResult:
     minted: list[Entry]
     reversed_entries: list[Entry]
+    requirement_entries: list[Entry] = field(default_factory=list)
     stale: list[Entry] = field(default_factory=list)
     unauditable_checks: list[str] = field(default_factory=list)
     review: list[Entry] = field(default_factory=list)
@@ -170,12 +171,59 @@ def harvest_run(
             )
 
     now = datetime.now(timezone.utc)
+    from .requirement_knowledge import (
+        reconcile_requirement_projection,
+        requirement_entry_ids_for_run,
+        retired_requirement_ids,
+        validate_requirement_materials_for_run,
+    )
+
+    reconcile_requirement_projection(store, records)
+    signed_requirement_ids = requirement_entry_ids_for_run(records, run.run_id)
+    raw_requirement_ids = completed.payload.get("requirement_entry_ids", [])
+    if not isinstance(raw_requirement_ids, list) or not all(
+        isinstance(entry_id, str) and entry_id for entry_id in raw_requirement_ids
+    ):
+        raise HarvestError("accepted run has invalid requirement entry metadata")
+    attached_requirement_ids = tuple(raw_requirement_ids)
+    if set(attached_requirement_ids) != set(signed_requirement_ids):
+        raise HarvestError("accepted run requirement entries do not match signed ingestion")
+    validate_requirement_materials_for_run(workdir, records, run.run_id)
+    retired_requirements = retired_requirement_ids(records)
+    if set(attached_requirement_ids) & retired_requirements:
+        raise HarvestError("accepted run contains rejected or superseded requirement knowledge")
+    requirement_candidates: list[Entry] = []
+    for entry_id in attached_requirement_ids:
+        entry = store.get(entry_id)
+        if entry is None:
+            raise HarvestError(f"requirement entry {entry_id[:8]} is missing after recovery")
+        requirement_candidates.append(
+            replace(
+                entry,
+                trust=Trust(
+                    verification=Verification.VERIFIED,
+                    verified_at=now,
+                    verified_by=run.run_id,
+                ),
+                updated_at=now,
+            )
+        )
     candidates, unauditable = _mint_verified_checks(evaluation.passed, run.run_id, now, artifacts)
+    if requirement_candidates and not candidates:
+        unauditable.append(
+            "requirement knowledge was not verified because no auditable command or browser "
+            "acceptance check passed"
+        )
+        requirement_candidates = []
     # Chain before trust bits: the minted rows are only COMPUTED here — their
     # digests go on the chain first, and the DB is written after the append
     # succeeds. A failure anywhere in between leaves drafts and re-anchors at
     # worst, never a strong bit without its chain-backed justification.
-    minted = _dedupe([_prospective_minted(store, e) for e in candidates])
+    minted = _dedupe(
+        [_prospective_minted(store, e) for e in [*requirement_candidates, *candidates]]
+    )
+    requirement_ids = set(attached_requirement_ids)
+    verified_requirements = [entry for entry in minted if entry.id in requirement_ids]
 
     reversed_entries: list[Entry] = []
     touched_by_repo: dict[str, list[str]] = {}
@@ -240,6 +288,7 @@ def harvest_run(
             "run_id": run.run_id,
             "minted": {e.id: entry_digest(e) for e in minted},
             "minted_entries": [_serialize_minted(entry) for entry in minted],
+            "requirement_entries": [entry.id for entry in verified_requirements],
             "reversed": {e.id: entry_digest(e) for e in reversed_entries},
             "reversed_entries": [_serialize_entry(entry) for entry in reversed_entries],
             "stale": [e.id for e in stale],
@@ -258,6 +307,7 @@ def harvest_run(
     return HarvestResult(
         minted=minted,
         reversed_entries=reversed_entries,
+        requirement_entries=verified_requirements,
         stale=stale,
         unauditable_checks=unauditable,
         review=review,
@@ -349,9 +399,16 @@ def _resume_harvest(
     stale = _entries_from_ids(store, record.payload.get("stale", []))
     review = _entries_from_ids(store, record.payload.get("review", []))
     demoted = _demoted_by_reanchor(reversed_entries, records[: record.index])
+    raw_requirement_entries = record.payload.get("requirement_entries", [])
+    if not isinstance(raw_requirement_entries, list) or not all(
+        isinstance(entry_id, str) for entry_id in raw_requirement_entries
+    ):
+        raise HarvestError("recorded harvest requirement recovery data is invalid")
+    requirement_ids = set(raw_requirement_entries)
     return HarvestResult(
         minted=minted,
         reversed_entries=reversed_entries,
+        requirement_entries=[entry for entry in minted if entry.id in requirement_ids],
         stale=stale,
         unauditable_checks=list(record.payload.get("unauditable_checks", [])),
         review=review,
@@ -382,6 +439,17 @@ def _recorded_entry_digests(records: list[EvidenceRecord]) -> dict[str, set[str]
             for projected_id, projected_digest in values.items():
                 if isinstance(projected_id, str) and isinstance(projected_digest, str):
                     if projected_digest:
+                        recorded.setdefault(projected_id, set()).add(projected_digest)
+        if record.event == "requirement_material_ingested":
+            rows = record.payload.get("entries")
+            if isinstance(rows, dict):
+                for projected_id, row in rows.items():
+                    projected_digest = row.get("digest") if isinstance(row, dict) else None
+                    if (
+                        isinstance(projected_id, str)
+                        and isinstance(projected_digest, str)
+                        and projected_digest
+                    ):
                         recorded.setdefault(projected_id, set()).add(projected_digest)
     return recorded
 

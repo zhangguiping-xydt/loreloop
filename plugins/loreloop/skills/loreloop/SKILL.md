@@ -54,6 +54,31 @@ When the operator asks to use LoreLoop for a development task:
 3. Read the printed context pack using the rules below, then perform the task
    in this current host session.
 
+After code or UI changes, run the task checkpoint before completion:
+
+```text
+loreloop test select <run-id>
+```
+
+This compares the current source with the task-start snapshot, records a new
+task-context generation, and retrieves knowledge for newly affected files.
+The project baseline is not modified. `loreloop complete <run-id> --confirm`
+will refuse to sign a task when source changed after the latest checkpoint or
+when an interface, permission, database, configuration, or external-integration
+change has no matching knowledge coverage. Run `test select` again after the
+next round of changes. The final `loreloop report` includes the injected entry
+ids, incremental context, changed files, coverage, and high-risk gaps.
+
+When the operator provides a committed requirement Markdown file, pass it to
+the same command with `--requirements <path>` (or
+`--requirements repo:<name>/<path>` for a declared peer repository). LoreLoop
+stores deterministic requirement and acceptance assertions as `proposed`
+searchable knowledge. Confirmed completion marks them `implemented`; an
+operator-authorized harvest promotes them to `verified` only when the accepted
+run has auditable command or browser evidence. Later baseline exports reuse
+verified requirement materials automatically. If the file changes, start a
+new task with the new committed version.
+
 Do not use `loreloop run` for normal interactive work: it launches a separate
 coding-agent process. Use it only when the operator explicitly requests an
 automated or headless delegation.
@@ -217,9 +242,25 @@ loreloop knowledge search "<query>"
   running `loreloop complete <run-id> --confirm`.
 - Run `loreloop check` or `loreloop verify` only for assertions the operator
   has approved. Re-running an already approved check while iterating is fine.
+- For every Bug found during diagnosis or regression testing, record the
+  human-report fields before completion. Use one stable id per Bug and include
+  the real reproduction steps, confirmed root cause, recommendation, applied
+  fix, changed files, and test evidence:
+
+```text
+loreloop task bug <run-id> --id BUG-001 \
+  --test-step "..." --description "..." --root-cause "..." \
+  --recommendation "..." --fix-solution "..." \
+  --modified-file "src/..." --test-proof "..."
+```
+
 - Run `loreloop report <run-id>` when the operator asks for the verdict. It
-  also writes `workspace/change/<run-id>/acceptance-report.md`. Never present
-  a raw test run or the agent's summary as LoreLoop's verdict.
+  writes a human-readable Markdown delivery set under
+  `workspace/change/<run-id>/`: `acceptance-report.md`, `test-report.md`,
+  `bug-findings.md`, and `fix-report.md`. Never present a raw test run or the
+  agent's summary as LoreLoop's verdict.
+  The primary verdict path remains
+  `workspace/change/<run-id>/acceptance-report.md`.
 - `loreloop harvest <run-id>` and knowledge curation remain operator acts.
   Execute them only after a specific, explicit instruction for that run or
   entry. Never decide to harvest, approve, reject, reopen, supersede, or

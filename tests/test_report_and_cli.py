@@ -2716,40 +2716,43 @@ def test_cli_init_respects_no_skill_and_missing_agents(workdir, monkeypatch, cap
     assert "skill installation skipped" in capsys.readouterr().out
 
 
-def test_cli_init_installs_codex_companion_skill(workdir, monkeypatch, capsys):
+def test_cli_init_reuses_global_codex_skill_without_project_duplicate(workdir, monkeypatch, capsys):
     import shutil as _shutil
+    import loreloop.companion as companion
 
     monkeypatch.setattr(
         _shutil, "which", lambda name: "/usr/bin/codex" if name == "codex" else None
     )
+    monkeypatch.setattr(companion, "codex_global_skill_active", lambda: True)
 
     assert main(["init", "--skill"]) == 0
 
     skill = workdir / ".agents/skills/loreloop/SKILL.md"
-    assert skill.exists()
-    text = skill.read_text(encoding="utf-8")
-    assert 'Run `loreloop begin "<task>"`' in text
-    assert "Keep the user in this host coding-agent session" in text
-    assert "loreloop trust recover --from <directory>" in text
-    assert "knowledge export --format docs --output workspace/baseline" in text
-    assert "installed companion skill for Codex" in capsys.readouterr().out
+    assert not skill.exists()
+    out = capsys.readouterr().out
+    assert "using the existing global Codex LoreLoop Skill" in out
+    assert "companion skill for Codex:" not in out
 
 
-def test_cli_init_installs_shared_skills_and_opencode_command_once(workdir, monkeypatch, capsys):
+def test_cli_init_keeps_global_codex_single_and_installs_opencode_command(
+    workdir, monkeypatch, capsys
+):
     import shutil as _shutil
+    import loreloop.companion as companion
 
     monkeypatch.setattr(_shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(companion, "codex_global_skill_active", lambda: True)
 
     assert main(["init", "--skill"]) == 0
 
     assert (workdir / ".claude/skills/loreloop/SKILL.md").is_file()
-    assert (workdir / ".agents/skills/loreloop/SKILL.md").is_file()
+    assert not (workdir / ".agents/skills/loreloop/SKILL.md").exists()
     assert (workdir / ".opencode/commands/loreloop.md").is_file()
     out = capsys.readouterr().out
     assert "installed companion skill for Claude/co-mind" in out
-    assert "installed companion skill for Codex/OpenCode" in out
+    assert "using the existing global Codex LoreLoop Skill" in out
     assert out.count(".claude/skills/loreloop/SKILL.md") == 1
-    assert out.count(".agents/skills/loreloop/SKILL.md") == 1
+    assert ".agents/skills/loreloop/SKILL.md" not in out
     assert "installed OpenCode command" in out
 
 

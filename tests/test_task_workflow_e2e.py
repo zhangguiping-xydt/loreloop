@@ -1,8 +1,13 @@
 import re
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 from loreloop.cli import main
+from loreloop.evidence.chain import EvidenceChain
+from loreloop.knowledge.endorsement import curate
+from loreloop.knowledge.model import Channel, Curation, Entry, Kind, Source
+from loreloop.knowledge.store import KnowledgeStore
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -34,6 +39,37 @@ def test_natural_language_bug_flows_to_selected_tests_and_complete_report(
     monkeypatch.chdir(repo)
     assert main(["init", "--no-skill"]) == 0
     capsys.readouterr()
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    with KnowledgeStore(repo / ".loreloop/knowledge.db") as store:
+        entry = store.add(
+            Entry(
+                title="城市查询输入规范",
+                content="城市名称进入查询前必须移除首尾空格。",
+                kind=Kind.CONSTRAINT,
+                source=Source(
+                    channel=Channel.CODE,
+                    locator=f"src/city.py@{head}",
+                    snapshot_ref=head,
+                    symbol="normalize_city",
+                    line_start=1,
+                    line_end=2,
+                    excerpt="def normalize_city(value): return value",
+                ),
+            )
+        )
+        curate(
+            store,
+            EvidenceChain.for_workdir(repo),
+            entry.id,
+            Curation.APPROVED,
+            datetime.now(timezone.utc),
+        )
 
     # Existing operator work must not be attributed to this bug task.
     (repo / "README.md").write_text("operator draft before task\n", encoding="utf-8")
@@ -43,6 +79,8 @@ def test_natural_language_bug_flows_to_selected_tests_and_complete_report(
     assert match is not None
     run_id = match.group(1)
     assert "Task kind: bug" in begun.out
+    assert "城市名称进入查询前必须移除首尾空格" in begun.out
+    assert "Established facts" in begun.out
 
     (repo / "src/city.py").write_text(
         "def normalize_city(value):\n    return value.strip()\n", encoding="utf-8"
@@ -58,6 +96,36 @@ def test_natural_language_bug_flows_to_selected_tests_and_complete_report(
     provisional = capsys.readouterr().out
     assert "1 passed, 0 failed" in provisional
     assert "provisional evidence" in provisional
+
+    assert (
+        main(
+            [
+                "task",
+                "bug",
+                run_id,
+                "--id",
+                "BUG-001",
+                "--test-step",
+                "以带首尾空格的城市名称调用 normalize_city",
+                "--test-step",
+                "检查返回值是否移除空格",
+                "--description",
+                "城市名称保留首尾空格，导致查询键不一致。",
+                "--root-cause",
+                "normalize_city 原样返回输入，没有执行规范化。",
+                "--recommendation",
+                "在查询前统一执行 strip，并保留回归测试。",
+                "--fix-solution",
+                "将 normalize_city 修改为返回 value.strip()。",
+                "--modified-file",
+                "src/city.py",
+                "--test-proof",
+                "tests/test_city.py 的回归用例通过。",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
 
     assert (
         main(
@@ -95,3 +163,21 @@ def test_natural_language_bug_flows_to_selected_tests_and_complete_report(
     assert "tests/test_city.py" in report
     assert "## Provisional automated test execution" in report
     assert "## Checks (1 passed / 0 failed)" in report
+    assert "## Knowledge context and source coverage" in report
+    report_dir = repo / "workspace/change" / run_id
+    acceptance = (report_dir / "acceptance-report.md").read_text(encoding="utf-8")
+    tests = (report_dir / "test-report.md").read_text(encoding="utf-8")
+    bugs = (report_dir / "bug-findings.md").read_text(encoding="utf-8")
+    fixes = (report_dir / "fix-report.md").read_text(encoding="utf-8")
+    assert "## Verdict: ACCEPTED" in acceptance
+    assert "最终验收：通过" in tests
+    assert "## BUG-001" in bugs
+    assert "### 测试步骤" in bugs
+    assert "### 问题描述" in bugs
+    assert "### 根因分析" in bugs
+    assert "### 修改建议" in bugs
+    assert "## BUG-001" in fixes
+    assert "### 根因确认" in fixes
+    assert "### 修复方案" in fixes
+    assert "`src/city.py`" in fixes
+    assert "### 测试证明" in fixes

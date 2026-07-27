@@ -31,6 +31,7 @@ from ..security import redact_sensitive
 CHECK_EVENTS = {"check_passed", "check_failed"}
 DELEGATION_EVENT = "delegation_completed"
 TASK_TEST_PLAN_EVENT = "task_test_plan_created"
+TASK_CONTEXT_EVENT = "task_context_refreshed"
 
 
 class RunTraceError(Exception):
@@ -57,6 +58,7 @@ class RunEvaluation:
     failed: list[EvidenceRecord]
     broken_artifacts: list[tuple[str, str]]
     repository_state_problems: list[str]
+    knowledge_coverage_problems: list[str]
     completions: list[EvidenceRecord]
 
     @property
@@ -93,6 +95,7 @@ class RunEvaluation:
             and not self.failed
             and not self.broken_artifacts
             and not self.repository_state_problems
+            and not self.knowledge_coverage_problems
         )
 
 
@@ -219,6 +222,9 @@ def evaluate_run(
         failed=failed,
         broken_artifacts=_audit_artifacts(checks, artifacts),
         repository_state_problems=_repository_state_problems(checks, workdir),
+        knowledge_coverage_problems=_knowledge_coverage_problems(
+            run.run_id, records, artifacts, workdir
+        ),
         completions=completions,
     )
 
@@ -236,6 +242,7 @@ def render_report(
     failed = evaluation.failed
     broken_artifacts = evaluation.broken_artifacts
     repository_state_problems = evaluation.repository_state_problems
+    knowledge_coverage_problems = evaluation.knowledge_coverage_problems
     verdict = "ACCEPTED" if evaluation.accepted else "NOT ACCEPTED"
 
     # Run metadata comes from the chain record when it exists; the trace is a
@@ -258,6 +265,16 @@ def render_report(
         "",
         f"## Verdict: {verdict}",
         "",
+        "## 人类阅读摘要",
+        "",
+        f"- 任务：{task}",
+        f"- 验收结论：{'通过' if evaluation.accepted else '未通过'}",
+        f"- 项目知识条目：{len(context)}",
+        f"- 验收检查：{len(passed)} 通过 / {len(failed)} 失败",
+        f"- 知识覆盖问题：{len(knowledge_coverage_problems)}",
+        "- 详细测试、Bug 清单和修复证明见同目录的 `test-report.md`、"
+        "`bug-findings.md`、`fix-report.md`。",
+        "",
     ]
     if not evaluation.finished:
         lines += [
@@ -274,6 +291,16 @@ def render_report(
         ]
     if artifacts is not None and workdir is not None:
         lines.extend(_task_workflow_sections(run.run_id, records, artifacts, workdir))
+    if knowledge_coverage_problems:
+        lines.extend(["## Knowledge coverage gate", "", "- NOT SATISFIED"])
+        lines.extend(f"  - {_md(problem)}" for problem in knowledge_coverage_problems)
+        lines.append("")
+    elif any(
+        record.event in {"delegation_prepared", TASK_CONTEXT_EVENT}
+        and record.payload.get("run_id") == run.run_id
+        for record in records
+    ):
+        lines.extend(["## Knowledge coverage gate", "", "- SATISFIED", ""])
     if not checks:
         lines += ["No acceptance checks were recorded for this run.", ""]
     else:
@@ -342,6 +369,19 @@ def _repository_state_problems(checks: list[EvidenceRecord], workdir: Path | Non
     return problems
 
 
+def _knowledge_coverage_problems(
+    run_id: str,
+    records: list[EvidenceRecord],
+    artifacts: ArtifactStore | None,
+    workdir: Path | None,
+) -> list[str]:
+    if artifacts is None or workdir is None:
+        return []
+    from ..workflow.context import knowledge_gate_problems
+
+    return knowledge_gate_problems(workdir, run_id, records, artifacts)
+
+
 def _task_workflow_sections(
     run_id: str,
     records: list[EvidenceRecord],
@@ -355,6 +395,52 @@ def _task_workflow_sections(
     from ..workflow.summary import latest_task_narrative
 
     lines: list[str] = []
+    from ..workflow.context import latest_task_context
+
+    context_record = latest_task_context(run_id, records)
+    if context_record is not None:
+        payload = context_record.payload
+        coverage = payload.get("coverage") if isinstance(payload.get("coverage"), dict) else {}
+        context_ids = payload.get("context_entry_ids", [])
+        added_ids = payload.get("added_context_entry_ids", [])
+        lines.extend(
+            [
+                "## Knowledge context and source coverage",
+                "",
+                f"- Context generation: {payload.get('context_generation', '?')}",
+                f"- Injected entries at latest checkpoint: {len(context_ids) if isinstance(context_ids, list) else 0}",
+                f"- Incremental entries added: {len(added_ids) if isinstance(added_ids, list) else 0}",
+                f"- Changed files covered: {len(coverage.get('files', {})) if isinstance(coverage, dict) and isinstance(coverage.get('files'), dict) else 0}",
+                f"- High-risk knowledge gaps: {len(coverage.get('high_risk_missing', [])) if isinstance(coverage, dict) and isinstance(coverage.get('high_risk_missing'), list) else 0}",
+                f"- High-risk reference-only coverage: {len(coverage.get('high_risk_untrusted', [])) if isinstance(coverage, dict) and isinstance(coverage.get('high_risk_untrusted'), list) else 0}",
+                "",
+            ]
+        )
+        if isinstance(context_ids, list) and context_ids:
+            strong_ids = set(payload.get("strong_context_entry_ids", []))
+            added = set(added_ids if isinstance(added_ids, list) else [])
+            file_coverage = coverage.get("files", {}) if isinstance(coverage, dict) else {}
+            reverse_files: dict[str, list[str]] = {}
+            if isinstance(file_coverage, dict):
+                for file_name, entry_ids in file_coverage.items():
+                    if not isinstance(entry_ids, list):
+                        continue
+                    for entry_id in entry_ids:
+                        reverse_files.setdefault(str(entry_id), []).append(str(file_name))
+            lines.append(
+                "| Knowledge entry | Recall reason | Affected code | Stage | Trust |"
+            )
+            lines.append("|---|---|---|---|---|")
+            for entry_id in context_ids:
+                key = str(entry_id)
+                affected = ", ".join(f"`{_md(path)}`" for path in reverse_files.get(key, []))
+                reason = "source anchor" if affected else "task/diff retrieval"
+                stage = "incremental checkpoint" if entry_id in added else "initial context"
+                trust = "strong" if entry_id in strong_ids else "reference"
+                lines.append(
+                    f"| `{_md(key)}` | {reason} | {affected or '-'} | {stage} | {trust} |"
+                )
+            lines.append("")
     narrative = latest_task_narrative(run_id, records)
     if narrative is not None:
         lines.extend(
@@ -373,17 +459,65 @@ def _task_workflow_sections(
             lines.extend(["## Acceptance criteria", ""])
             lines.extend(f"- {item}" for item in narrative.acceptance)
             lines.append("")
+        else:
+            lines.extend(["## Acceptance criteria", "", "- Not recorded.", ""])
         if narrative.risks:
             lines.extend(["## Known risks and limitations", ""])
             lines.extend(f"- {item}" for item in narrative.risks)
             lines.append("")
+        else:
+            lines.extend(["## Known risks and limitations", "", "- None recorded.", ""])
+    else:
         lines.extend(
             [
-                "The sections above are host-agent-authored narrative; test, browser, "
-                "Git, and chain evidence below determine verification.",
+                "## Root cause or requirement analysis",
+                "",
+                "Not recorded by the host agent.",
+                "",
+                "## Implementation summary",
+                "",
+                "Not recorded by the host agent.",
+                "",
+                "## Acceptance criteria",
+                "",
+                "- Not recorded by the host agent.",
+                "",
+                "## Known risks and limitations",
+                "",
+                "- Not recorded by the host agent.",
                 "",
             ]
         )
+    lines.extend(
+        [
+            "The sections above are host-agent-authored narrative; test, browser, "
+            "Git, and chain evidence below determine verification.",
+            "",
+        ]
+    )
+    from ..knowledge.requirement_knowledge import (
+        requirement_lifecycle,
+        requirement_materials_for_run,
+    )
+
+    requirement_materials = requirement_materials_for_run(records, run_id)
+    if requirement_materials:
+        states = requirement_lifecycle(records)
+        lines.extend(["## Requirement knowledge lifecycle", ""])
+        for material in requirement_materials:
+            material_states = sorted(
+                {
+                    states.get(entry_id).value
+                    for entry_id in material.entry_ids
+                    if entry_id in states
+                }
+            )
+            lines.append(
+                f"- `{material.locator}` at `{material.sha256[:16]}`: "
+                f"{len(material.entry_ids)} structured assertions; "
+                f"state={','.join(material_states) or 'unknown'}"
+            )
+        lines.append("")
     plan = latest_task_test_plan(run_id, records, artifacts)
     if plan is not None:
         lines.extend(

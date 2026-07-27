@@ -385,14 +385,16 @@ options:
   --timeout TIMEOUT
 
 $ loreloop task --help
-usage: loreloop task [-h] {summarize} ...
+usage: loreloop task [-h] {summarize,bug} ...
 
 positional arguments:
-  {summarize}
-    summarize  record analysis, implementation, acceptance and known risks
+  {summarize,bug}
+    summarize      record analysis, implementation, acceptance and known risks
+    bug            record one discovered bug and its evidence-backed repair
+                   details
 
 options:
-  -h, --help   show this help message and exit
+  -h, --help       show this help message and exit
 
 $ loreloop task summarize --help
 usage: loreloop task summarize [-h] --analysis ANALYSIS --implementation
@@ -409,6 +411,27 @@ options:
   --implementation IMPLEMENTATION
   --acceptance ACCEPTANCE
   --risk RISK
+
+$ loreloop task bug --help
+usage: loreloop task bug [-h] --id BUG_ID --test-step TEST_STEP --description
+                         DESCRIPTION --root-cause ROOT_CAUSE --recommendation
+                         RECOMMENDATION --fix-solution FIX_SOLUTION
+                         --modified-file MODIFIED_FILE --test-proof TEST_PROOF
+                         RUN_ID
+
+positional arguments:
+  RUN_ID
+
+options:
+  -h, --help            show this help message and exit
+  --id BUG_ID
+  --test-step TEST_STEP
+  --description DESCRIPTION
+  --root-cause ROOT_CAUSE
+  --recommendation RECOMMENDATION
+  --fix-solution FIX_SOLUTION
+  --modified-file MODIFIED_FILE
+  --test-proof TEST_PROOF
 
 $ loreloop verify --help
 usage: loreloop verify [-h] [--headed] [--script SCRIPT] [--allow-writes]
@@ -460,7 +483,7 @@ options:
 
 $ loreloop run --help
 usage: loreloop run [-h] [--no-expand] [--with-related]
-                    [--related-limit RELATED_LIMIT]
+                    [--related-limit RELATED_LIMIT] [--requirements PATH]
                     [--agent {claude,codex,opencode,co-mind}]
                     task
 
@@ -475,6 +498,8 @@ options:
                         projects
   --related-limit RELATED_LIMIT
                         maximum related-project references
+  --requirements PATH   committed requirement Markdown; use repo:NAME/path for
+                        a peer repository
   --agent {claude,codex,opencode,co-mind}
                         override the coding-agent CLI for this action
 
@@ -504,8 +529,8 @@ positional arguments:
 
 options:
   -h, --help       show this help message and exit
-  --output OUTPUT  report file; defaults to workspace/change/<run-
-                   id>/acceptance-report.md
+  --output OUTPUT  acceptance report file; test/Bug/fix Markdown is written
+                   beside it
 
 $ loreloop harvest --help
 usage: loreloop harvest [-h] [--agent {claude,codex,opencode,co-mind}] run_id

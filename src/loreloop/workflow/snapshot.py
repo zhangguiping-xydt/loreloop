@@ -33,6 +33,8 @@ def capture_task_source_snapshot(workdir: Path) -> dict[str, Any]:
             if not raw:
                 continue
             relative = os.fsdecode(raw)
+            if _is_ephemeral_source_path(relative):
+                continue
             if _is_within(relative, excluded):
                 continue
             candidate = repository / relative
@@ -110,3 +112,19 @@ def _state_relative_to_repo(repository: Path, workdir: Path) -> str | None:
 
 def _is_within(path: str, directory: str | None) -> bool:
     return directory is not None and (path == directory or path.startswith(f"{directory}/"))
+
+
+def _is_ephemeral_source_path(path: str) -> bool:
+    """Ignore interpreter/test caches that cannot be a task source change."""
+    parts = {part.casefold() for part in Path(path).parts}
+    return bool(
+        parts
+        & {
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            ".tox",
+            "node_modules",
+        }
+    ) or path.casefold().endswith((".pyc", ".pyo"))

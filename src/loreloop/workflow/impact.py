@@ -19,6 +19,7 @@ from ..knowledge.authoritative_detector_tests import (
     is_supported_test_evidence_path,
     is_web_scenario_path,
 )
+from ..knowledge.model import Entry
 from ..webexplore.scenarios import parse_web_scenario
 from .model import SourceChange, TaskIntent, TaskTestPlan, TestCommand, TestSelection
 from .snapshot import capture_task_source_snapshot, compare_task_source_snapshots
@@ -84,6 +85,9 @@ def create_task_test_plan(
     records: list[EvidenceRecord],
     chain: EvidenceChain,
     artifacts: ArtifactStore,
+    entries: list[Entry] | None = None,
+    endorsed_ids: set[str] | frozenset[str] = frozenset(),
+    unendorsed_ids: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[TaskTestPlan, EvidenceRecord]:
     preparation = _preparation(records, run_id)
     before_sha = preparation.payload.get("source_snapshot_artifact")
@@ -114,6 +118,22 @@ def create_task_test_plan(
             "missing": sum(item.tier == "missing" for item in selections),
         },
     )
+    if entries is not None:
+        from .context import refresh_task_context
+
+        refresh_task_context(
+            workdir,
+            run_id,
+            intent.text,
+            changes,
+            entries,
+            preparation.payload.get("context_entries", []),
+            records + [record],
+            chain,
+            artifacts,
+            endorsed_ids=endorsed_ids,
+            unendorsed_ids=unendorsed_ids,
+        )
     return plan, record
 
 

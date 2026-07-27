@@ -734,6 +734,27 @@ Markdown SHA-256，不再把同一 AST 记录复制到多个文档节点。无�
 影响、测试选择与执行、Web 覆盖、验收结果和风险。该报告是证据链的可读投影，不会被源码基线
 导出自动当成需求事实；全量权威视图仍由最新源码、测试、显式需求材料及受治理 Web 事实重建。
 
+每个 change 目录同时生成四份人类交付 Markdown：总体验收报告、测试报告、Bug 发现清单和修复
+报告。Bug 记录是独立的 `task_bug_recorded` 链事件，要求稳定编号、真实测试步骤、问题描述、根因、
+修改建议、修复方案、修改文件和测试证明。报告只投影已记录字段；缺失时明确显示未记录，不能从
+Agent 的自由文本总结中补写不存在的测试步骤或证据。
+
+显式增量需求同时进入断言级知识投影。`begin --requirements` 用确定性 Markdown 解析器生成稳定
+ID 的 requirement/acceptance 条目，并把源仓库、提交、文件 SHA-256 和行号写入
+`requirement_material_ingested` 事件，再更新 SQLite。证据链按事件重放出以下生命周期：
+
+```text
+requirement_material_ingested → proposed
+delegation_completed          → implemented
+knowledge_harvested + 可审计命令/浏览器证据 → verified
+新文档版本或人工拒绝          → superseded / rejected
+```
+
+SQLite 只负责 BM25 召回与展示，删除行后可从 ingestion 事件恢复；直接修改 SQLite 不能推进状态。
+基线导出会自动发现最新版、整份均为 verified 的需求材料，并验证当前提交态（工作树模式还会验证
+工作树文件）仍与入库 SHA 一致后才合并。文件内容变化必须以新任务重新 ingestion，避免历史需求
+静默覆盖现行实现，也避免 proposed 内容冒充权威规格。
+
 包检索在一次 replay 验证得到的不可变快照上索引 SemanticCore Agent 视图，并把每个命中映射到
 规范归属的人类文档领域及源码证据。BM25 只为本次查询保留相关词项，但文档长度、词频、IDF 和
 排序边界保持不变。`--expand` 只提供低权重同义词、翻译和标识符，不写回基线；纯扩展命中必须
@@ -911,6 +932,19 @@ LoreLoop 的威胁模型是 **honest workstation**:
 ---
 
 ## 16. 当前状态与后续方向
+
+### 16.1 任务上下文的系统级知识门禁
+
+项目 baseline 在开发任务期间保持稳定，不因每次代码保存而重写。任务开始时，
+`begin` 记录初始知识条目和源码快照；`test select` 是强制的任务检查点：它比较
+任务开始以来的源码变化，自动生成新的 context generation，并记录增量召回条目、
+受影响文件和知识覆盖范围。
+
+`complete --confirm` 在签署完成事件前检查最近检查点。如果源码在检查点之后继续变化，
+必须重新执行 `test select`；接口、权限、数据库、配置和外部集成等高风险变更如果没有
+匹配的项目知识覆盖，完成会被拒绝。最终 `report` 展示注入条目、增量上下文、变更范围、
+覆盖状态和缺口。该机制证明“LoreLoop 注入了哪些知识并检查了哪些范围”，不虚构模型
+内部理解，baseline 仍由显式 harvest/export 更新。
 
 当前实现已经具备本地最小闭环:
 

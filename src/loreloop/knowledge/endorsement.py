@@ -254,6 +254,13 @@ def known_projection_digests(records: list[EvidenceRecord]) -> dict[str, set[str
                 for entry_id, digest in reversed_rows.items():
                     if digest:
                         known.setdefault(entry_id, set()).add(digest)
+        elif rec.event == "requirement_material_ingested":
+            rows = rec.payload.get("entries")
+            if isinstance(rows, dict):
+                for entry_id, row in rows.items():
+                    digest = row.get("digest") if isinstance(row, dict) else None
+                    if isinstance(entry_id, str) and isinstance(digest, str) and digest:
+                        known.setdefault(entry_id, set()).add(digest)
     return known
 
 

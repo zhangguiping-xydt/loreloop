@@ -110,9 +110,10 @@ class DelegateRunner:
 
         intent = TaskIntent.from_text(task)
         task_prompt = f"# Task\n\nTask kind: {intent.kind}\n\n{task}\n"
-        prompt = "\n".join(
-            part.rstrip() for part in (prefix, requirement_context, task_prompt) if part
-        ) + "\n"
+        prompt = (
+            "\n".join(part.rstrip() for part in (prefix, requirement_context, task_prompt) if part)
+            + "\n"
+        )
 
         self._trace(
             trace_path,
@@ -153,6 +154,8 @@ class DelegateRunner:
         expansion: str = "",
         related: list[ForeignEntry] | None = None,
         ingestion_policies: dict[str, IngestionPolicy] | None = None,
+        requirement_context: str = "",
+        requirement_materials: list[dict[str, str]] | None = None,
     ) -> DelegationResult:
         if self._agent is None:
             raise RuntimeError("delegated run requires an agent runner")
@@ -164,6 +167,8 @@ class DelegateRunner:
             expansion=expansion,
             related=related,
             ingestion_policies=ingestion_policies,
+            requirement_context=requirement_context,
+            requirement_materials=requirement_materials,
         )
         try:
             output = self._agent.run(prepared.prompt)

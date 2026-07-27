@@ -150,10 +150,11 @@ loreloop knowledge review
 ```
 
 Generate a directly readable authoritative baseline from clean committed Git
-snapshots for onboarding or requirement development. By default this path does
-not call an agent or open the SQLite store or a key. A non-Git workspace root is
-supported when its member repositories have been declared with
-`loreloop repo add`:
+snapshots for onboarding or requirement development. Source-only export does
+not call an agent. When the project already has verified requirement knowledge,
+LoreLoop verifies the local evidence chain and automatically carries those
+requirements into the rebuilt baseline. A non-Git workspace root is supported
+when its member repositories have been declared with `loreloop repo add`:
 
 ```bash
 loreloop knowledge export \
@@ -340,12 +341,37 @@ loreloop test prove <run-id>
 loreloop report <run-id>
 ```
 
+After each round of code or UI changes, run the task checkpoint once:
+
+```bash
+loreloop test select <run-id>
+```
+
+LoreLoop compares the current diff with the task-start snapshot, refreshes a
+task-scoped knowledge context, and prints the incremental project facts. The
+completion gate rejects code changed after the latest checkpoint and blocks
+high-risk interface, permission, database, configuration, or external-
+integration changes that have no matching knowledge coverage. The final report
+lists the context generation, entries actually injected, affected files,
+coverage, and gaps. This provides an auditable knowledge-injection → change →
+acceptance chain; it does not pretend to prove a model's private internal
+understanding.
+
 The final report is also written to
-`workspace/change/<run-id>/acceptance-report.md`. This keeps requirement or
-root-cause analysis, implementation notes, changed-file impact, selected tests,
-results, acceptance evidence, and remaining risks as one per-change human
-record. `workspace/baseline/` remains the consolidated current-project view;
-change reports do not silently become authoritative baseline facts.
+`workspace/change/<run-id>/` as four human-readable Markdown files:
+
+- `acceptance-report.md` — overall verdict, knowledge use, and evidence;
+- `test-report.md` — scope, selection rationale, commands, results, and proof;
+- `bug-findings.md` — Bug id, reproduction steps, description, root cause, and recommendation;
+- `fix-report.md` — Bug id, confirmed cause, fix, modified files, and test proof.
+
+The host agent records each real Bug with `loreloop task bug`. Missing fields
+are shown as missing instead of being invented from the final summary. These
+files keep requirement or root-cause analysis, implementation notes,
+changed-file impact, selected tests, results, acceptance evidence, and
+remaining risks as one per-change human record. `workspace/baseline/` remains
+the consolidated current-project view; change reports do not silently become
+authoritative baseline facts.
 
 In a non-Git aggregate workspace with more than one declared repository, use
 `loreloop web test approve <scenario-id> --repo <repo-name>`; the approved JSON
@@ -383,6 +409,26 @@ the exact requirement blob from `HEAD` and returns its commit, SHA-256, content,
 and relevant governed knowledge to the current Codex, Claude Code, OpenCode, or
 co-mind conversation. It does not replace the chat entry point or launch a
 nested agent.
+
+The same command also turns the document into structured, searchable project
+knowledge. Its lifecycle is evidence-backed:
+
+- `begin --requirements` stores requirement and acceptance assertions as
+  `proposed`;
+- operator-confirmed `complete` marks the task-bound assertions as
+  `implemented`;
+- `harvest` promotes them to `verified` only when the accepted run has an
+  auditable command or browser artifact;
+- a later baseline rebuild automatically includes the latest fully verified
+  requirement documents;
+- changing a requirement file creates a new proposed version and supersedes
+  removed or rewritten assertions. Re-run `begin --requirements` for that new
+  committed version.
+
+The Markdown file remains the human-authored source in Git. SQLite contains a
+searchable projection with exact source digest and line evidence; the signed
+evidence chain remains lifecycle authority. Thus later tasks can retrieve the
+requirement without treating a proposal as an implemented system fact.
 
 When the work is ready, LoreLoop can record deterministic checks and render an
 acceptance report:

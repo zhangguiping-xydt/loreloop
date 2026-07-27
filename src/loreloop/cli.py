@@ -289,8 +289,23 @@ def cmd_init(args: argparse.Namespace) -> int:
             action = "refreshed" if existed else "installed"
             print(f"{action} companion skill for {detected}: {path.relative_to(workdir)}")
         agent_hosts = [name for name in ("codex", "opencode") if name in hosts]
-        install_agents = bool(agent_hosts) or (
-            refresh_existing and ((workdir / AGENT_SKILL_RELPATH).exists() or not hosts)
+        from .companion import codex_global_skill_active
+
+        global_codex = "codex" in agent_hosts and codex_global_skill_active()
+        if global_codex:
+            from .companion import remove_managed_codex_skill
+
+            if remove_managed_codex_skill(workdir):
+                print("removed duplicate project Codex companion skill")
+            print("using the existing global Codex LoreLoop Skill")
+        # Codex scans the shared .agents tree. When its global source Skill is
+        # active, creating an OpenCode project Skill there would reintroduce a
+        # second LoreLoop entry in Codex, so OpenCode uses its native command.
+        project_agent_hosts = [] if global_codex else agent_hosts
+        install_agents = bool(project_agent_hosts) or (
+            not global_codex
+            and refresh_existing
+            and ((workdir / AGENT_SKILL_RELPATH).exists() or not hosts)
         )
         if install_agents:
             from .companion import install_codex_skill
@@ -298,7 +313,9 @@ def cmd_init(args: argparse.Namespace) -> int:
             existed = (workdir / AGENT_SKILL_RELPATH).exists()
             path = install_codex_skill(workdir)
             labels = {"codex": "Codex", "opencode": "OpenCode"}
-            detected = "/".join(labels[name] for name in agent_hosts) or "Codex-compatible hosts"
+            detected = (
+                "/".join(labels[name] for name in project_agent_hosts) or "Codex-compatible hosts"
+            )
             action = "refreshed" if existed else "installed"
             print(f"{action} companion skill for {detected}: {path.relative_to(workdir)}")
         if "opencode" in hosts:
@@ -1363,12 +1380,18 @@ def cmd_test(args: argparse.Namespace) -> int:
     from .workflow.impact import create_task_test_plan, render_task_test_plan
 
     try:
+        context_entries, context_endorsed, context_unendorsed = _active_delegation_entries(
+            workdir, chain.verify()
+        )
         plan, record = create_task_test_plan(
             workdir,
             args.run_id,
             chain.verify(),
             chain,
             artifacts,
+            entries=context_entries,
+            endorsed_ids=context_endorsed,
+            unendorsed_ids=context_unendorsed,
         )
     except ValueError as exc:
         raise CLIError(
@@ -1396,12 +1419,41 @@ def cmd_test(args: argparse.Namespace) -> int:
         print(f"exported task test plan: {output}")
     else:
         print(rendered, end="")
+    _print_task_context_update(args.run_id, context_entries, chain.verify())
     print(f"evidence: chain hash {record.chain_hash[:16]}", file=sys.stderr)
     return 0
 
 
+def _print_task_context_update(run_id: str, entries: list[Entry], records) -> None:
+    """Expose the refreshed, source-bound facts to the current host agent."""
+    context = next(
+        (
+            item
+            for item in reversed(records)
+            if item.event == "task_context_refreshed" and item.payload.get("run_id") == run_id
+        ),
+        None,
+    )
+    if context is None:
+        return
+    ids = context.payload.get("context_entry_ids", [])
+    by_id = {entry.id: entry for entry in entries}
+    print("\n## LoreLoop incremental project knowledge")
+    print(f"Context generation: {context.payload.get('context_generation', '?')}")
+    if not ids:
+        print("No matching project knowledge was found; review the reported coverage gaps.")
+        return
+    for entry_id in ids:
+        entry = by_id.get(entry_id)
+        if entry is None:
+            continue
+        print(f"\n### {entry.title} [{entry.kind.value}]")
+        print(f"Source: {entry.source.locator}")
+        print(entry.content)
+
+
 def cmd_task(args: argparse.Namespace) -> int:
-    from .workflow.summary import record_task_narrative
+    from .workflow.summary import record_bug, record_task_narrative
 
     workdir = _workdir()
     chain = EvidenceChain.for_workdir(workdir)
@@ -1417,6 +1469,24 @@ def cmd_task(args: argparse.Namespace) -> int:
             "copy the exact run id printed by `loreloop begin`, then retry",
         )
     try:
+        if args.task_action == "bug":
+            _, record = record_bug(
+                chain,
+                args.run_id,
+                args.bug_id,
+                tuple(args.test_step),
+                args.description,
+                args.root_cause,
+                args.recommendation,
+                args.fix_solution,
+                tuple(args.modified_file),
+                tuple(args.test_proof),
+            )
+            print(
+                f"recorded bug {args.bug_id} for {args.run_id} "
+                f"(chain hash {record.chain_hash[:16]})"
+            )
+            return 0
         _, record = record_task_narrative(
             chain,
             args.run_id,
@@ -1427,9 +1497,9 @@ def cmd_task(args: argparse.Namespace) -> int:
         )
     except ValueError as exc:
         raise CLIError(
-            "invalid task summary",
+            "invalid task report data",
             str(exc),
-            "provide concise analysis, implementation, acceptance, and risk text",
+            "provide every required bug or summary field with concise text",
         ) from exc
     print(f"recorded task summary for {args.run_id} (chain hash {record.chain_hash[:16]})")
     return 0
@@ -1711,6 +1781,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         else []
     )
     current_policies = chain_ingestion_policies(records)
+    from .knowledge.requirement_context import (
+        load_requirement_materials,
+        render_requirement_context,
+    )
+
+    requirement_materials = load_requirement_materials(workdir, tuple(args.requirements))
     result = runner.run(
         args.task,
         entries,
@@ -1719,7 +1795,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         expansion=expansion,
         related=related,
         ingestion_policies=current_policies,
+        requirement_context=render_requirement_context(requirement_materials),
+        requirement_materials=[item.evidence_payload() for item in requirement_materials],
     )
+    from .knowledge.requirement_knowledge import ingest_requirement_materials
+
+    with _store(workdir) as store:
+        requirement_entries = ingest_requirement_materials(
+            chain, store, result.run_id, requirement_materials
+        )
     _print_context_pack_notes(result.pack, endorsed)
     # This chain record is the acceptance authority for the run: report and
     # harvest key off it, not off the agent-writable trace file.
@@ -1734,6 +1818,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             result.pack.related_ids,
             current_policies,
             result.source_snapshot_artifact,
+            tuple(entry.id for entry in requirement_entries),
         ),
     )
     print(result.output)
@@ -1763,13 +1848,23 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def _active_delegation_entries(workdir: Path, records) -> tuple[list[Entry], set[str], set[str]]:
+    from .knowledge.requirement_knowledge import (
+        reconcile_requirement_projection,
+        retired_requirement_ids,
+    )
+
     with _store(workdir) as store:
+        reconcile_requirement_projection(store, records)
         entries = store.list()
     # Retirement by chain replay, not DB state: DB-only rejected flags or
     # supersedes links live in the agent-writable tree and cannot suppress a
     # chain-backed fact. Conversely, a chain-rejected or chain-superseded entry
     # stays retired even if SQLite is edited back to active.
-    retired = chain_superseded_ids(records) | chain_rejected_ids(records)
+    retired = (
+        chain_superseded_ids(records)
+        | chain_rejected_ids(records)
+        | retired_requirement_ids(records)
+    )
     assert_trust_projection(entries, records, retired_ids=retired)
     entries = [e for e in entries if e.id not in retired]
     # The DB sits in the agent-writable tree; its strong bits count only when
@@ -1812,6 +1907,7 @@ def _completion_payload(
     related_entries: list[str],
     ingestion_policies: dict[str, IngestionPolicy],
     source_snapshot_artifact: str,
+    requirement_entry_ids: list[str] | tuple[str, ...] = (),
 ) -> dict:
     from .workflow.model import TaskIntent
 
@@ -1825,6 +1921,17 @@ def _completion_payload(
         "ingestion_policies": ingestion_policies_payload(ingestion_policies, set(base_commits)),
         "source_snapshot_artifact": source_snapshot_artifact,
         "task_intent": TaskIntent.from_text(task).to_json(),
+        "requirement_entry_ids": list(requirement_entry_ids),
+        "context_generation": 1,
+        "context_source_snapshot": source_snapshot_artifact,
+        "initial_context_entry_ids": list(context_entries),
+        "coverage": {
+            "files": {},
+            "changed_files": [],
+            "domains": [],
+            "high_risk_missing": [],
+            "high_risk_untrusted": [],
+        },
     }
 
 
@@ -1858,6 +1965,12 @@ def cmd_begin(args: argparse.Namespace) -> int:
         requirement_context=render_requirement_context(requirement_materials),
         requirement_materials=[item.evidence_payload() for item in requirement_materials],
     )
+    from .knowledge.requirement_knowledge import ingest_requirement_materials
+
+    with _store(workdir) as store:
+        requirement_entries = ingest_requirement_materials(
+            chain, store, prepared.run_id, requirement_materials
+        )
     payload = _completion_payload(
         prepared.run_id,
         args.task,
@@ -1867,6 +1980,7 @@ def cmd_begin(args: argparse.Namespace) -> int:
         prepared.pack.related_ids,
         current_policies,
         prepared.source_snapshot_artifact,
+        tuple(entry.id for entry in requirement_entries),
     )
     payload["mode"] = "session"
     payload["requirement_materials"] = [item.evidence_payload() for item in requirement_materials]
@@ -1876,6 +1990,12 @@ def cmd_begin(args: argparse.Namespace) -> int:
     print()
     print(f"Run ID: {prepared.run_id}")
     print()
+    if requirement_entries:
+        print(
+            f"Requirement knowledge: {len(requirement_entries)} structured assertions "
+            "stored as proposed"
+        )
+        print()
     print(prepared.prompt)
     print(
         f"[LoreLoop] current session prepared with {len(prepared.pack.entry_ids)} entries. "
@@ -1934,11 +2054,30 @@ def cmd_complete(args: argparse.Namespace) -> int:
     prepared = preparations[0]
     payload = dict(prepared.payload)
     _validate_session_preparation(payload, args.run_id)
+    from .evidence.artifacts import ArtifactStore
+    from .workflow.context import knowledge_gate_problems
+
+    knowledge_problems = knowledge_gate_problems(
+        workdir,
+        args.run_id,
+        records,
+        ArtifactStore.for_workdir(workdir),
+    )
+    if knowledge_problems:
+        raise CLIError(
+            "task knowledge checkpoint is not acceptable",
+            "; ".join(knowledge_problems),
+            f"run `loreloop test select {args.run_id}` to refresh project knowledge, "
+            "then rerun completion",
+        )
     payload["prepared_chain_hash"] = prepared.chain_hash
     DelegateRunner(None, workdir).finish(trace, mode="session")
     chain.append("delegation_completed", payload)
     print(f"completed current-session run {args.run_id}")
     print(f"  injected knowledge entries: {len(payload.get('context_entries', []))}")
+    requirement_count = len(payload.get("requirement_entry_ids", []))
+    if requirement_count:
+        print(f"  requirement knowledge marked implemented: {requirement_count}")
     print(
         f"Next: record evidence with `loreloop check {args.run_id} ...` or "
         f"`loreloop verify {args.run_id} ...`, then run `loreloop report {args.run_id}`"
@@ -1953,6 +2092,7 @@ def _validate_session_preparation(payload: dict, run_id: str) -> None:
     related = payload.get("related_entries")
     policies = payload.get("ingestion_policies")
     requirements = payload.get("requirement_materials", [])
+    requirement_entry_ids = payload.get("requirement_entry_ids", [])
     valid = (
         payload.get("run_id") == run_id
         and payload.get("mode") == "session"
@@ -1979,6 +2119,8 @@ def _validate_session_preparation(payload: dict, run_id: str) -> None:
             and all(isinstance(value, str) and bool(value) for value in item.values())
             for item in requirements
         )
+        and isinstance(requirement_entry_ids, list)
+        and all(isinstance(value, str) and bool(value) for value in requirement_entry_ids)
     )
     if not valid:
         raise CLIError(
@@ -2117,8 +2259,23 @@ def cmd_report(args: argparse.Namespace) -> int:
         os.replace(temporary, output)
     finally:
         temporary.unlink(missing_ok=True)
+    from .report.delivery import render_change_reports, write_change_reports
+
+    try:
+        auxiliary = write_change_reports(
+            output.parent,
+            render_change_reports(run, chain.verify(), artifacts, evaluation),
+        )
+    except ValueError as exc:
+        raise CLIError(
+            "unsafe change-report output",
+            str(exc),
+            "remove the symlinked report target or choose another output directory",
+        ) from exc
     print(report)
     print(f"Change knowledge: {output}")
+    for path in auxiliary:
+        print(f"Change report: {path}")
     if evaluation.accepted:
         print(f"Next: loreloop harvest {trace.stem}")
     else:
@@ -2161,7 +2318,9 @@ def cmd_harvest(args: argparse.Namespace) -> int:
                 exit_code=1,
             ) from exc
     print(f"{'resumed' if result.resumed else 'harvested'} run {args.run_id}:")
-    print(f"  {len(result.minted)} verified acceptance assertions minted")
+    print(f"  {len(result.minted)} verified knowledge assertions minted")
+    if result.requirement_entries:
+        print(f"  {len(result.requirement_entries)} requirement assertions verified")
     print(f"  {len(result.reversed_entries)} draft entries reversed from changed code")
     if result.unauditable_checks:
         print(
@@ -2524,11 +2683,20 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
     # curation was flipped back — the list view informs curation decisions,
     # so it applies the same rules as injection.
     records = EvidenceChain.for_workdir(workdir).verify()
+    from .knowledge.requirement_knowledge import (
+        requirement_lifecycle,
+        retired_requirement_ids,
+    )
+
+    requirement_states = requirement_lifecycle(records)
+    requirement_retired = retired_requirement_ids(records)
     superseded = chain_superseded_ids(records)
     rejected = chain_rejected_ids(records)
     effective_curation = chain_effective_curation(records)
     contradicted = chain_contradicted_ids(records)
-    assert_trust_projection(entries, records, retired_ids=superseded | rejected)
+    assert_trust_projection(
+        entries, records, retired_ids=superseded | rejected | requirement_retired
+    )
     endorsed = chain_endorsed_strong_ids(entries, records)
     unendorsed = unendorsed_strong_ids(entries, records)
     drifted = _drifted_entries(workdir, entries, records)
@@ -2536,7 +2704,7 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
         entries,
         args,
         drifted,
-        superseded | rejected,
+        superseded | rejected | requirement_retired,
         effective_curation,
     )
     if args.stale:
@@ -2552,6 +2720,7 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
             or e.id in contradicted
             or e.id in drifted
             or e.id in superseded
+            or e.id in requirement_retired
         )
         chain_backed = e.id in endorsed
         strong = "strong" if (e.is_strong_evidence() or chain_backed) and not demoted else "ref"
@@ -2568,6 +2737,9 @@ def _list_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeStore
             flags += "  [superseded]"
         if e.id in drifted:
             flags += "  [stale: source changed since capture]"
+        requirement_state = requirement_states.get(e.id)
+        if requirement_state is not None:
+            flags += f"  [requirement:{requirement_state.value}]"
         effective = effective_curation.get(e.id, Curation.DRAFT)
         if e.trust.curation is not effective:
             flags += (
@@ -2609,10 +2781,19 @@ def _filter_knowledge_entries(
 def _knowledge_state(workdir: Path, store: KnowledgeStore):
     entries = store.list()
     records = EvidenceChain.for_workdir(workdir).verify()
+    from .knowledge.requirement_knowledge import (
+        requirement_lifecycle,
+        retired_requirement_ids,
+    )
+
+    requirement_states = requirement_lifecycle(records)
+    requirement_retired = retired_requirement_ids(records)
     superseded = chain_superseded_ids(records)
     rejected = chain_rejected_ids(records)
     contradicted = chain_contradicted_ids(records)
-    assert_trust_projection(entries, records, retired_ids=superseded | rejected)
+    assert_trust_projection(
+        entries, records, retired_ids=superseded | rejected | requirement_retired
+    )
     return {
         "entries": entries,
         "records": records,
@@ -2624,6 +2805,9 @@ def _knowledge_state(workdir: Path, store: KnowledgeStore):
         "unendorsed": unendorsed_strong_ids(entries, records),
         "drifted": _drifted_entries(workdir, entries, records),
         "links": chain_supersession_links(records),
+        "requirement_states": requirement_states,
+        "requirement_retired": requirement_retired,
+        "retired": superseded | rejected | requirement_retired,
     }
 
 
@@ -2643,7 +2827,7 @@ def _review_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
         entries,
         args,
         state["drifted"],
-        state["superseded"] | state["rejected"],
+        state["retired"],
         state["curation"],
     )
     entries = entries[args.offset : args.offset + args.limit]
@@ -2661,7 +2845,7 @@ def _review_entries(args: argparse.Namespace, workdir: Path, store: KnowledgeSto
                 "or reject it with "
                 f"`loreloop knowledge reject {entry.id[:8]}`"
             )
-        elif entry.id not in state["superseded"] and entry.id not in state["rejected"]:
+        elif entry.id not in state["retired"]:
             print(
                 "Next: "
                 f"loreloop knowledge approve {entry.id[:8]}  |  "
@@ -2677,6 +2861,7 @@ def _print_entry_details(entry: Entry, state: dict) -> None:
         or entry.id in state["contradicted"]
         or entry.id in state["drifted"]
         or entry.id in state["superseded"]
+        or entry.id in state["requirement_retired"]
     )
     chain_backed = entry.id in state["endorsed"]
     strength = (
@@ -2694,10 +2879,15 @@ def _print_entry_details(entry: Entry, state: dict) -> None:
         )
         if present
     ]
+    requirement_state = state["requirement_states"].get(entry.id)
+    if requirement_state is not None:
+        flags.append(f"requirement:{requirement_state.value}")
     print(f"ID: {entry.id}")
     print(f"Title: {entry.title}")
     print(f"Kind: {entry.kind.value}")
     print(f"Content: {entry.content}")
+    if requirement_state is not None:
+        print(f"Requirement lifecycle: {requirement_state.value}")
     print(f"Effective trust: {strength}" + (f" ({', '.join(flags)})" if flags else ""))
     effective_curation = state["curation"].get(entry.id, Curation.DRAFT)
     print(f"Effective curation: {effective_curation.value}")
@@ -2947,9 +3137,30 @@ def _export_document_set(args: argparse.Namespace, workdir: Path) -> int:
             f"detecting source contracts across {len(snapshot.repositories)} repositories...",
             file=sys.stderr,
         )
-        requirements = tuple(args.requirements)
-        blobs = read_snapshot_blobs(snapshot, workdir, peers, requirements=requirements)
-        report = detect_snapshot_blobs(blobs, requirements=requirements)
+        requirements = list(args.requirements)
+        history = state_path(workdir, "evidence.jsonl")
+        if history.is_file():
+            from .knowledge.requirement_knowledge import (
+                validate_verified_requirement_locators,
+            )
+
+            stored_requirements = validate_verified_requirement_locators(
+                workdir,
+                EvidenceChain.for_workdir(workdir).verify(),
+                working_tree=args.working_tree,
+            )
+            for locator in stored_requirements:
+                if locator not in requirements:
+                    requirements.append(locator)
+            if stored_requirements:
+                print(
+                    f"including {len(stored_requirements)} verified requirement material(s) "
+                    "from governed project knowledge...",
+                    file=sys.stderr,
+                )
+        requirements_tuple = tuple(requirements)
+        blobs = read_snapshot_blobs(snapshot, workdir, peers, requirements=requirements_tuple)
+        report = detect_snapshot_blobs(blobs, requirements=requirements_tuple)
         semantic_blobs = blobs
         if args.include_web:
             web_entries = _governed_web_entries(workdir)
@@ -3556,6 +3767,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_task_summarize.add_argument("--acceptance", action="append", default=[])
     p_task_summarize.add_argument("--risk", action="append", default=[])
     p_task_summarize.set_defaults(func=cmd_task)
+    p_task_bug = task_sub.add_parser(
+        "bug", help="record one discovered bug and its evidence-backed repair details"
+    )
+    p_task_bug.add_argument("run_id", metavar="RUN_ID")
+    p_task_bug.add_argument("--id", dest="bug_id", required=True)
+    p_task_bug.add_argument("--test-step", action="append", required=True)
+    p_task_bug.add_argument("--description", required=True)
+    p_task_bug.add_argument("--root-cause", required=True)
+    p_task_bug.add_argument("--recommendation", required=True)
+    p_task_bug.add_argument("--fix-solution", required=True)
+    p_task_bug.add_argument("--modified-file", action="append", required=True)
+    p_task_bug.add_argument("--test-proof", action="append", required=True)
+    p_task_bug.set_defaults(func=cmd_task)
 
     p_web = sub.add_parser("web", help="govern replayable Web test scenarios")
     web_sub = p_web.add_subparsers(dest="web_command", required=True)
@@ -3684,6 +3908,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument(
         "--related-limit", type=int, default=5, help="maximum related-project references"
     )
+    p_run.add_argument(
+        "--requirements",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="committed requirement Markdown; use repo:NAME/path for a peer repository",
+    )
     _add_agent_option(p_run)
     p_run.set_defaults(func=cmd_run)
 
@@ -3705,7 +3936,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("run_id", nargs="?")
     p_report.add_argument(
         "--output",
-        help="report file; defaults to workspace/change/<run-id>/acceptance-report.md",
+        help="acceptance report file; test/Bug/fix Markdown is written beside it",
     )
     p_report.set_defaults(func=cmd_report)
 

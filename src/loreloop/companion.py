@@ -55,6 +55,17 @@ When the operator asks to use LoreLoop for a development task:
 3. Read the printed context pack using the rules below, then perform the task
    in this current host session.
 
+When the operator provides a committed requirement Markdown file, pass it to
+the same command with `--requirements <path>` (or
+`--requirements repo:<name>/<path>` for a declared peer repository). LoreLoop
+stores its deterministic requirement and acceptance assertions as `proposed`
+searchable knowledge. Confirmed completion marks them `implemented`; an
+operator-authorized harvest promotes them to `verified` only when the accepted
+run has auditable command or browser evidence. Verified requirement materials
+are then reused automatically by later baseline exports. If the file changes,
+start a new task with its new committed version instead of reusing the old
+digest.
+
 Do not use `loreloop run` for normal interactive work: it launches a separate
 coding-agent process. Use it only when the operator explicitly requests an
 automated or headless delegation.
@@ -272,6 +283,24 @@ def install_codex_skill(workdir: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(CLAUDE_SKILL_MD, encoding="utf-8")
     return path
+
+
+def codex_global_skill_active() -> bool:
+    """Whether Codex already has a valid global LoreLoop Skill entry."""
+    root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+    target = root / "skills/loreloop"
+    return target.is_symlink() and (target / "SKILL.md").is_file()
+
+
+def remove_managed_codex_skill(workdir: Path) -> bool:
+    """Remove only the generated project fallback, never a user-edited file."""
+    path = workdir / AGENT_SKILL_RELPATH
+    if not path.is_file() or path.is_symlink():
+        return False
+    if path.read_text(encoding="utf-8") != CLAUDE_SKILL_MD:
+        return False
+    path.unlink()
+    return True
 
 
 OPENCODE_COMMAND_MD = """\

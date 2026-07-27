@@ -44,6 +44,7 @@ PUBLIC_HELP_PATHS = [
     ("test", "prove"),
     ("task",),
     ("task", "summarize"),
+    ("task", "bug"),
     ("verify",),
     ("begin",),
     ("complete",),

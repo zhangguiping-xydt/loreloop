@@ -174,6 +174,7 @@ def run_demo(workspace: Path, *, agent: str, offline: bool) -> Path:
         run_id = max((project / ".loreloop/runs").glob("run-*.jsonl")).stem
         _git(project, "add", "-A")
         _git(project, "commit", "-m", "raise upload ceiling to 8 MiB")
+        _step(cli.main, ["test", "select", run_id])
 
         port = 8765 if offline else _free_port()
         url = f"http://127.0.0.1:{port}/"

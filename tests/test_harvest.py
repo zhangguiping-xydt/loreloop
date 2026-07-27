@@ -7,6 +7,12 @@ from loreloop.evidence.artifacts import ArtifactStore
 from loreloop.evidence.chain import EvidenceChain
 from loreloop.knowledge.harvest import HarvestError, harvest_run
 from loreloop.knowledge.model import Channel, Curation, Entry, Kind, Source, Verification
+from loreloop.knowledge.requirement_context import load_requirement_materials
+from loreloop.knowledge.requirement_knowledge import (
+    RequirementLifecycle,
+    ingest_requirement_materials,
+    requirement_lifecycle,
+)
 from loreloop.knowledge.store import KnowledgeStore
 from loreloop.report.acceptance import load_run
 from loreloop.webexplore.browser import Observation
@@ -231,6 +237,85 @@ def test_harvest_mints_browser_checks_as_born_verified(env):
     assert stored.trust.curation is Curation.DRAFT
     assert stored.is_strong_evidence()
     assert not result.reversed_entries
+
+
+def test_harvest_verifies_task_bound_requirement_knowledge(env):
+    repo, store, chain, artifacts = env
+    (repo / "requirements.md").write_text(
+        "# 需求\n\n- 用户可以导出权威项目文档。\n", encoding="utf-8"
+    )
+    git(repo, "add", "requirements.md")
+    git(repo, "commit", "-m", "add requirement")
+    run_id = "run-requirement"
+    entries = ingest_requirement_materials(
+        chain,
+        store,
+        run_id,
+        load_requirement_materials(repo, ("requirements.md",)),
+    )
+    trace = write_trace(repo, run_id, head_of(repo))
+    chain.append(
+        "delegation_completed",
+        {
+            "run_id": run_id,
+            "task": "implement export",
+            "context_entries": [],
+            "base_commit": head_of(repo),
+            "requirement_entry_ids": [entry.id for entry in entries],
+        },
+    )
+    record_browser_check(chain, run_id, artifacts=artifacts)
+
+    result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    assert [entry.id for entry in result.requirement_entries] == [entries[0].id]
+    assert len(result.minted) == 2
+    stored = store.get(entries[0].id)
+    assert stored is not None
+    assert stored.trust.verification is Verification.VERIFIED
+    records = chain.verify()
+    assert requirement_lifecycle(records)[entries[0].id] is RequirementLifecycle.VERIFIED
+    harvested = next(record for record in records if record.event == "knowledge_harvested")
+    assert harvested.payload["requirement_entries"] == [entries[0].id]
+
+
+def test_harvest_keeps_requirement_implemented_without_auditable_proof(env):
+    repo, store, chain, artifacts = env
+    (repo / "requirements.md").write_text(
+        "# 需求\n\n- 用户可以导出权威项目文档。\n", encoding="utf-8"
+    )
+    git(repo, "add", "requirements.md")
+    git(repo, "commit", "-m", "add requirement")
+    run_id = "run-requirement-no-proof"
+    entries = ingest_requirement_materials(
+        chain,
+        store,
+        run_id,
+        load_requirement_materials(repo, ("requirements.md",)),
+    )
+    trace = write_trace(repo, run_id, head_of(repo))
+    chain.append(
+        "delegation_completed",
+        {
+            "run_id": run_id,
+            "task": "implement export",
+            "context_entries": [],
+            "base_commit": head_of(repo),
+            "requirement_entry_ids": [entry.id for entry in entries],
+        },
+    )
+    chain.append(
+        "check_passed",
+        {"run_id": run_id, "check": "operator says requirement is complete", "judge": "operator"},
+    )
+
+    result = harvest_run(load_run(trace), chain, store, FakeRunner([]), repo, artifacts=artifacts)
+
+    assert result.requirement_entries == []
+    assert any("no auditable command or browser" in item for item in result.unauditable_checks)
+    assert requirement_lifecycle(chain.verify())[entries[0].id] is (
+        RequirementLifecycle.IMPLEMENTED
+    )
 
 
 def test_harvest_mints_script_checks_with_script_locator(env):

@@ -51,6 +51,16 @@ def _locator(value: str) -> tuple[str, str]:
     return alias, path
 
 
+def requirement_path(workdir: Path, locator: str) -> tuple[str, str, Path]:
+    """Resolve one validated requirement locator to its repository and path."""
+    alias, path = _locator(locator)
+    try:
+        repo = resolve_repo(workdir, alias)
+    except RepoConfigError as exc:
+        raise RequirementContextError(str(exc)) from exc
+    return alias, path, repo
+
+
 def _git(repo: Path, *args: str) -> bytes:
     completed = subprocess.run(["git", *args], cwd=repo, check=False, capture_output=True)
     if completed.returncode != 0:
@@ -65,11 +75,7 @@ def load_requirement_materials(
     materials: list[RequirementMaterial] = []
     total = 0
     for locator in locators:
-        alias, path = _locator(locator)
-        try:
-            repo = resolve_repo(workdir, alias)
-        except RepoConfigError as exc:
-            raise RequirementContextError(str(exc)) from exc
+        alias, path, repo = requirement_path(workdir, locator)
         commit = _git(repo, "rev-parse", "HEAD").decode("ascii").strip()
         data = _git(repo, "cat-file", "blob", f"HEAD:{path}")
         if len(data) > _MAX_DOCUMENT_BYTES:
@@ -80,9 +86,7 @@ def load_requirement_materials(
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise RequirementContextError(
-                f"requirement material is not UTF-8: {locator}"
-            ) from exc
+            raise RequirementContextError(f"requirement material is not UTF-8: {locator}") from exc
         materials.append(
             RequirementMaterial(locator, commit, hashlib.sha256(data).hexdigest(), text)
         )

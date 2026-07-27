@@ -62,6 +62,10 @@ def test_plugin_skill_finishes_installation_with_bundled_installer():
     assert "refreshes stale project-level" in skill
     assert "knowledge export --format docs --output workspace/baseline" in skill
     assert "workspace/change/<run-id>/acceptance-report.md" in skill
+    assert "--requirements <path>" in skill
+    assert "proposed" in skill
+    assert "implemented" in skill
+    assert "verified" in skill
     assert "--working-tree" in skill
     assert "Use `--format audit` only" in skill
     assert "command omitted" in skill

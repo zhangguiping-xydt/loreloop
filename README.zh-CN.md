@@ -140,7 +140,8 @@ loreloop knowledge review
 
 需要交接、熟悉项目或基于旧系统继续开发需求时，可以直接从各成员仓库的干净提交态生成可交付的
 权威项目包。项目根目录本身可以不是 Git 仓库，只要成员仓库已经通过 `loreloop repo add` 声明。
-默认过程不调用 Agent，也不读取 SQLite 或密钥：
+纯源码导出不调用 Agent。项目里已经存在已验证需求知识时，LoreLoop 会校验本地证据链，并把这些
+需求自动带入重建后的基线：
 
 ```bash
 loreloop knowledge export \
@@ -294,6 +295,19 @@ loreloop begin "按需求文档给上传接口增加限流" \
 中的精确 Git blob，并把提交、SHA-256、正文和相关知识一起放回当前 Codex、Claude Code、
 OpenCode 或 co-mind 会话；不切换聊天入口，也不启动嵌套 Agent。
 
+同一个命令还会把需求文档变成结构化、可检索的项目知识，并按证据推进生命周期：
+
+- `begin --requirements` 将需求和验收断言入库为 `proposed`；
+- 操作者确认 `complete` 后，任务绑定的断言变为 `implemented`；
+- 只有已接受任务存在可审计的命令或浏览器产物时，`harvest` 才把它们提升为 `verified`；
+- 后续重建基线时，会自动合并最新版且整份已验证的需求材料；
+- 需求文件改版后，被删除或改写的旧断言会退役，新版本重新进入 `proposed`，需要对新提交再次
+  执行 `begin --requirements`。
+
+原始 Markdown 仍是 Git 中给人维护的需求源文件；SQLite 保存带文件摘要和行号的可检索投影，
+生命周期权威来自签名证据链。因此后续任务能召回增量需求，同时不会把尚未实现的提案误当成
+现行系统事实。
+
 实现完成后，可以记录确定性检查并生成验收报告：
 
 ```bash
@@ -301,11 +315,31 @@ loreloop check <run-id> "测试通过" --command "pytest -q"
 loreloop report <run-id>
 ```
 
+开发过程中不需要手工判断“知识是否还适用”。在代码或 UI 发生变化后执行一次：
+
+```bash
+loreloop test select <run-id>
+```
+
+LoreLoop 会把当前 Diff 与任务开始快照比较，自动建立新的任务知识上下文并显示增量知识。随后
+`complete --confirm` 会拒绝两种不安全状态：代码在最近一次知识检查点之后又发生变化，或接口、
+权限、数据库、配置、外部集成等高风险改动没有对应知识覆盖。最终报告会列出上下文 generation、
+实际注入的条目、受影响文件、覆盖范围和知识缺口；这是一条可审计的“知识注入—变更—验收”证明链，
+不是让 Agent 自己口头保证看过源码。
+
 completion、harvest 和知识策展始终由操作者明确决定。
 
 最终报告还会自动写入
-`workspace/change/<run-id>/acceptance-report.md`。每次需求或 Bug 都有独立的增量记录，包含
-需求/根因分析、实现说明、变更影响、测试选择、执行结果、验收证据和剩余风险。
+`workspace/change/<run-id>/`，并生成四份便于人类评审的 Markdown：
+
+- `acceptance-report.md`：总体验收结论、知识使用和证据；
+- `test-report.md`：测试范围、选择原因、执行命令、结果和证据；
+- `bug-findings.md`：每个 Bug 的编号、测试步骤、问题描述、根因分析和修改建议；
+- `fix-report.md`：对应 Bug 编号的根因确认、修复方案、修改文件和测试证明。
+
+Agent 在开发中发现 Bug 时，会用 `loreloop task bug` 写入结构化条目；没有真实步骤或证据时报告会
+明确标为未记录，不会根据最终摘要虚构。每次需求或 Bug 都有独立的增量记录，包含需求/根因分析、
+实现说明、变更影响、测试选择、执行结果、验收证据和剩余风险。
 `workspace/baseline/` 仍是当前项目的全量权威视图；change 报告不会未经治理直接冒充基线事实。
 
 ## 知识里有什么

@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from loreloop.cli import main
+from loreloop.evidence.chain import EvidenceChain
+from loreloop.knowledge.endorsement import entry_digest
+from loreloop.knowledge.requirement_context import load_requirement_materials
+from loreloop.knowledge.requirement_knowledge import ingest_requirement_materials
 from loreloop.knowledge.repos import save_repos
+from loreloop.knowledge.store import KnowledgeStore
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -168,6 +173,132 @@ def test_docs_export_defaults_to_readable_workspace_baseline_directory(
     assert len(tuple(baseline.glob("*.md"))) == 6
     assert (baseline / ".loreloop-export.json").is_file()
     assert main(["knowledge", "replay", str(baseline)]) == 0
+
+
+def test_docs_export_automatically_reuses_verified_requirement_material(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _repository(
+        tmp_path / "demo",
+        {
+            "app.py": "VALUE = 1\n",
+            "requirements.md": "# 需求\n\n- 用户可以导出权威项目文档。\n",
+        },
+    )
+    monkeypatch.chdir(repo)
+    chain = EvidenceChain.for_workdir(repo)
+    with KnowledgeStore(repo / ".loreloop/knowledge.db") as store:
+        entries = ingest_requirement_materials(
+            chain,
+            store,
+            "run-requirement",
+            load_requirement_materials(repo, ("requirements.md",)),
+        )
+    chain.append(
+        "delegation_completed",
+        {
+            "run_id": "run-requirement",
+            "task": "implement export",
+            "context_entries": [],
+            "requirement_entry_ids": [entry.id for entry in entries],
+        },
+    )
+    chain.append(
+        "knowledge_harvested",
+        {
+            "run_id": "run-requirement",
+            "minted": {entry.id: entry_digest(entry) for entry in entries},
+            "requirement_entries": [entry.id for entry in entries],
+        },
+    )
+    target = tmp_path / "export"
+
+    assert main(["knowledge", "export", "--format", "docs", "--output", str(target)]) == 0
+
+    requirements = (target / "demo-需求规格.md").read_text(encoding="utf-8")
+    assert "用户可以导出权威项目文档" in requirements
+    assert "including 1 verified requirement material" in capsys.readouterr().err
+
+
+def test_docs_export_does_not_treat_proposed_requirement_as_current_system_fact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _repository(
+        tmp_path / "demo",
+        {
+            "app.py": "VALUE = 1\n",
+            "requirements.md": "# 需求\n\n- 用户可以导出尚未实现的秘密格式。\n",
+        },
+    )
+    monkeypatch.chdir(repo)
+    chain = EvidenceChain.for_workdir(repo)
+    with KnowledgeStore(repo / ".loreloop/knowledge.db") as store:
+        ingest_requirement_materials(
+            chain,
+            store,
+            "run-proposed",
+            load_requirement_materials(repo, ("requirements.md",)),
+        )
+    target = tmp_path / "export"
+
+    assert main(["knowledge", "export", "--format", "docs", "--output", str(target)]) == 0
+
+    requirements = (target / "demo-需求规格.md").read_text(encoding="utf-8")
+    assert "尚未实现的秘密格式" not in requirements
+
+
+def test_docs_export_refuses_changed_stored_requirement_material(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _repository(
+        tmp_path / "demo",
+        {
+            "app.py": "VALUE = 1\n",
+            "requirements.md": "# 需求\n\n- 用户可以导出权威项目文档。\n",
+        },
+    )
+    monkeypatch.chdir(repo)
+    chain = EvidenceChain.for_workdir(repo)
+    with KnowledgeStore(repo / ".loreloop/knowledge.db") as store:
+        entries = ingest_requirement_materials(
+            chain,
+            store,
+            "run-requirement",
+            load_requirement_materials(repo, ("requirements.md",)),
+        )
+    chain.append(
+        "delegation_completed",
+        {
+            "run_id": "run-requirement",
+            "task": "implement export",
+            "context_entries": [],
+            "requirement_entry_ids": [entry.id for entry in entries],
+        },
+    )
+    chain.append(
+        "knowledge_harvested",
+        {
+            "run_id": "run-requirement",
+            "minted": {entry.id: entry_digest(entry) for entry in entries},
+            "requirement_entries": [entry.id for entry in entries],
+        },
+    )
+    (repo / "requirements.md").write_text(
+        "# 需求\n\n- 用户可以导出多个项目文档。\n", encoding="utf-8"
+    )
+    _git(repo, "add", "requirements.md")
+    _git(repo, "commit", "-m", "change requirement")
+
+    assert main(["knowledge", "export", "--format", "docs"]) == 2
+
+    error = capsys.readouterr().err
+    assert "verified requirement material changed since ingestion" in error
+    assert "start a new task with --requirements" in error
 
 
 def test_cli_docs_export_emits_only_six_documents_without_optional_evidence(
